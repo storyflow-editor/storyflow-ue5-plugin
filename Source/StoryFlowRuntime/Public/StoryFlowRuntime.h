@@ -5,6 +5,8 @@
 #include "CoreMinimal.h"
 #include "Modules/ModuleManager.h"
 
+STORYFLOWRUNTIME_API DECLARE_LOG_CATEGORY_EXTERN(LogStoryFlow, Log, All);
+
 class FStoryFlowRuntimeModule : public IModuleInterface
 {
 public:

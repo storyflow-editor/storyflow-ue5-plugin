@@ -1,6 +1,7 @@
 // Copyright 2026 StoryFlow. All Rights Reserved.
 
 #include "Evaluation/StoryFlowExecutionContext.h"
+#include "StoryFlowRuntime.h"
 #include "Data/StoryFlowScriptAsset.h"
 #include "Data/StoryFlowProjectAsset.h"
 
@@ -53,6 +54,8 @@ void FStoryFlowExecutionContext::Reset()
 	CurrentDialogueState = FStoryFlowDialogueState();
 	PersistentBackgroundImage = nullptr;
 	EvaluationDepth = 0;
+	ProcessingDepth = 0;
+	NodeRuntimeStates.Empty();
 	ExternalGlobalVariables = nullptr;
 	ExternalCharacters = nullptr;
 }
@@ -72,11 +75,6 @@ FStoryFlowNode* FStoryFlowExecutionContext::GetNode(const FString& NodeId)
 		}
 	}
 	return nullptr;
-}
-
-FStoryFlowNode* FStoryFlowExecutionContext::GetNodeMutable(const FString& NodeId)
-{
-	return GetNode(NodeId);
 }
 
 FStoryFlowVariable* FStoryFlowExecutionContext::FindVariable(const FString& VariableId, bool bIsGlobal)
@@ -103,6 +101,10 @@ void FStoryFlowExecutionContext::SetVariable(const FString& VariableId, const FS
 	if (FStoryFlowVariable* Variable = FindVariable(VariableId, bIsGlobal))
 	{
 		Variable->Value = Value;
+	}
+	else
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: SetVariable failed - variable '%s' not found (bIsGlobal=%s)"), *VariableId, bIsGlobal ? TEXT("true") : TEXT("false"));
 	}
 }
 
@@ -156,7 +158,7 @@ void FStoryFlowExecutionContext::SetCharacterVariable(const FString& CharacterPa
 	FStoryFlowCharacterDef* CharDef = FindCharacter(CharacterPath);
 	if (!CharDef)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("StoryFlow: Character not found for SetCharacterVariable: %s"), *CharacterPath);
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Character not found for SetCharacterVariable: %s"), *CharacterPath);
 		return;
 	}
 
@@ -181,7 +183,7 @@ void FStoryFlowExecutionContext::SetCharacterVariable(const FString& CharacterPa
 	}
 	else
 	{
-		UE_LOG(LogTemp, Warning, TEXT("StoryFlow: Variable '%s' not found on character '%s'"), *VariableName, *CharacterPath);
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Variable '%s' not found on character '%s'"), *VariableName, *CharacterPath);
 	}
 }
 
@@ -190,7 +192,7 @@ FStoryFlowVariant FStoryFlowExecutionContext::GetCharacterVariableValue(const FS
 	FStoryFlowCharacterDef* CharDef = FindCharacter(CharacterPath);
 	if (!CharDef)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("StoryFlow: Character not found for GetCharacterVariable: %s"), *CharacterPath);
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Character not found for GetCharacterVariable: %s"), *CharacterPath);
 		return FStoryFlowVariant();
 	}
 
@@ -216,7 +218,7 @@ FStoryFlowVariant FStoryFlowExecutionContext::GetCharacterVariableValue(const FS
 		return Variable->Value;
 	}
 
-	UE_LOG(LogTemp, Warning, TEXT("StoryFlow: Variable '%s' not found on character '%s'"), *VariableName, *CharacterPath);
+	UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Variable '%s' not found on character '%s'"), *VariableName, *CharacterPath);
 	return FStoryFlowVariant();
 }
 
@@ -251,13 +253,7 @@ const FStoryFlowConnection* FStoryFlowExecutionContext::FindEdgeByTarget(const F
 {
 	if (UStoryFlowScriptAsset* Script = CurrentScript.Get())
 	{
-		for (const FStoryFlowConnection& Conn : Script->Connections)
-		{
-			if (Conn.Target == TargetNodeId)
-			{
-				return &Conn;
-			}
-		}
+		return Script->FindEdgeByTarget(TargetNodeId);
 	}
 	return nullptr;
 }
@@ -266,7 +262,7 @@ bool FStoryFlowExecutionContext::PushScript(const FString& ScriptPath, const FSt
 {
 	if (IsAtMaxScriptDepth())
 	{
-		UE_LOG(LogTemp, Error, TEXT("StoryFlow: Max script nesting depth exceeded (%d)"), STORYFLOW_MAX_SCRIPT_DEPTH);
+		UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Max script nesting depth exceeded (%d)"), STORYFLOW_MAX_SCRIPT_DEPTH);
 		return false;
 	}
 
@@ -279,7 +275,7 @@ bool FStoryFlowExecutionContext::PushScript(const FString& ScriptPath, const FSt
 	UStoryFlowScriptAsset* NewScript = Proj->GetScriptByPath(ScriptPath);
 	if (!NewScript)
 	{
-		UE_LOG(LogTemp, Error, TEXT("StoryFlow: Script not found: %s"), *ScriptPath);
+		UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Script not found: %s"), *ScriptPath);
 		return false;
 	}
 
@@ -324,6 +320,15 @@ bool FStoryFlowExecutionContext::PopScript()
 		CurrentScript = Frame.ScriptAsset;
 		LocalVariables = Frame.SavedVariables;
 		CurrentNodeId = Frame.ReturnNodeId;
+
+		// Restore flow call stack (flows are script-local)
+		FlowCallStack.Reset();
+		for (const FString& FlowId : Frame.SavedFlowStack)
+		{
+			FStoryFlowFlowFrame FlowFrame;
+			FlowFrame.FlowId = FlowId;
+			FlowCallStack.Push(FlowFrame);
+		}
 	}
 
 	return true;
@@ -331,20 +336,32 @@ bool FStoryFlowExecutionContext::PopScript()
 
 FString FStoryFlowExecutionContext::GetString(const FString& Key, const FString& LanguageCode) const
 {
-	// Try current script first
+	// Try current script first (check map directly to avoid key-echo fragility)
 	if (UStoryFlowScriptAsset* Script = CurrentScript.Get())
 	{
-		FString Result = Script->GetString(Key, LanguageCode);
-		if (Result != Key)
+		const FString FullKey = FString::Printf(TEXT("%s.%s"), *LanguageCode, *Key);
+		if (const FString* Value = Script->Strings.Find(FullKey))
 		{
-			return Result;
+			return *Value;
+		}
+		if (const FString* Value = Script->Strings.Find(Key))
+		{
+			return *Value;
 		}
 	}
 
 	// Try project global strings
 	if (UStoryFlowProjectAsset* Proj = Project.Get())
 	{
-		return Proj->GetGlobalString(Key, LanguageCode);
+		const FString FullKey = FString::Printf(TEXT("%s.%s"), *LanguageCode, *Key);
+		if (const FString* Value = Proj->GlobalStrings.Find(FullKey))
+		{
+			return *Value;
+		}
+		if (const FString* Value = Proj->GlobalStrings.Find(Key))
+		{
+			return *Value;
+		}
 	}
 
 	return Key;
@@ -354,8 +371,48 @@ FString FStoryFlowExecutionContext::InterpolateVariables(const FString& Text) co
 {
 	FString Result = Text;
 
+	// Early out if no interpolation needed
+	if (!Result.Contains(TEXT("{")))
+	{
+		return Result;
+	}
+
+	// Build display-name -> variable lookup maps once (O(n) total instead of O(n) per token)
+	// Each entry maps display name AND id to the variable pointer
+	TMap<FString, const FStoryFlowVariable*> VarLookup;
+
+	// Local variables (higher priority - added first, won't be overwritten)
+	for (const auto& Pair : LocalVariables)
+	{
+		FString DisplayName = GetString(Pair.Value.Name);
+		VarLookup.Add(DisplayName, &Pair.Value);
+		VarLookup.Add(Pair.Value.Id, &Pair.Value);
+	}
+
+	// Global variables (lower priority - only added if key not already present)
+	const TMap<FString, FStoryFlowVariable>* GlobalVars = ExternalGlobalVariables;
+	if (!GlobalVars && Project.IsValid())
+	{
+		GlobalVars = &Project->GlobalVariables;
+	}
+
+	if (GlobalVars)
+	{
+		for (const auto& Pair : *GlobalVars)
+		{
+			FString DisplayName = GetString(Pair.Value.Name);
+			if (!VarLookup.Contains(DisplayName))
+			{
+				VarLookup.Add(DisplayName, &Pair.Value);
+			}
+			if (!VarLookup.Contains(Pair.Value.Id))
+			{
+				VarLookup.Add(Pair.Value.Id, &Pair.Value);
+			}
+		}
+	}
+
 	// Pattern: {variableName}
-	// Simple replacement - find all {xxx} patterns
 	int32 StartIndex = 0;
 	while (true)
 	{
@@ -377,7 +434,6 @@ FString FStoryFlowExecutionContext::InterpolateVariables(const FString& Text) co
 		// Check for Character.property pattern
 		if (VarName.StartsWith(TEXT("Character.")))
 		{
-			// Handle character variable - would need current character context
 			FString PropertyName = VarName.RightChop(10);
 			if (PropertyName.Equals(TEXT("name"), ESearchCase::IgnoreCase))
 			{
@@ -397,85 +453,50 @@ FString FStoryFlowExecutionContext::InterpolateVariables(const FString& Text) co
 			FString CharVarName = VarName.Left(DotIndex);
 			FString InnerVarName = VarName.RightChop(DotIndex + 1);
 
-			// Find the character-type variable by display name
-			FString CharacterPath;
-			bool bFoundCharVar = false;
-
-			// Search local variables first
-			for (const auto& Pair : LocalVariables)
+			// Find the character-type variable via lookup map
+			const FStoryFlowVariable* const* FoundVar = VarLookup.Find(CharVarName);
+			if (FoundVar && *FoundVar && (*FoundVar)->Type == EStoryFlowVariableType::Character)
 			{
-				FString VarDisplayName = GetString(Pair.Value.Name);
-				if ((VarDisplayName == CharVarName || Pair.Value.Id == CharVarName) && Pair.Value.Type == EStoryFlowVariableType::Character)
+				FString CharacterPath = (*FoundVar)->Value.GetString();
+				if (!CharacterPath.IsEmpty())
 				{
-					CharacterPath = Pair.Value.Value.GetString();
-					bFoundCharVar = true;
-					break;
-				}
-			}
+					// Normalize path for lookup
+					FString NormalizedPath = CharacterPath.ToLower().Replace(TEXT("/"), TEXT("\\"));
 
-			// Search global variables if not found
-			if (!bFoundCharVar)
-			{
-				const TMap<FString, FStoryFlowVariable>* GlobalVars = ExternalGlobalVariables;
-				if (!GlobalVars && Project.IsValid())
-				{
-					GlobalVars = &Project->GlobalVariables;
-				}
-
-				if (GlobalVars)
-				{
-					for (const auto& Pair : *GlobalVars)
+					// Find character definition
+					const FStoryFlowCharacterDef* CharDef = nullptr;
+					if (ExternalCharacters)
 					{
-						FString VarDisplayName = GetString(Pair.Value.Name);
-						if ((VarDisplayName == CharVarName || Pair.Value.Id == CharVarName) && Pair.Value.Type == EStoryFlowVariableType::Character)
+						CharDef = ExternalCharacters->Find(NormalizedPath);
+					}
+					else if (Project.IsValid())
+					{
+						CharDef = Project->Characters.Find(NormalizedPath);
+					}
+
+					if (CharDef)
+					{
+						// Handle built-in "Name" property (resolve through string table)
+						if (InnerVarName.Equals(TEXT("Name"), ESearchCase::IgnoreCase))
 						{
-							CharacterPath = Pair.Value.Value.GetString();
-							bFoundCharVar = true;
-							break;
+							Replacement = GetString(CharDef->Name);
 						}
-					}
-				}
-			}
-
-			// If we found a character-type variable, look up the character and inner variable
-			if (bFoundCharVar && !CharacterPath.IsEmpty())
-			{
-				// Normalize path for lookup
-				FString NormalizedPath = CharacterPath.ToLower().Replace(TEXT("/"), TEXT("\\"));
-
-				// Find character definition
-				const FStoryFlowCharacterDef* CharDef = nullptr;
-				if (ExternalCharacters)
-				{
-					CharDef = ExternalCharacters->Find(NormalizedPath);
-				}
-				else if (Project.IsValid())
-				{
-					CharDef = Project->Characters.Find(NormalizedPath);
-				}
-
-				if (CharDef)
-				{
-					// Handle built-in "Name" property (resolve through string table)
-					if (InnerVarName.Equals(TEXT("Name"), ESearchCase::IgnoreCase))
-					{
-						Replacement = GetString(CharDef->Name);
-					}
-					// Handle built-in "Image" property
-					else if (InnerVarName.Equals(TEXT("Image"), ESearchCase::IgnoreCase))
-					{
-						Replacement = CharDef->Image;
-					}
-					else
-					{
-						// Look up custom variable by display name (variables are keyed by ID, not name)
-						for (const auto& VarPair : CharDef->Variables)
+						// Handle built-in "Image" property
+						else if (InnerVarName.Equals(TEXT("Image"), ESearchCase::IgnoreCase))
 						{
-							FString VarDisplayName = GetString(VarPair.Value.Name);
-							if (VarDisplayName == InnerVarName || VarPair.Value.Id == InnerVarName)
+							Replacement = CharDef->Image;
+						}
+						else
+						{
+							// Look up custom variable by display name
+							for (const auto& VarPair : CharDef->Variables)
 							{
-								Replacement = VarPair.Value.Value.ToString();
-								break;
+								FString VarDisplayName = GetString(VarPair.Value.Name);
+								if (VarDisplayName == InnerVarName || VarPair.Value.Id == InnerVarName)
+								{
+									Replacement = VarPair.Value.Value.ToString();
+									break;
+								}
 							}
 						}
 					}
@@ -484,45 +505,10 @@ FString FStoryFlowExecutionContext::InterpolateVariables(const FString& Text) co
 		}
 		else
 		{
-			// Regular variable lookup
-			bool bFound = false;
-
-			// Search local variables first
-			for (const auto& Pair : LocalVariables)
+			// Regular variable lookup via pre-built map (O(1) instead of O(n))
+			if (const FStoryFlowVariable* const* FoundVar = VarLookup.Find(VarName))
 			{
-				// Try to match by name (from string table)
-				FString VarDisplayName = GetString(Pair.Value.Name);
-				if (VarDisplayName == VarName || Pair.Value.Id == VarName)
-				{
-					Replacement = Pair.Value.Value.ToString();
-					bFound = true;
-					break;
-				}
-			}
-
-			// Search global variables if not found
-			if (!bFound)
-			{
-				// Use external global variables if available
-				const TMap<FString, FStoryFlowVariable>* GlobalVars = ExternalGlobalVariables;
-				if (!GlobalVars && Project.IsValid())
-				{
-					GlobalVars = &Project->GlobalVariables;
-				}
-
-				if (GlobalVars)
-				{
-					for (const auto& Pair : *GlobalVars)
-					{
-						FString VarDisplayName = GetString(Pair.Value.Name);
-						if (VarDisplayName == VarName || Pair.Value.Id == VarName)
-						{
-							Replacement = Pair.Value.Value.ToString();
-							bFound = true;
-							break;
-						}
-					}
-				}
+				Replacement = (*FoundVar)->Value.ToString();
 			}
 		}
 
@@ -538,12 +524,9 @@ FString FStoryFlowExecutionContext::InterpolateVariables(const FString& Text) co
 
 void FStoryFlowExecutionContext::ClearEvaluationCache()
 {
-	if (UStoryFlowScriptAsset* Script = CurrentScript.Get())
+	for (auto& Pair : NodeRuntimeStates)
 	{
-		for (auto& NodePair : Script->Nodes)
-		{
-			NodePair.Value.Data.bHasCachedOutput = false;
-			NodePair.Value.Data.CachedOutput.Reset();
-		}
+		Pair.Value.bHasCachedOutput = false;
+		Pair.Value.CachedOutput.Reset();
 	}
 }

@@ -1,6 +1,7 @@
 // Copyright 2026 StoryFlow. All Rights Reserved.
 
 #include "Subsystems/StoryFlowSubsystem.h"
+#include "StoryFlowRuntime.h"
 #include "Data/StoryFlowProjectAsset.h"
 #include "Data/StoryFlowScriptAsset.h"
 #include "Engine/AssetManager.h"
@@ -11,7 +12,7 @@ void UStoryFlowSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: Subsystem initializing..."));
+	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Subsystem initializing..."));
 
 	// Try to auto-load project from default location
 	TryAutoLoadProject();
@@ -38,17 +39,17 @@ void UStoryFlowSubsystem::SetProject(UStoryFlowProjectAsset* NewProject)
 		// Initialize runtime characters from project (mutable copies)
 		RuntimeCharacters = ProjectAsset->Characters;
 
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: Project set: %s (%d scripts, %d global variables, %d characters)"),
+		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Project set: %s (%d scripts, %d global variables, %d characters)"),
 			*ProjectAsset->GetName(),
 			ProjectAsset->Scripts.Num(),
 			GlobalVariables.Num(),
 			RuntimeCharacters.Num());
 
 		// Log available scripts
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: Available scripts:"));
+		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Available scripts:"));
 		for (const auto& ScriptPair : ProjectAsset->Scripts)
 		{
-			UE_LOG(LogTemp, Log, TEXT("StoryFlow:   '%s' -> %s"),
+			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow:   '%s' -> %s"),
 				*ScriptPair.Key,
 				ScriptPair.Value ? *ScriptPair.Value->GetName() : TEXT("NULL"));
 		}
@@ -57,7 +58,7 @@ void UStoryFlowSubsystem::SetProject(UStoryFlowProjectAsset* NewProject)
 	{
 		GlobalVariables.Empty();
 		RuntimeCharacters.Empty();
-		UE_LOG(LogTemp, Warning, TEXT("StoryFlow: Project cleared"));
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Project cleared"));
 	}
 }
 
@@ -65,7 +66,7 @@ UStoryFlowScriptAsset* UStoryFlowSubsystem::GetScript(const FString& ScriptPath)
 {
 	if (!ProjectAsset)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("StoryFlow: Cannot get script - no project loaded"));
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Cannot get script - no project loaded"));
 		return nullptr;
 	}
 
@@ -89,7 +90,7 @@ void UStoryFlowSubsystem::ResetGlobalVariables()
 	if (ProjectAsset)
 	{
 		GlobalVariables = ProjectAsset->GlobalVariables;
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: Global variables reset to defaults"));
+		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Global variables reset to defaults"));
 	}
 }
 
@@ -98,7 +99,7 @@ void UStoryFlowSubsystem::ResetRuntimeCharacters()
 	if (ProjectAsset)
 	{
 		RuntimeCharacters = ProjectAsset->Characters;
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: Runtime characters reset to defaults"));
+		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Runtime characters reset to defaults"));
 	}
 }
 
@@ -112,10 +113,10 @@ void UStoryFlowSubsystem::TryAutoLoadProject()
 	if (LoadedProject)
 	{
 		SetProject(LoadedProject);
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: Auto-loaded project from %s"), *DefaultProjectPath);
+		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Auto-loaded project from %s"), *DefaultProjectPath);
 	}
 	else
 	{
-		UE_LOG(LogTemp, Warning, TEXT("StoryFlow: No project found at %s. Use SetProject() or import a project to /Game/StoryFlow/"), *DefaultProjectPath);
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: No project found at %s. Use SetProject() or import a project to /Game/StoryFlow/"), *DefaultProjectPath);
 	}
 }

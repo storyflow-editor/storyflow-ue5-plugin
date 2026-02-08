@@ -2,6 +2,36 @@
 
 #include "Data/StoryFlowScriptAsset.h"
 
+void UStoryFlowScriptAsset::PostLoad()
+{
+	Super::PostLoad();
+	BuildConnectionIndices();
+}
+
+void UStoryFlowScriptAsset::BuildConnectionIndices()
+{
+	SourceHandleIndex.Empty(Connections.Num());
+	SourceNodeIndex.Empty();
+	TargetNodeIndex.Empty();
+
+	for (int32 i = 0; i < Connections.Num(); ++i)
+	{
+		const FStoryFlowConnection& Conn = Connections[i];
+
+		// SourceHandle -> first index only (handles are unique)
+		if (!SourceHandleIndex.Contains(Conn.SourceHandle))
+		{
+			SourceHandleIndex.Add(Conn.SourceHandle, i);
+		}
+
+		// Source node -> all indices
+		SourceNodeIndex.FindOrAdd(Conn.Source).Add(i);
+
+		// Target node -> all indices
+		TargetNodeIndex.FindOrAdd(Conn.Target).Add(i);
+	}
+}
+
 FStoryFlowNode UStoryFlowScriptAsset::GetNode(const FString& NodeId) const
 {
 	if (const FStoryFlowNode* Node = Nodes.Find(NodeId))
@@ -46,23 +76,20 @@ FStoryFlowVariable UStoryFlowScriptAsset::GetVariable(const FString& VariableId)
 
 const FStoryFlowConnection* UStoryFlowScriptAsset::FindEdgeBySourceHandle(const FString& SourceHandle) const
 {
-	for (const FStoryFlowConnection& Connection : Connections)
+	if (const int32* IndexPtr = SourceHandleIndex.Find(SourceHandle))
 	{
-		if (Connection.SourceHandle.Contains(SourceHandle))
-		{
-			return &Connection;
-		}
+		return &Connections[*IndexPtr];
 	}
 	return nullptr;
 }
 
 const FStoryFlowConnection* UStoryFlowScriptAsset::FindEdgeBySource(const FString& SourceNodeId) const
 {
-	for (const FStoryFlowConnection& Connection : Connections)
+	if (const TArray<int32>* Indices = SourceNodeIndex.Find(SourceNodeId))
 	{
-		if (Connection.Source == SourceNodeId)
+		if (Indices->Num() > 0)
 		{
-			return &Connection;
+			return &Connections[(*Indices)[0]];
 		}
 	}
 	return nullptr;
@@ -71,11 +98,16 @@ const FStoryFlowConnection* UStoryFlowScriptAsset::FindEdgeBySource(const FStrin
 const FStoryFlowConnection* UStoryFlowScriptAsset::FindInputEdge(const FString& NodeId, const FString& HandleSuffix) const
 {
 	const FString Pattern = FString::Printf(TEXT("target-%s-%s"), *NodeId, *HandleSuffix);
-	for (const FStoryFlowConnection& Connection : Connections)
+
+	if (const TArray<int32>* Indices = TargetNodeIndex.Find(NodeId))
 	{
-		if (Connection.Target == NodeId && Connection.TargetHandle.Contains(Pattern))
+		for (int32 Idx : *Indices)
 		{
-			return &Connection;
+			const FStoryFlowConnection& Conn = Connections[Idx];
+			if (Conn.TargetHandle == Pattern)
+			{
+				return &Conn;
+			}
 		}
 	}
 	return nullptr;
@@ -84,12 +116,43 @@ const FStoryFlowConnection* UStoryFlowScriptAsset::FindInputEdge(const FString& 
 TArray<const FStoryFlowConnection*> UStoryFlowScriptAsset::GetEdgesFromSource(const FString& SourceNodeId) const
 {
 	TArray<const FStoryFlowConnection*> Result;
-	for (const FStoryFlowConnection& Connection : Connections)
+
+	if (const TArray<int32>* Indices = SourceNodeIndex.Find(SourceNodeId))
 	{
-		if (Connection.Source == SourceNodeId)
+		Result.Reserve(Indices->Num());
+		for (int32 Idx : *Indices)
 		{
-			Result.Add(&Connection);
+			Result.Add(&Connections[Idx]);
 		}
 	}
+
+	return Result;
+}
+
+const FStoryFlowConnection* UStoryFlowScriptAsset::FindEdgeByTarget(const FString& TargetNodeId) const
+{
+	if (const TArray<int32>* Indices = TargetNodeIndex.Find(TargetNodeId))
+	{
+		if (Indices->Num() > 0)
+		{
+			return &Connections[(*Indices)[0]];
+		}
+	}
+	return nullptr;
+}
+
+TArray<const FStoryFlowConnection*> UStoryFlowScriptAsset::GetEdgesByTarget(const FString& TargetNodeId) const
+{
+	TArray<const FStoryFlowConnection*> Result;
+
+	if (const TArray<int32>* Indices = TargetNodeIndex.Find(TargetNodeId))
+	{
+		Result.Reserve(Indices->Num());
+		for (int32 Idx : *Indices)
+		{
+			Result.Add(&Connections[Idx]);
+		}
+	}
+
 	return Result;
 }

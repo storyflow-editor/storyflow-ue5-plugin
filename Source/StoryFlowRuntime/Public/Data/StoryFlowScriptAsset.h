@@ -48,6 +48,23 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString ScriptPath;
 
+	// --- Non-serialized connection indices (built after import / load) ---
+
+	/** SourceHandle -> Connection index (first match) */
+	TMap<FString, int32> SourceHandleIndex;
+
+	/** Source node ID -> Connection indices */
+	TMap<FString, TArray<int32>> SourceNodeIndex;
+
+	/** Target node ID -> Connection indices */
+	TMap<FString, TArray<int32>> TargetNodeIndex;
+
+	/** Build connection index maps. Call after Connections are populated. */
+	void BuildConnectionIndices();
+
+	/** Rebuild indices after loading from disk */
+	virtual void PostLoad() override;
+
 public:
 	/** Get a node by ID */
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")
@@ -76,4 +93,10 @@ public:
 
 	/** Get all edges from a source node */
 	TArray<const FStoryFlowConnection*> GetEdgesFromSource(const FString& SourceNodeId) const;
+
+	/** Find first edge by target node ID */
+	const FStoryFlowConnection* FindEdgeByTarget(const FString& TargetNodeId) const;
+
+	/** Get all edges targeting a node */
+	TArray<const FStoryFlowConnection*> GetEdgesByTarget(const FString& TargetNodeId) const;
 };

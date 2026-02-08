@@ -47,7 +47,7 @@ public:
 	 * @param ContentPath Unreal content path where assets will be created
 	 * @return The imported project asset, or nullptr on failure
 	 */
-	static UStoryFlowProjectAsset* ImportProjectFromJson(TSharedPtr<FJsonObject> JsonObject, const FString& BuildDirectory, const FString& ContentPath);
+	static UStoryFlowProjectAsset* ImportProjectFromJson(const TSharedPtr<FJsonObject>& JsonObject, const FString& BuildDirectory, const FString& ContentPath);
 
 	/**
 	 * Import a StoryFlow script from JSON data
@@ -57,34 +57,34 @@ public:
 	 * @param ContentPath Unreal content path where the asset will be created
 	 * @return The imported script asset, or nullptr on failure
 	 */
-	static UStoryFlowScriptAsset* ImportScriptFromJson(TSharedPtr<FJsonObject> JsonObject, const FString& ScriptPath, const FString& ContentPath);
+	static UStoryFlowScriptAsset* ImportScriptFromJson(const TSharedPtr<FJsonObject>& JsonObject, const FString& ScriptPath, const FString& ContentPath);
 
 private:
 	// === Parsing Helpers ===
 
 	/** Parse nodes from JSON object */
-	static void ParseNodes(TSharedPtr<FJsonObject> NodesObject, TMap<FString, FStoryFlowNode>& OutNodes);
+	static void ParseNodes(const TSharedPtr<FJsonObject>& NodesObject, TMap<FString, FStoryFlowNode>& OutNodes);
 
 	/** Parse a single node from JSON */
-	static FStoryFlowNode ParseNode(const FString& NodeId, TSharedPtr<FJsonObject> NodeObject);
+	static FStoryFlowNode ParseNode(const FString& NodeId, const TSharedPtr<FJsonObject>& NodeObject);
 
 	/** Parse node data from JSON */
-	static FStoryFlowNodeData ParseNodeData(TSharedPtr<FJsonObject> NodeObject);
+	static FStoryFlowNodeData ParseNodeData(const TSharedPtr<FJsonObject>& NodeObject);
 
 	/** Parse connections from JSON array */
 	static void ParseConnections(const TArray<TSharedPtr<FJsonValue>>& ConnectionsArray, TArray<FStoryFlowConnection>& OutConnections);
 
 	/** Parse variables from JSON object */
-	static void ParseVariables(TSharedPtr<FJsonObject> VariablesObject, TMap<FString, FStoryFlowVariable>& OutVariables);
+	static void ParseVariables(const TSharedPtr<FJsonObject>& VariablesObject, TMap<FString, FStoryFlowVariable>& OutVariables);
 
 	/** Parse a single variable from JSON */
-	static FStoryFlowVariable ParseVariable(const FString& VariableId, TSharedPtr<FJsonObject> VariableObject);
+	static FStoryFlowVariable ParseVariable(const FString& VariableId, const TSharedPtr<FJsonObject>& VariableObject);
 
 	/** Parse string table from JSON object */
-	static void ParseStrings(TSharedPtr<FJsonObject> StringsObject, TMap<FString, FString>& OutStrings);
+	static void ParseStrings(const TSharedPtr<FJsonObject>& StringsObject, TMap<FString, FString>& OutStrings);
 
 	/** Parse assets from JSON object */
-	static void ParseAssets(TSharedPtr<FJsonObject> AssetsObject, TMap<FString, FStoryFlowAsset>& OutAssets);
+	static void ParseAssets(const TSharedPtr<FJsonObject>& AssetsObject, TMap<FString, FStoryFlowAsset>& OutAssets);
 
 	/** Parse text blocks from JSON array (non-interactive text displayed in dialogue) */
 	static void ParseTextBlocks(const TArray<TSharedPtr<FJsonValue>>& TextBlocksArray, TArray<FStoryFlowTextBlock>& OutTextBlocks);
@@ -93,13 +93,13 @@ private:
 	static void ParseChoices(const TArray<TSharedPtr<FJsonValue>>& ChoicesArray, TArray<FStoryFlowChoice>& OutOptions);
 
 	/** Parse characters from JSON object */
-	static void ParseCharacters(TSharedPtr<FJsonObject> CharactersObject, TMap<FString, FStoryFlowCharacterDef>& OutCharacters);
+	static void ParseCharacters(const TSharedPtr<FJsonObject>& CharactersObject, TMap<FString, FStoryFlowCharacterDef>& OutCharacters);
 
 	/** Parse a variant value from JSON */
-	static FStoryFlowVariant ParseVariant(TSharedPtr<FJsonValue> Value, EStoryFlowVariableType ExpectedType = EStoryFlowVariableType::None);
+	static FStoryFlowVariant ParseVariant(const TSharedPtr<FJsonValue>& Value, EStoryFlowVariableType ExpectedType = EStoryFlowVariableType::None);
 
 	/** Parse project metadata from JSON */
-	static FStoryFlowProjectMetadata ParseMetadata(TSharedPtr<FJsonObject> MetadataObject);
+	static FStoryFlowProjectMetadata ParseMetadata(const TSharedPtr<FJsonObject>& MetadataObject);
 
 	// === Asset Creation ===
 

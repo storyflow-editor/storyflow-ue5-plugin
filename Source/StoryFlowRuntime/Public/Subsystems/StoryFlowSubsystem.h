@@ -32,31 +32,31 @@ public:
 	/**
 	 * Get the current project asset
 	 */
-	UFUNCTION(BlueprintPure, Category = "StoryFlow")
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Project")
 	UStoryFlowProjectAsset* GetProject() const { return ProjectAsset; }
 
 	/**
 	 * Set the project asset manually (overrides auto-detect)
 	 */
-	UFUNCTION(BlueprintCallable, Category = "StoryFlow")
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Project")
 	void SetProject(UStoryFlowProjectAsset* NewProject);
 
 	/**
 	 * Check if a project is loaded
 	 */
-	UFUNCTION(BlueprintPure, Category = "StoryFlow")
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Project")
 	bool HasProject() const { return ProjectAsset != nullptr; }
 
 	/**
 	 * Get a script by path from the loaded project
 	 */
-	UFUNCTION(BlueprintPure, Category = "StoryFlow")
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Scripts")
 	UStoryFlowScriptAsset* GetScript(const FString& ScriptPath) const;
 
 	/**
 	 * Get all available script paths in the project
 	 */
-	UFUNCTION(BlueprintPure, Category = "StoryFlow")
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Scripts")
 	TArray<FString> GetAllScriptPaths() const;
 
 	// ========================================================================
@@ -72,7 +72,7 @@ public:
 	/**
 	 * Reset global variables to their default values from the project
 	 */
-	UFUNCTION(BlueprintCallable, Category = "StoryFlow")
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
 	void ResetGlobalVariables();
 
 	// ========================================================================
@@ -88,7 +88,7 @@ public:
 	/**
 	 * Reset runtime characters to their default values from the project
 	 */
-	UFUNCTION(BlueprintCallable, Category = "StoryFlow")
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Characters")
 	void ResetRuntimeCharacters();
 
 	// ========================================================================

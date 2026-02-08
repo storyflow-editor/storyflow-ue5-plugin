@@ -21,6 +21,26 @@ constexpr int32 STORYFLOW_MAX_FLOW_DEPTH = 50;
 /** Maximum evaluation depth for recursion protection */
 constexpr int32 STORYFLOW_MAX_EVALUATION_DEPTH = 100;
 
+/** Maximum processing depth for ProcessNode/ProcessNextNode recursion */
+constexpr int32 STORYFLOW_MAX_PROCESSING_DEPTH = 1000;
+
+/**
+ * Per-node runtime state that is NOT stored on the shared asset.
+ * Each execution context has its own map, preventing cross-contamination
+ * when multiple components run the same script.
+ */
+struct FNodeRuntimeState
+{
+	/** Cached output value (for evaluators) */
+	FStoryFlowVariant CachedOutput;
+	bool bHasCachedOutput = false;
+
+	/** Loop state (for forEach nodes) */
+	int32 LoopIndex = -1;
+	TArray<FStoryFlowVariant> LoopArray;
+	bool bLoopInitialized = false;
+};
+
 /**
  * Runtime execution context for StoryFlow
  */
@@ -90,16 +110,18 @@ public:
 	TWeakObjectPtr<UStoryFlowProjectAsset> Project;
 
 	/**
-	 * Pointer to external global variables (from subsystem)
-	 * When set, global variable operations use this instead of Project->GlobalVariables
-	 * This allows multiple components to share the same global state
+	 * Non-owning pointer to external global variables (owned by UStoryFlowSubsystem).
+	 * When set, global variable operations use this instead of Project->GlobalVariables.
+	 * This allows multiple components to share the same global state.
+	 * Lifetime: valid as long as the subsystem exists (GameInstance scope).
 	 */
 	TMap<FString, FStoryFlowVariable>* ExternalGlobalVariables = nullptr;
 
 	/**
-	 * Pointer to external runtime characters (from subsystem)
-	 * When set, character variable operations use this instead of Project->Characters
-	 * This allows character variable modifications to persist across scripts
+	 * Non-owning pointer to external runtime characters (owned by UStoryFlowSubsystem).
+	 * When set, character variable operations use this instead of Project->Characters.
+	 * This allows character variable modifications to persist across scripts.
+	 * Lifetime: valid as long as the subsystem exists (GameInstance scope).
 	 */
 	TMap<FString, FStoryFlowCharacterDef>* ExternalCharacters = nullptr;
 
@@ -126,6 +148,14 @@ public:
 	/** Current evaluation depth (for recursion protection) */
 	int32 EvaluationDepth = 0;
 
+	/** Current processing depth (for ProcessNode/ProcessNextNode recursion protection) */
+	int32 ProcessingDepth = 0;
+
+	// === Per-Node Runtime State (isolated per execution context) ===
+
+	/** Runtime state for each node, keyed by node ID. NOT stored on the shared asset. */
+	TMap<FString, FNodeRuntimeState> NodeRuntimeStates;
+
 public:
 	// === Node Accessors ===
 
@@ -134,9 +164,6 @@ public:
 
 	/** Get node by ID from current script */
 	FStoryFlowNode* GetNode(const FString& NodeId);
-
-	/** Get mutable node by ID (for caching) */
-	FStoryFlowNode* GetNodeMutable(const FString& NodeId);
 
 	// === Variable Accessors ===
 
@@ -203,6 +230,12 @@ public:
 
 	/** Check if we're at max evaluation depth */
 	bool IsAtMaxEvaluationDepth() const { return EvaluationDepth >= STORYFLOW_MAX_EVALUATION_DEPTH; }
+
+	/** Check if we're at max processing depth */
+	bool IsAtMaxProcessingDepth() const { return ProcessingDepth >= STORYFLOW_MAX_PROCESSING_DEPTH; }
+
+	/** Get per-node runtime state (lazily created) */
+	FNodeRuntimeState& GetNodeState(const FString& NodeId) { return NodeRuntimeStates.FindOrAdd(NodeId); }
 
 	// === Cache Management ===
 

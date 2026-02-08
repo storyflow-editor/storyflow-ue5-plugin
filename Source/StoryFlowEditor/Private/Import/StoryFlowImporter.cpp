@@ -1,6 +1,7 @@
 // Copyright 2026 StoryFlow. All Rights Reserved.
 
 #include "Import/StoryFlowImporter.h"
+#include "StoryFlowRuntime.h"
 #include "Data/StoryFlowProjectAsset.h"
 #include "Data/StoryFlowScriptAsset.h"
 #include "Misc/FileHelper.h"
@@ -14,6 +15,27 @@
 #include "Engine/Texture2D.h"
 #include "Sound/SoundWave.h"
 #include "EditorAssetLibrary.h"
+#include "Editor.h"
+
+namespace
+{
+	/** Save package if not in PIE. Returns true if saved, false if deferred. */
+	bool SavePackageSafe(UPackage* Package, UObject* Asset)
+	{
+		// During PIE, packages are locked — skip save but keep dirty so they save later
+		if (GEditor && GEditor->PlayWorld)
+		{
+			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Deferring save of %s (PIE active)"), *Package->GetName());
+			return false;
+		}
+
+		Package->FullyLoad();
+		FString PackageFileName = FPackageName::LongPackageNameToFilename(Package->GetName(), FPackageName::GetAssetPackageExtension());
+		FSavePackageArgs SaveArgs;
+		SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+		return UPackage::SavePackage(Package, Asset, *PackageFileName, SaveArgs);
+	}
+}
 
 UStoryFlowProjectAsset* UStoryFlowImporter::ImportProject(const FString& BuildDirectory, const FString& ContentPath)
 {
@@ -22,7 +44,7 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProject(const FString& BuildDi
 	TSharedPtr<FJsonObject> ProjectJson = LoadJsonFile(ProjectJsonPath);
 	if (!ProjectJson.IsValid())
 	{
-		UE_LOG(LogTemp, Error, TEXT("StoryFlow: Failed to load project.json from %s"), *ProjectJsonPath);
+		UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Failed to load project.json from %s"), *ProjectJsonPath);
 		return nullptr;
 	}
 
@@ -34,7 +56,7 @@ UStoryFlowScriptAsset* UStoryFlowImporter::ImportScript(const FString& JsonPath,
 	TSharedPtr<FJsonObject> ScriptJson = LoadJsonFile(JsonPath);
 	if (!ScriptJson.IsValid())
 	{
-		UE_LOG(LogTemp, Error, TEXT("StoryFlow: Failed to load script from %s"), *JsonPath);
+		UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Failed to load script from %s"), *JsonPath);
 		return nullptr;
 	}
 
@@ -42,7 +64,7 @@ UStoryFlowScriptAsset* UStoryFlowImporter::ImportScript(const FString& JsonPath,
 	return ImportScriptFromJson(ScriptJson, ScriptPath, ContentPath);
 }
 
-UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(TSharedPtr<FJsonObject> JsonObject, const FString& BuildDirectory, const FString& ContentPath)
+UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedPtr<FJsonObject>& JsonObject, const FString& BuildDirectory, const FString& ContentPath)
 {
 	// Create project asset
 	UStoryFlowProjectAsset* ProjectAsset = CreateProjectAsset(ContentPath, TEXT("SF_Project"));
@@ -52,9 +74,18 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(TSharedPtr<FJs
 	}
 
 	// Parse basic fields
-	ProjectAsset->Version = JsonObject->GetStringField(TEXT("version"));
-	ProjectAsset->ApiVersion = JsonObject->GetStringField(TEXT("apiVersion"));
-	ProjectAsset->StartupScript = JsonObject->GetStringField(TEXT("startupScript"));
+	if (JsonObject->HasField(TEXT("version")))
+	{
+		ProjectAsset->Version = JsonObject->GetStringField(TEXT("version"));
+	}
+	if (JsonObject->HasField(TEXT("apiVersion")))
+	{
+		ProjectAsset->ApiVersion = JsonObject->GetStringField(TEXT("apiVersion"));
+	}
+	if (JsonObject->HasField(TEXT("startupScript")))
+	{
+		ProjectAsset->StartupScript = JsonObject->GetStringField(TEXT("startupScript"));
+	}
 
 	// Parse metadata
 	if (JsonObject->HasField(TEXT("metadata")))
@@ -110,7 +141,7 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(TSharedPtr<FJs
 				TMap<FString, FStoryFlowAsset> CharacterAssets;
 				ParseAssets(CharactersJson->GetObjectField(TEXT("assets")), CharacterAssets);
 
-				UE_LOG(LogTemp, Log, TEXT("StoryFlow: Importing %d character assets"), CharacterAssets.Num());
+				UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Importing %d character assets"), CharacterAssets.Num());
 
 				// Import the media files and store in project's resolved assets
 				ImportMediaAssets(BuildDirectory, MediaContentPath, CharacterAssets, ProjectAsset->ResolvedAssets);
@@ -150,11 +181,7 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(TSharedPtr<FJs
 				ImportMediaAssets(BuildDirectory, MediaContentPath, ScriptAsset->Assets, ScriptAsset->ResolvedAssets);
 
 				// Re-save script with resolved asset references
-				UPackage* ScriptPackage = ScriptAsset->GetOutermost();
-				FString ScriptPackageFileName = FPackageName::LongPackageNameToFilename(ScriptPackage->GetName(), FPackageName::GetAssetPackageExtension());
-				FSavePackageArgs ScriptSaveArgs;
-				ScriptSaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
-				UPackage::SavePackage(ScriptPackage, ScriptAsset, *ScriptPackageFileName, ScriptSaveArgs);
+				SavePackageSafe(ScriptAsset->GetOutermost(), ScriptAsset);
 
 				ProjectAsset->Scripts.Add(RelativePath, ScriptAsset);
 			}
@@ -162,18 +189,17 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(TSharedPtr<FJs
 	}
 
 	// Save the project asset
-	UPackage* Package = ProjectAsset->GetOutermost();
-	FString PackageFileName = FPackageName::LongPackageNameToFilename(Package->GetName(), FPackageName::GetAssetPackageExtension());
-	FSavePackageArgs SaveArgs;
-	SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
-	UPackage::SavePackage(Package, ProjectAsset, *PackageFileName, SaveArgs);
+	SavePackageSafe(ProjectAsset->GetOutermost(), ProjectAsset);
 
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: Successfully imported project with %d scripts"), ProjectAsset->Scripts.Num());
+	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Successfully imported project with %d scripts"), ProjectAsset->Scripts.Num());
+
+	// Single GC pass after all assets are imported (instead of per-asset)
+	CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
 
 	return ProjectAsset;
 }
 
-UStoryFlowScriptAsset* UStoryFlowImporter::ImportScriptFromJson(TSharedPtr<FJsonObject> JsonObject, const FString& ScriptPath, const FString& ContentPath)
+UStoryFlowScriptAsset* UStoryFlowImporter::ImportScriptFromJson(const TSharedPtr<FJsonObject>& JsonObject, const FString& ScriptPath, const FString& ContentPath)
 {
 	// Create script asset
 	FString AssetName = NormalizePathForAssetName(ScriptPath);
@@ -186,7 +212,10 @@ UStoryFlowScriptAsset* UStoryFlowImporter::ImportScriptFromJson(TSharedPtr<FJson
 	ScriptAsset->ScriptPath = ScriptPath;
 
 	// Parse startNode
-	ScriptAsset->StartNode = JsonObject->GetStringField(TEXT("startNode"));
+	if (JsonObject->HasField(TEXT("startNode")))
+	{
+		ScriptAsset->StartNode = JsonObject->GetStringField(TEXT("startNode"));
+	}
 
 	// Parse nodes
 	if (JsonObject->HasField(TEXT("nodes")))
@@ -218,19 +247,17 @@ UStoryFlowScriptAsset* UStoryFlowImporter::ImportScriptFromJson(TSharedPtr<FJson
 		ParseAssets(JsonObject->GetObjectField(TEXT("assets")), ScriptAsset->Assets);
 	}
 
+	// Build connection index maps for O(1) lookups at runtime
+	ScriptAsset->BuildConnectionIndices();
+
 	// Mark the object as needing save
 	ScriptAsset->MarkPackageDirty();
 
 	// Save the script asset
-	UPackage* Package = ScriptAsset->GetOutermost();
-	Package->FullyLoad();
-	FString PackageFileName = FPackageName::LongPackageNameToFilename(Package->GetName(), FPackageName::GetAssetPackageExtension());
-	FSavePackageArgs SaveArgs;
-	SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
-	bool bSaved = UPackage::SavePackage(Package, ScriptAsset, *PackageFileName, SaveArgs);
+	bool bSaved = SavePackageSafe(ScriptAsset->GetOutermost(), ScriptAsset);
 
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: Script save result: %s"), bSaved ? TEXT("SUCCESS") : TEXT("FAILED"));
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: Imported script %s with %d nodes"), *ScriptPath, ScriptAsset->Nodes.Num());
+	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Script save result: %s"), bSaved ? TEXT("SUCCESS") : TEXT("DEFERRED/FAILED"));
+	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Imported script %s with %d nodes"), *ScriptPath, ScriptAsset->Nodes.Num());
 
 	return ScriptAsset;
 }
@@ -239,7 +266,7 @@ UStoryFlowScriptAsset* UStoryFlowImporter::ImportScriptFromJson(TSharedPtr<FJson
 // Parsing Helpers
 // ============================================================================
 
-void UStoryFlowImporter::ParseNodes(TSharedPtr<FJsonObject> NodesObject, TMap<FString, FStoryFlowNode>& OutNodes)
+void UStoryFlowImporter::ParseNodes(const TSharedPtr<FJsonObject>& NodesObject, TMap<FString, FStoryFlowNode>& OutNodes)
 {
 	for (const auto& NodePair : NodesObject->Values)
 	{
@@ -252,17 +279,20 @@ void UStoryFlowImporter::ParseNodes(TSharedPtr<FJsonObject> NodesObject, TMap<FS
 	}
 }
 
-FStoryFlowNode UStoryFlowImporter::ParseNode(const FString& NodeId, TSharedPtr<FJsonObject> NodeObject)
+FStoryFlowNode UStoryFlowImporter::ParseNode(const FString& NodeId, const TSharedPtr<FJsonObject>& NodeObject)
 {
 	FStoryFlowNode Node;
 	Node.Id = NodeId;
-	Node.TypeString = NodeObject->GetStringField(TEXT("type"));
+	if (NodeObject->HasField(TEXT("type")))
+	{
+		Node.TypeString = NodeObject->GetStringField(TEXT("type"));
+	}
 	Node.Type = ParseNodeType(Node.TypeString);
 	Node.Data = ParseNodeData(NodeObject);
 	return Node;
 }
 
-FStoryFlowNodeData UStoryFlowImporter::ParseNodeData(TSharedPtr<FJsonObject> NodeObject)
+FStoryFlowNodeData UStoryFlowImporter::ParseNodeData(const TSharedPtr<FJsonObject>& NodeObject)
 {
 	FStoryFlowNodeData Data;
 
@@ -394,9 +424,18 @@ void UStoryFlowImporter::ParseConnections(const TArray<TSharedPtr<FJsonValue>>& 
 		if (ConnectionObject.IsValid())
 		{
 			FStoryFlowConnection Connection;
-			Connection.Id = ConnectionObject->GetStringField(TEXT("id"));
-			Connection.Source = ConnectionObject->GetStringField(TEXT("source"));
-			Connection.Target = ConnectionObject->GetStringField(TEXT("target"));
+			if (ConnectionObject->HasField(TEXT("id")))
+			{
+				Connection.Id = ConnectionObject->GetStringField(TEXT("id"));
+			}
+			if (ConnectionObject->HasField(TEXT("source")))
+			{
+				Connection.Source = ConnectionObject->GetStringField(TEXT("source"));
+			}
+			if (ConnectionObject->HasField(TEXT("target")))
+			{
+				Connection.Target = ConnectionObject->GetStringField(TEXT("target"));
+			}
 
 			if (ConnectionObject->HasField(TEXT("sourceHandle")))
 			{
@@ -412,7 +451,7 @@ void UStoryFlowImporter::ParseConnections(const TArray<TSharedPtr<FJsonValue>>& 
 	}
 }
 
-void UStoryFlowImporter::ParseVariables(TSharedPtr<FJsonObject> VariablesObject, TMap<FString, FStoryFlowVariable>& OutVariables)
+void UStoryFlowImporter::ParseVariables(const TSharedPtr<FJsonObject>& VariablesObject, TMap<FString, FStoryFlowVariable>& OutVariables)
 {
 	for (const auto& VarPair : VariablesObject->Values)
 	{
@@ -425,7 +464,7 @@ void UStoryFlowImporter::ParseVariables(TSharedPtr<FJsonObject> VariablesObject,
 	}
 }
 
-FStoryFlowVariable UStoryFlowImporter::ParseVariable(const FString& VariableId, TSharedPtr<FJsonObject> VariableObject)
+FStoryFlowVariable UStoryFlowImporter::ParseVariable(const FString& VariableId, const TSharedPtr<FJsonObject>& VariableObject)
 {
 	FStoryFlowVariable Variable;
 	Variable.Id = VariableId;
@@ -436,7 +475,11 @@ FStoryFlowVariable UStoryFlowImporter::ParseVariable(const FString& VariableId, 
 	}
 
 	// Parse type
-	FString TypeString = VariableObject->GetStringField(TEXT("type"));
+	FString TypeString;
+	if (VariableObject->HasField(TEXT("type")))
+	{
+		TypeString = VariableObject->GetStringField(TEXT("type"));
+	}
 	if (TypeString == TEXT("boolean"))
 	{
 		Variable.Type = EStoryFlowVariableType::Boolean;
@@ -494,7 +537,7 @@ FStoryFlowVariable UStoryFlowImporter::ParseVariable(const FString& VariableId, 
 	return Variable;
 }
 
-void UStoryFlowImporter::ParseStrings(TSharedPtr<FJsonObject> StringsObject, TMap<FString, FString>& OutStrings)
+void UStoryFlowImporter::ParseStrings(const TSharedPtr<FJsonObject>& StringsObject, TMap<FString, FString>& OutStrings)
 {
 	// Strings are nested by language code: { "en": { "key": "value" } }
 	for (const auto& LangPair : StringsObject->Values)
@@ -514,7 +557,7 @@ void UStoryFlowImporter::ParseStrings(TSharedPtr<FJsonObject> StringsObject, TMa
 	}
 }
 
-void UStoryFlowImporter::ParseAssets(TSharedPtr<FJsonObject> AssetsObject, TMap<FString, FStoryFlowAsset>& OutAssets)
+void UStoryFlowImporter::ParseAssets(const TSharedPtr<FJsonObject>& AssetsObject, TMap<FString, FStoryFlowAsset>& OutAssets)
 {
 	for (const auto& AssetPair : AssetsObject->Values)
 	{
@@ -525,9 +568,16 @@ void UStoryFlowImporter::ParseAssets(TSharedPtr<FJsonObject> AssetsObject, TMap<
 		{
 			FStoryFlowAsset Asset;
 			Asset.Id = AssetId;
-			Asset.Path = AssetObject->GetStringField(TEXT("path"));
+			if (AssetObject->HasField(TEXT("path")))
+			{
+				Asset.Path = AssetObject->GetStringField(TEXT("path"));
+			}
 
-			FString TypeString = AssetObject->GetStringField(TEXT("type"));
+			FString TypeString;
+			if (AssetObject->HasField(TEXT("type")))
+			{
+				TypeString = AssetObject->GetStringField(TEXT("type"));
+			}
 			if (TypeString == TEXT("image"))
 			{
 				Asset.Type = EStoryFlowAssetType::Image;
@@ -554,8 +604,14 @@ void UStoryFlowImporter::ParseTextBlocks(const TArray<TSharedPtr<FJsonValue>>& T
 		if (BlockObject.IsValid())
 		{
 			FStoryFlowTextBlock TextBlock;
-			TextBlock.Id = BlockObject->GetStringField(TEXT("id"));
-			TextBlock.Text = BlockObject->GetStringField(TEXT("text"));
+			if (BlockObject->HasField(TEXT("id")))
+			{
+				TextBlock.Id = BlockObject->GetStringField(TEXT("id"));
+			}
+			if (BlockObject->HasField(TEXT("text")))
+			{
+				TextBlock.Text = BlockObject->GetStringField(TEXT("text"));
+			}
 
 			OutTextBlocks.Add(TextBlock);
 		}
@@ -570,8 +626,14 @@ void UStoryFlowImporter::ParseChoices(const TArray<TSharedPtr<FJsonValue>>& Choi
 		if (ChoiceObject.IsValid())
 		{
 			FStoryFlowChoice Choice;
-			Choice.Id = ChoiceObject->GetStringField(TEXT("id"));
-			Choice.Text = ChoiceObject->GetStringField(TEXT("text"));
+			if (ChoiceObject->HasField(TEXT("id")))
+			{
+				Choice.Id = ChoiceObject->GetStringField(TEXT("id"));
+			}
+			if (ChoiceObject->HasField(TEXT("text")))
+			{
+				Choice.Text = ChoiceObject->GetStringField(TEXT("text"));
+			}
 
 			if (ChoiceObject->HasField(TEXT("onceOnly")))
 			{
@@ -583,7 +645,7 @@ void UStoryFlowImporter::ParseChoices(const TArray<TSharedPtr<FJsonValue>>& Choi
 	}
 }
 
-void UStoryFlowImporter::ParseCharacters(TSharedPtr<FJsonObject> CharactersObject, TMap<FString, FStoryFlowCharacterDef>& OutCharacters)
+void UStoryFlowImporter::ParseCharacters(const TSharedPtr<FJsonObject>& CharactersObject, TMap<FString, FStoryFlowCharacterDef>& OutCharacters)
 {
 	for (const auto& CharPair : CharactersObject->Values)
 	{
@@ -615,7 +677,7 @@ void UStoryFlowImporter::ParseCharacters(TSharedPtr<FJsonObject> CharactersObjec
 	}
 }
 
-FStoryFlowVariant UStoryFlowImporter::ParseVariant(TSharedPtr<FJsonValue> Value, EStoryFlowVariableType ExpectedType)
+FStoryFlowVariant UStoryFlowImporter::ParseVariant(const TSharedPtr<FJsonValue>& Value, EStoryFlowVariableType ExpectedType)
 {
 	FStoryFlowVariant Variant;
 
@@ -635,9 +697,22 @@ FStoryFlowVariant UStoryFlowImporter::ParseVariant(TSharedPtr<FJsonValue> Value,
 		{
 			Variant.SetFloat(static_cast<float>(Value->AsNumber()));
 		}
-		else
+		else if (ExpectedType == EStoryFlowVariableType::Integer)
 		{
 			Variant.SetInt(static_cast<int32>(Value->AsNumber()));
+		}
+		else
+		{
+			// When type is unknown, check if the value has a fractional part
+			double NumberValue = Value->AsNumber();
+			if (FMath::Frac(NumberValue) != 0.0)
+			{
+				Variant.SetFloat(static_cast<float>(NumberValue));
+			}
+			else
+			{
+				Variant.SetInt(static_cast<int32>(NumberValue));
+			}
 		}
 		break;
 
@@ -670,7 +745,7 @@ FStoryFlowVariant UStoryFlowImporter::ParseVariant(TSharedPtr<FJsonValue> Value,
 	return Variant;
 }
 
-FStoryFlowProjectMetadata UStoryFlowImporter::ParseMetadata(TSharedPtr<FJsonObject> MetadataObject)
+FStoryFlowProjectMetadata UStoryFlowImporter::ParseMetadata(const TSharedPtr<FJsonObject>& MetadataObject)
 {
 	FStoryFlowProjectMetadata Metadata;
 
@@ -700,33 +775,28 @@ FStoryFlowProjectMetadata UStoryFlowImporter::ParseMetadata(TSharedPtr<FJsonObje
 // Asset Creation
 // ============================================================================
 
-UStoryFlowProjectAsset* UStoryFlowImporter::CreateProjectAsset(const FString& ContentPath, const FString& AssetName)
+template<typename T>
+static T* CreateAssetInternal(const FString& ContentPath, const FString& AssetName)
 {
 	FString PackagePath = FPaths::Combine(ContentPath, AssetName);
 
 	// Check if asset already exists and delete it first to avoid "partially loaded" errors
 	if (UEditorAssetLibrary::DoesAssetExist(PackagePath))
 	{
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: Deleting existing project asset at %s for re-import"), *PackagePath);
-
-		// Unload and delete the existing asset
+		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Deleting existing asset at %s for re-import"), *PackagePath);
 		UEditorAssetLibrary::DeleteAsset(PackagePath);
-
-		// Force garbage collection to ensure the package is fully unloaded
-		CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
 	}
 
 	UPackage* Package = CreatePackage(*PackagePath);
 	if (!Package)
 	{
-		UE_LOG(LogTemp, Error, TEXT("StoryFlow: Failed to create package %s"), *PackagePath);
+		UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Failed to create package %s"), *PackagePath);
 		return nullptr;
 	}
 
-	// Ensure package is fully loaded
 	Package->FullyLoad();
 
-	UStoryFlowProjectAsset* Asset = NewObject<UStoryFlowProjectAsset>(Package, *AssetName, RF_Public | RF_Standalone);
+	T* Asset = NewObject<T>(Package, *AssetName, RF_Public | RF_Standalone);
 	if (Asset)
 	{
 		FAssetRegistryModule::AssetCreated(Asset);
@@ -736,40 +806,14 @@ UStoryFlowProjectAsset* UStoryFlowImporter::CreateProjectAsset(const FString& Co
 	return Asset;
 }
 
+UStoryFlowProjectAsset* UStoryFlowImporter::CreateProjectAsset(const FString& ContentPath, const FString& AssetName)
+{
+	return CreateAssetInternal<UStoryFlowProjectAsset>(ContentPath, AssetName);
+}
+
 UStoryFlowScriptAsset* UStoryFlowImporter::CreateScriptAsset(const FString& ContentPath, const FString& AssetName)
 {
-	FString PackagePath = FPaths::Combine(ContentPath, AssetName);
-
-	// Check if asset already exists and delete it first to avoid "partially loaded" errors
-	if (UEditorAssetLibrary::DoesAssetExist(PackagePath))
-	{
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: Deleting existing script asset at %s for re-import"), *PackagePath);
-
-		// Unload and delete the existing asset
-		UEditorAssetLibrary::DeleteAsset(PackagePath);
-
-		// Force garbage collection to ensure the package is fully unloaded
-		CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
-	}
-
-	UPackage* Package = CreatePackage(*PackagePath);
-	if (!Package)
-	{
-		UE_LOG(LogTemp, Error, TEXT("StoryFlow: Failed to create package %s"), *PackagePath);
-		return nullptr;
-	}
-
-	// Ensure package is fully loaded
-	Package->FullyLoad();
-
-	UStoryFlowScriptAsset* Asset = NewObject<UStoryFlowScriptAsset>(Package, *AssetName, RF_Public | RF_Standalone);
-	if (Asset)
-	{
-		FAssetRegistryModule::AssetCreated(Asset);
-		Package->MarkPackageDirty();
-	}
-
-	return Asset;
+	return CreateAssetInternal<UStoryFlowScriptAsset>(ContentPath, AssetName);
 }
 
 FString UStoryFlowImporter::NormalizePathForAssetName(const FString& Path)
@@ -813,7 +857,9 @@ void UStoryFlowImporter::ImportMediaAssets(
 	const TMap<FString, FStoryFlowAsset>& Assets,
 	TMap<FString, TSoftObjectPtr<UObject>>& OutResolvedAssets)
 {
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: Importing %d media assets to %s"), Assets.Num(), *ContentPath);
+	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Importing %d media assets to %s"), Assets.Num(), *ContentPath);
+
+	const bool bIsPIE = GEditor && GEditor->PlayWorld;
 
 	for (const auto& AssetPair : Assets)
 	{
@@ -822,14 +868,34 @@ void UStoryFlowImporter::ImportMediaAssets(
 
 		// Normalize the path - convert forward slashes and remove extension
 		FString AssetName = NormalizeAssetPath(Asset.Path);
+		FString PackagePath = FPaths::Combine(ContentPath, AssetName);
 
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: Processing asset %s (type: %d) from %s"),
+		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Processing asset %s (type: %d) from %s"),
 			*Asset.Id, static_cast<int32>(Asset.Type), *SourcePath);
+
+		// During PIE, reuse existing assets (can't save to disk, and ImportAssets shows overwrite dialogs)
+		if (bIsPIE)
+		{
+			if (UEditorAssetLibrary::DoesAssetExist(PackagePath))
+			{
+				UObject* ExistingAsset = UEditorAssetLibrary::LoadAsset(PackagePath);
+				if (ExistingAsset)
+				{
+					OutResolvedAssets.Add(Asset.Id, TSoftObjectPtr<UObject>(ExistingAsset));
+					UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Reusing existing asset during PIE: %s"), *Asset.Path);
+				}
+			}
+			else
+			{
+				UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Skipping new media import during PIE: %s"), *Asset.Path);
+			}
+			continue;
+		}
 
 		// Check if source file exists
 		if (!FPaths::FileExists(SourcePath))
 		{
-			UE_LOG(LogTemp, Warning, TEXT("StoryFlow: Source file not found: %s"), *SourcePath);
+			UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Source file not found: %s"), *SourcePath);
 			continue;
 		}
 
@@ -846,18 +912,18 @@ void UStoryFlowImporter::ImportMediaAssets(
 			break;
 
 		case EStoryFlowAssetType::Video:
-			UE_LOG(LogTemp, Warning, TEXT("StoryFlow: Video import not yet supported for %s"), *Asset.Path);
+			UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Video import not yet supported for %s"), *Asset.Path);
 			break;
 
 		default:
-			UE_LOG(LogTemp, Warning, TEXT("StoryFlow: Unknown asset type for %s"), *Asset.Path);
+			UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Unknown asset type for %s"), *Asset.Path);
 			break;
 		}
 
 		if (ImportedAsset)
 		{
 			OutResolvedAssets.Add(Asset.Id, TSoftObjectPtr<UObject>(ImportedAsset));
-			UE_LOG(LogTemp, Log, TEXT("StoryFlow: Successfully imported %s -> %s"), *Asset.Path, *ImportedAsset->GetPathName());
+			UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Successfully imported %s -> %s"), *Asset.Path, *ImportedAsset->GetPathName());
 		}
 	}
 }
@@ -869,7 +935,7 @@ UTexture2D* UStoryFlowImporter::ImportImageAsset(const FString& SourcePath, cons
 	if (Extension != TEXT("png") && Extension != TEXT("jpg") && Extension != TEXT("jpeg") &&
 		Extension != TEXT("bmp") && Extension != TEXT("tga"))
 	{
-		UE_LOG(LogTemp, Warning, TEXT("StoryFlow: Unsupported image format: %s"), *Extension);
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Unsupported image format: %s"), *Extension);
 		return nullptr;
 	}
 
@@ -879,7 +945,7 @@ UTexture2D* UStoryFlowImporter::ImportImageAsset(const FString& SourcePath, cons
 	// Check if asset already exists
 	if (UEditorAssetLibrary::DoesAssetExist(PackagePath))
 	{
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: Image asset already exists at %s, loading existing"), *PackagePath);
+		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Image asset already exists at %s, loading existing"), *PackagePath);
 		UObject* ExistingAsset = UEditorAssetLibrary::LoadAsset(PackagePath);
 		return Cast<UTexture2D>(ExistingAsset);
 	}
@@ -917,7 +983,7 @@ UTexture2D* UStoryFlowImporter::ImportImageAsset(const FString& SourcePath, cons
 		}
 	}
 
-	UE_LOG(LogTemp, Error, TEXT("StoryFlow: Failed to import image: %s"), *SourcePath);
+	UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Failed to import image: %s"), *SourcePath);
 	return nullptr;
 }
 
@@ -930,8 +996,8 @@ USoundWave* UStoryFlowImporter::ImportAudioAsset(const FString& SourcePath, cons
 	// MP3 and OGG are handled by Media Framework and become FileMediaSource, not USoundWave
 	if (Extension != TEXT("wav"))
 	{
-		UE_LOG(LogTemp, Warning, TEXT("StoryFlow: Only WAV audio files are supported for direct import. File: %s"), *SourcePath);
-		UE_LOG(LogTemp, Warning, TEXT("StoryFlow: Please convert your audio files to WAV format, or export as WAV from StoryFlow Editor."));
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Only WAV audio files are supported for direct import. File: %s"), *SourcePath);
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Please convert your audio files to WAV format, or export as WAV from StoryFlow Editor."));
 		return nullptr;
 	}
 
@@ -941,7 +1007,7 @@ USoundWave* UStoryFlowImporter::ImportAudioAsset(const FString& SourcePath, cons
 	// Check if asset already exists
 	if (UEditorAssetLibrary::DoesAssetExist(PackagePath))
 	{
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: Audio asset already exists at %s, loading existing"), *PackagePath);
+		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Audio asset already exists at %s, loading existing"), *PackagePath);
 		UObject* ExistingAsset = UEditorAssetLibrary::LoadAsset(PackagePath);
 		return Cast<USoundWave>(ExistingAsset);
 	}
@@ -972,17 +1038,17 @@ USoundWave* UStoryFlowImporter::ImportAudioAsset(const FString& SourcePath, cons
 				UEditorAssetLibrary::RenameAsset(Sound->GetPathName(), NewPackagePath);
 			}
 
-			UE_LOG(LogTemp, Log, TEXT("StoryFlow: Successfully imported audio: %s"), *AssetName);
+			UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Successfully imported audio: %s"), *AssetName);
 			return Sound;
 		}
 		else
 		{
-			UE_LOG(LogTemp, Warning, TEXT("StoryFlow: Imported asset is not a SoundWave: %s (class: %s)"),
+			UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Imported asset is not a SoundWave: %s (class: %s)"),
 				*SourcePath, *ImportedAssets[0]->GetClass()->GetName());
 		}
 	}
 
-	UE_LOG(LogTemp, Error, TEXT("StoryFlow: Failed to import audio: %s"), *SourcePath);
+	UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Failed to import audio: %s"), *SourcePath);
 	return nullptr;
 }
 

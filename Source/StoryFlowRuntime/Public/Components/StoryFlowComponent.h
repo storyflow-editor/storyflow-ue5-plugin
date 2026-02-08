@@ -331,6 +331,12 @@ protected:
 	void OnDialogueAudioFinished();
 
 private:
+	/** Member function pointer type for node handlers */
+	using FNodeHandler = void (UStoryFlowComponent::*)(FStoryFlowNode*);
+
+	/** Get the static dispatch table mapping node types to handler functions */
+	static const TMap<EStoryFlowNodeType, FNodeHandler>& GetDispatchTable();
+
 	/** Execution context */
 	FStoryFlowExecutionContext ExecutionContext;
 

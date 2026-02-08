@@ -1,10 +1,12 @@
 // Copyright 2026 StoryFlow. All Rights Reserved.
 
 #include "WebSocket/StoryFlowWebSocketClient.h"
+#include "StoryFlowRuntime.h"
 #include "WebSocketsModule.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "Serialization/JsonWriter.h"
+#include "Misc/EngineVersion.h"
 
 FStoryFlowWebSocketClient::FStoryFlowWebSocketClient()
 {
@@ -30,11 +32,11 @@ void FStoryFlowWebSocketClient::Connect(const FString& URL)
 	WebSocket = FWebSocketsModule::Get().CreateWebSocket(URL, TEXT("ws"));
 	if (!WebSocket.IsValid())
 	{
-		UE_LOG(LogTemp, Error, TEXT("StoryFlow: Failed to create WebSocket"));
+		UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Failed to create WebSocket"));
 		return;
 	}
 
-	// Bind events
+	// Bind events (delegates are fresh since we create a new WebSocket each time via Disconnect())
 	WebSocket->OnConnected().AddRaw(this, &FStoryFlowWebSocketClient::HandleConnected);
 	WebSocket->OnConnectionError().AddRaw(this, &FStoryFlowWebSocketClient::HandleConnectionError);
 	WebSocket->OnClosed().AddRaw(this, &FStoryFlowWebSocketClient::HandleClosed);
@@ -43,7 +45,7 @@ void FStoryFlowWebSocketClient::Connect(const FString& URL)
 	// Connect
 	WebSocket->Connect();
 
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: Connecting to %s"), *URL);
+	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Connecting to %s"), *URL);
 }
 
 void FStoryFlowWebSocketClient::Disconnect()
@@ -62,7 +64,7 @@ bool FStoryFlowWebSocketClient::IsConnected() const
 	return bIsConnected && WebSocket.IsValid() && WebSocket->IsConnected();
 }
 
-void FStoryFlowWebSocketClient::SendMessage(const FString& Type, TSharedPtr<FJsonObject> Payload)
+void FStoryFlowWebSocketClient::SendMessage(const FString& Type, const TSharedPtr<FJsonObject>& Payload)
 {
 	if (!IsConnected())
 	{
@@ -103,7 +105,7 @@ void FStoryFlowWebSocketClient::SendPing()
 
 void FStoryFlowWebSocketClient::HandleConnected()
 {
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: Connected to editor"));
+	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Connected to editor"));
 
 	bIsConnected = true;
 	ReconnectAttempts = 0;
@@ -117,7 +119,7 @@ void FStoryFlowWebSocketClient::HandleConnected()
 
 void FStoryFlowWebSocketClient::HandleConnectionError(const FString& Error)
 {
-	UE_LOG(LogTemp, Warning, TEXT("StoryFlow: Connection error: %s"), *Error);
+	UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Connection error: %s"), *Error);
 
 	bIsConnected = false;
 	OnConnectionStateChanged.Broadcast(false);
@@ -126,14 +128,14 @@ void FStoryFlowWebSocketClient::HandleConnectionError(const FString& Error)
 	if (ReconnectAttempts < MaxReconnectAttempts && !LastURL.IsEmpty())
 	{
 		ReconnectAttempts++;
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: Connection lost (attempt %d/%d). Use Connect() to reconnect."),
+		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Connection lost (attempt %d/%d). Use Connect() to reconnect."),
 			   ReconnectAttempts, MaxReconnectAttempts);
 	}
 }
 
 void FStoryFlowWebSocketClient::HandleClosed(int32 StatusCode, const FString& Reason, bool bWasClean)
 {
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: Connection closed (code: %d, reason: %s, clean: %s)"),
+	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Connection closed (code: %d, reason: %s, clean: %s)"),
 		   StatusCode, *Reason, bWasClean ? TEXT("yes") : TEXT("no"));
 
 	bIsConnected = false;
@@ -148,7 +150,7 @@ void FStoryFlowWebSocketClient::HandleMessage(const FString& Message)
 
 	if (!FJsonSerializer::Deserialize(Reader, JsonObject) || !JsonObject.IsValid())
 	{
-		UE_LOG(LogTemp, Warning, TEXT("StoryFlow: Failed to parse message: %s"), *Message);
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Failed to parse message: %s"), *Message);
 		return;
 	}
 
@@ -176,7 +178,7 @@ void FStoryFlowWebSocketClient::SendHandshake()
 {
 	TSharedPtr<FJsonObject> Payload = MakeShared<FJsonObject>();
 	Payload->SetStringField(TEXT("engine"), TEXT("unreal"));
-	Payload->SetStringField(TEXT("version"), TEXT("5.3.2"));
+	Payload->SetStringField(TEXT("version"), FEngineVersion::Current().ToString());
 	Payload->SetStringField(TEXT("pluginVersion"), TEXT("1.0.0"));
 
 	SendMessage(TEXT("connect"), Payload);

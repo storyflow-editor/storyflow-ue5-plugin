@@ -2,6 +2,8 @@
 
 #include "StoryFlowRuntime.h"
 
+DEFINE_LOG_CATEGORY(LogStoryFlow);
+
 #define LOCTEXT_NAMESPACE "FStoryFlowRuntimeModule"
 
 void FStoryFlowRuntimeModule::StartupModule()

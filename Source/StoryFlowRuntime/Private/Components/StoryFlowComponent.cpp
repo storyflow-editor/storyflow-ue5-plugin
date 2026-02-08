@@ -1,6 +1,7 @@
 // Copyright 2026 StoryFlow. All Rights Reserved.
 
 #include "Components/StoryFlowComponent.h"
+#include "StoryFlowRuntime.h"
 #include "Data/StoryFlowProjectAsset.h"
 #include "Data/StoryFlowScriptAsset.h"
 #include "Evaluation/StoryFlowEvaluator.h"
@@ -46,7 +47,7 @@ void UStoryFlowComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 void UStoryFlowComponent::StartDialogue()
 {
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: StartDialogue() called, Script='%s'"), *Script);
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: StartDialogue() called, Script='%s'"), *Script);
 
 	if (Script.IsEmpty())
 	{
@@ -59,7 +60,13 @@ void UStoryFlowComponent::StartDialogue()
 
 void UStoryFlowComponent::StartDialogueWithScript(const FString& ScriptPath)
 {
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: StartDialogueWithScript('%s') called"), *ScriptPath);
+	if (ScriptPath.IsEmpty())
+	{
+		ReportError(TEXT("StartDialogueWithScript called with empty ScriptPath"));
+		return;
+	}
+
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: StartDialogueWithScript('%s') called"), *ScriptPath);
 
 	UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem();
 	if (!Subsystem)
@@ -67,7 +74,7 @@ void UStoryFlowComponent::StartDialogueWithScript(const FString& ScriptPath)
 		ReportError(TEXT("StoryFlow Subsystem not available"));
 		return;
 	}
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: Subsystem found"));
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Subsystem found"));
 
 	UStoryFlowProjectAsset* Project = Subsystem->GetProject();
 	if (!Project)
@@ -75,31 +82,31 @@ void UStoryFlowComponent::StartDialogueWithScript(const FString& ScriptPath)
 		ReportError(TEXT("No StoryFlow project loaded. Import a project to /Game/StoryFlow/ or set it via the subsystem."));
 		return;
 	}
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: Project loaded: %s"), *Project->GetName());
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Project loaded: %s"), *Project->GetName());
 
 	UStoryFlowScriptAsset* ScriptAsset = Project->GetScriptByPath(ScriptPath);
 	if (!ScriptAsset)
 	{
 		ReportError(FString::Printf(TEXT("Script not found: %s"), *ScriptPath));
-		UE_LOG(LogTemp, Warning, TEXT("StoryFlow: Available scripts in project:"));
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Available scripts in project:"));
 		for (const auto& ScriptPair : Project->Scripts)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("StoryFlow:   - '%s'"), *ScriptPair.Key);
+			UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow:   - '%s'"), *ScriptPair.Key);
 		}
 		return;
 	}
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: Script loaded: %s (Nodes: %d, StartNode: %s)"),
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Script loaded: %s (Nodes: %d, StartNode: %s)"),
 		*ScriptAsset->GetName(), ScriptAsset->Nodes.Num(), *ScriptAsset->StartNode);
 
 	// Initialize execution context with project and script
 	// Pass the subsystem's global variables and runtime characters so they're shared across all components
 	ExecutionContext.InitializeWithSubsystem(Project, ScriptAsset, &Subsystem->GetGlobalVariables(), &Subsystem->GetRuntimeCharacters());
 	ExecutionContext.bIsExecuting = true;
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: ExecutionContext initialized, CurrentNodeId='%s'"), *ExecutionContext.CurrentNodeId);
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: ExecutionContext initialized, CurrentNodeId='%s'"), *ExecutionContext.CurrentNodeId);
 
 	// Create evaluator
 	Evaluator = MakeUnique<FStoryFlowEvaluator>(&ExecutionContext);
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: Evaluator created"));
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Evaluator created"));
 
 	// Create dialogue widget if configured
 	if (DialogueWidgetClass)
@@ -111,7 +118,8 @@ void UStoryFlowComponent::StartDialogueWithScript(const FString& ScriptPath)
 			ActiveDialogueWidget = nullptr;
 		}
 
-		APlayerController* PC = GetWorld()->GetFirstPlayerController();
+		UWorld* World = GetWorld();
+		APlayerController* PC = World ? World->GetFirstPlayerController() : nullptr;
 		if (PC)
 		{
 			ActiveDialogueWidget = CreateWidget<UStoryFlowDialogueWidget>(PC, DialogueWidgetClass);
@@ -124,7 +132,7 @@ void UStoryFlowComponent::StartDialogueWithScript(const FString& ScriptPath)
 	}
 
 	// Broadcast start event
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: Broadcasting OnDialogueStarted"));
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Broadcasting OnDialogueStarted"));
 	OnDialogueStarted.Broadcast();
 	OnScriptStarted.Broadcast(ScriptPath);
 
@@ -132,30 +140,46 @@ void UStoryFlowComponent::StartDialogueWithScript(const FString& ScriptPath)
 	FStoryFlowNode* StartNode = ExecutionContext.GetNode(TEXT("0"));
 	if (StartNode)
 	{
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: Start node found, type='%s', processing..."), *StartNode->TypeString);
+		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Start node found, type='%s', processing..."), *StartNode->TypeString);
 		ProcessNode(StartNode);
 	}
 	else
 	{
 		ReportError(TEXT("Start node (id=0) not found in script"));
-		UE_LOG(LogTemp, Error, TEXT("StoryFlow: Available nodes in script:"));
+		UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Available nodes in script:"));
 		for (const auto& NodePair : ScriptAsset->Nodes)
 		{
-			UE_LOG(LogTemp, Error, TEXT("StoryFlow:   - id='%s' type='%s'"), *NodePair.Key, *NodePair.Value.TypeString);
+			UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow:   - id='%s' type='%s'"), *NodePair.Key, *NodePair.Value.TypeString);
 		}
 	}
 }
 
 void UStoryFlowComponent::SelectOption(const FString& OptionId)
 {
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: SelectOption('%s') called"), *OptionId);
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow:   bIsExecuting=%s bIsWaitingForInput=%s"),
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: SelectOption('%s') called"), *OptionId);
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow:   bIsExecuting=%s bIsWaitingForInput=%s"),
 		ExecutionContext.bIsExecuting ? TEXT("true") : TEXT("false"),
 		ExecutionContext.bIsWaitingForInput ? TEXT("true") : TEXT("false"));
 
 	if (!ExecutionContext.bIsExecuting || !ExecutionContext.bIsWaitingForInput)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("StoryFlow: SelectOption ignored - not in valid state"));
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: SelectOption ignored - not in valid state"));
+		return;
+	}
+
+	// Validate that OptionId exists in the current dialogue's options
+	bool bOptionFound = false;
+	for (const FStoryFlowDialogueOption& Option : ExecutionContext.CurrentDialogueState.Options)
+	{
+		if (Option.Id == OptionId)
+		{
+			bOptionFound = true;
+			break;
+		}
+	}
+	if (!bOptionFound)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: SelectOption ignored - OptionId '%s' not found in current dialogue options"), *OptionId);
 		return;
 	}
 
@@ -318,15 +342,17 @@ TArray<FString> UStoryFlowComponent::GetAvailableScripts() const
 {
 	TArray<FString> Scripts;
 
+#if WITH_EDITOR
 	// Try to load project for editor dropdown
-	UStoryFlowProjectAsset* Project = Cast<UStoryFlowProjectAsset>(
+	UStoryFlowProjectAsset* ProjectAsset = Cast<UStoryFlowProjectAsset>(
 		StaticLoadObject(UStoryFlowProjectAsset::StaticClass(), nullptr, *UStoryFlowSubsystem::DefaultProjectPath)
 	);
 
-	if (Project)
+	if (ProjectAsset)
 	{
-		Project->Scripts.GetKeys(Scripts);
+		ProjectAsset->Scripts.GetKeys(Scripts);
 	}
+#endif
 
 	return Scripts;
 }
@@ -433,308 +459,214 @@ void UStoryFlowComponent::ProcessNode(FStoryFlowNode* Node)
 {
 	if (!Node)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("StoryFlow: ProcessNode called with nullptr"));
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: ProcessNode called with nullptr"));
 		return;
 	}
 
 	if (!ExecutionContext.bIsExecuting)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("StoryFlow: ProcessNode called but not executing"));
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: ProcessNode called but not executing"));
 		return;
 	}
 
 	if (ExecutionContext.bIsPaused)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("StoryFlow: ProcessNode called but paused"));
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: ProcessNode called but paused"));
 		return;
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: ProcessNode id='%s' type='%s' (%d)"),
+	// Processing depth protection against cyclic graphs
+	if (ExecutionContext.IsAtMaxProcessingDepth())
+	{
+		ReportError(FString::Printf(TEXT("Max processing depth exceeded (%d) - possible cyclic graph"), STORYFLOW_MAX_PROCESSING_DEPTH));
+		StopDialogue();
+		return;
+	}
+	++ExecutionContext.ProcessingDepth;
+
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: ProcessNode id='%s' type='%s' (%d)"),
 		*Node->Id, *Node->TypeString, static_cast<int32>(Node->Type));
 
 	ExecutionContext.CurrentNodeId = Node->Id;
 
-	switch (Node->Type)
+	const auto& Table = GetDispatchTable();
+	if (const FNodeHandler* Handler = Table.Find(Node->Type))
 	{
-	case EStoryFlowNodeType::Start:
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: Handling Start node"));
-		HandleStart(Node);
-		break;
-
-	case EStoryFlowNodeType::End:
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: Handling End node"));
-		HandleEnd(Node);
-		break;
-
-	case EStoryFlowNodeType::Branch:
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: Handling Branch node"));
-		HandleBranch(Node);
-		break;
-
-	case EStoryFlowNodeType::Dialogue:
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: Handling Dialogue node"));
-		HandleDialogue(Node);
-		break;
-
-	case EStoryFlowNodeType::RunScript:
-		HandleRunScript(Node);
-		break;
-
-	case EStoryFlowNodeType::RunFlow:
-		HandleRunFlow(Node);
-		break;
-
-	case EStoryFlowNodeType::EntryFlow:
-		HandleEntryFlow(Node);
-		break;
-
-	// Boolean Variable Handlers
-	case EStoryFlowNodeType::GetBool:
-		HandleGetBool(Node);
-		break;
-
-	case EStoryFlowNodeType::SetBool:
-		HandleSetBool(Node);
-		break;
-
-	// Integer Variable Handlers
-	case EStoryFlowNodeType::GetInt:
-		HandleGetInt(Node);
-		break;
-
-	case EStoryFlowNodeType::SetInt:
-		HandleSetInt(Node);
-		break;
-
-	// Float Variable Handlers
-	case EStoryFlowNodeType::GetFloat:
-		HandleGetFloat(Node);
-		break;
-
-	case EStoryFlowNodeType::SetFloat:
-		HandleSetFloat(Node);
-		break;
-
-	// String Variable Handlers
-	case EStoryFlowNodeType::GetString:
-		HandleGetString(Node);
-		break;
-
-	case EStoryFlowNodeType::SetString:
-		HandleSetString(Node);
-		break;
-
-	// Enum Variable Handlers
-	case EStoryFlowNodeType::GetEnum:
-		HandleGetEnum(Node);
-		break;
-
-	case EStoryFlowNodeType::SetEnum:
-		HandleSetEnum(Node);
-		break;
-
-	case EStoryFlowNodeType::SwitchOnEnum:
-		HandleSwitchOnEnum(Node);
-		break;
-
-	// Logic nodes (no-op, just continue)
-	case EStoryFlowNodeType::AndBool:
-	case EStoryFlowNodeType::OrBool:
-	case EStoryFlowNodeType::NotBool:
-	case EStoryFlowNodeType::EqualBool:
-	case EStoryFlowNodeType::GreaterThan:
-	case EStoryFlowNodeType::GreaterThanOrEqual:
-	case EStoryFlowNodeType::LessThan:
-	case EStoryFlowNodeType::LessThanOrEqual:
-	case EStoryFlowNodeType::EqualInt:
-	case EStoryFlowNodeType::Plus:
-	case EStoryFlowNodeType::Minus:
-	case EStoryFlowNodeType::Multiply:
-	case EStoryFlowNodeType::Divide:
-	case EStoryFlowNodeType::Random:
-	case EStoryFlowNodeType::GreaterThanFloat:
-	case EStoryFlowNodeType::GreaterThanOrEqualFloat:
-	case EStoryFlowNodeType::LessThanFloat:
-	case EStoryFlowNodeType::LessThanOrEqualFloat:
-	case EStoryFlowNodeType::EqualFloat:
-	case EStoryFlowNodeType::PlusFloat:
-	case EStoryFlowNodeType::MinusFloat:
-	case EStoryFlowNodeType::MultiplyFloat:
-	case EStoryFlowNodeType::DivideFloat:
-	case EStoryFlowNodeType::RandomFloat:
-	case EStoryFlowNodeType::ConcatenateString:
-	case EStoryFlowNodeType::EqualString:
-	case EStoryFlowNodeType::ContainsString:
-	case EStoryFlowNodeType::ToUpperCase:
-	case EStoryFlowNodeType::ToLowerCase:
-	case EStoryFlowNodeType::EqualEnum:
-	case EStoryFlowNodeType::IntToBoolean:
-	case EStoryFlowNodeType::FloatToBoolean:
-	case EStoryFlowNodeType::BooleanToInt:
-	case EStoryFlowNodeType::BooleanToFloat:
-	case EStoryFlowNodeType::IntToString:
-	case EStoryFlowNodeType::FloatToString:
-	case EStoryFlowNodeType::StringToInt:
-	case EStoryFlowNodeType::StringToFloat:
-	case EStoryFlowNodeType::IntToEnum:
-	case EStoryFlowNodeType::StringToEnum:
-	case EStoryFlowNodeType::IntToFloat:
-	case EStoryFlowNodeType::FloatToInt:
-	case EStoryFlowNodeType::EnumToString:
-	case EStoryFlowNodeType::LengthString:
-		HandleLogicNode(Node);
-		break;
-
-	// Array Set Handlers
-	case EStoryFlowNodeType::SetBoolArray:
-	case EStoryFlowNodeType::SetIntArray:
-	case EStoryFlowNodeType::SetFloatArray:
-	case EStoryFlowNodeType::SetStringArray:
-	case EStoryFlowNodeType::SetImageArray:
-	case EStoryFlowNodeType::SetCharacterArray:
-	case EStoryFlowNodeType::SetAudioArray:
-	case EStoryFlowNodeType::SetBoolArrayElement:
-	case EStoryFlowNodeType::SetIntArrayElement:
-	case EStoryFlowNodeType::SetFloatArrayElement:
-	case EStoryFlowNodeType::SetStringArrayElement:
-	case EStoryFlowNodeType::SetImageArrayElement:
-	case EStoryFlowNodeType::SetCharacterArrayElement:
-	case EStoryFlowNodeType::SetAudioArrayElement:
-		HandleArraySet(Node);
-		break;
-
-	// Array Modify Handlers
-	case EStoryFlowNodeType::AddToBoolArray:
-	case EStoryFlowNodeType::AddToIntArray:
-	case EStoryFlowNodeType::AddToFloatArray:
-	case EStoryFlowNodeType::AddToStringArray:
-	case EStoryFlowNodeType::AddToImageArray:
-	case EStoryFlowNodeType::AddToCharacterArray:
-	case EStoryFlowNodeType::AddToAudioArray:
-	case EStoryFlowNodeType::RemoveFromBoolArray:
-	case EStoryFlowNodeType::RemoveFromIntArray:
-	case EStoryFlowNodeType::RemoveFromFloatArray:
-	case EStoryFlowNodeType::RemoveFromStringArray:
-	case EStoryFlowNodeType::RemoveFromImageArray:
-	case EStoryFlowNodeType::RemoveFromCharacterArray:
-	case EStoryFlowNodeType::RemoveFromAudioArray:
-	case EStoryFlowNodeType::ClearBoolArray:
-	case EStoryFlowNodeType::ClearIntArray:
-	case EStoryFlowNodeType::ClearFloatArray:
-	case EStoryFlowNodeType::ClearStringArray:
-	case EStoryFlowNodeType::ClearImageArray:
-	case EStoryFlowNodeType::ClearCharacterArray:
-	case EStoryFlowNodeType::ClearAudioArray:
-		HandleArrayModify(Node);
-		break;
-
-	// Array Get Handlers (data nodes, just continue)
-	case EStoryFlowNodeType::GetBoolArray:
-	case EStoryFlowNodeType::GetIntArray:
-	case EStoryFlowNodeType::GetFloatArray:
-	case EStoryFlowNodeType::GetStringArray:
-	case EStoryFlowNodeType::GetImageArray:
-	case EStoryFlowNodeType::GetCharacterArray:
-	case EStoryFlowNodeType::GetAudioArray:
-	case EStoryFlowNodeType::GetBoolArrayElement:
-	case EStoryFlowNodeType::GetIntArrayElement:
-	case EStoryFlowNodeType::GetFloatArrayElement:
-	case EStoryFlowNodeType::GetStringArrayElement:
-	case EStoryFlowNodeType::GetImageArrayElement:
-	case EStoryFlowNodeType::GetCharacterArrayElement:
-	case EStoryFlowNodeType::GetAudioArrayElement:
-	case EStoryFlowNodeType::GetRandomBoolArrayElement:
-	case EStoryFlowNodeType::GetRandomIntArrayElement:
-	case EStoryFlowNodeType::GetRandomFloatArrayElement:
-	case EStoryFlowNodeType::GetRandomStringArrayElement:
-	case EStoryFlowNodeType::GetRandomImageArrayElement:
-	case EStoryFlowNodeType::GetRandomCharacterArrayElement:
-	case EStoryFlowNodeType::GetRandomAudioArrayElement:
-	case EStoryFlowNodeType::ArrayLengthBool:
-	case EStoryFlowNodeType::ArrayLengthInt:
-	case EStoryFlowNodeType::ArrayLengthFloat:
-	case EStoryFlowNodeType::ArrayLengthString:
-	case EStoryFlowNodeType::ArrayLengthImage:
-	case EStoryFlowNodeType::ArrayLengthCharacter:
-	case EStoryFlowNodeType::ArrayLengthAudio:
-	case EStoryFlowNodeType::ArrayContainsBool:
-	case EStoryFlowNodeType::ArrayContainsInt:
-	case EStoryFlowNodeType::ArrayContainsFloat:
-	case EStoryFlowNodeType::ArrayContainsString:
-	case EStoryFlowNodeType::ArrayContainsImage:
-	case EStoryFlowNodeType::ArrayContainsCharacter:
-	case EStoryFlowNodeType::ArrayContainsAudio:
-	case EStoryFlowNodeType::FindInBoolArray:
-	case EStoryFlowNodeType::FindInIntArray:
-	case EStoryFlowNodeType::FindInFloatArray:
-	case EStoryFlowNodeType::FindInStringArray:
-	case EStoryFlowNodeType::FindInImageArray:
-	case EStoryFlowNodeType::FindInCharacterArray:
-	case EStoryFlowNodeType::FindInAudioArray:
-		HandleLogicNode(Node);
-		break;
-
-	// Loop Handlers
-	case EStoryFlowNodeType::ForEachBoolLoop:
-	case EStoryFlowNodeType::ForEachIntLoop:
-	case EStoryFlowNodeType::ForEachFloatLoop:
-	case EStoryFlowNodeType::ForEachStringLoop:
-	case EStoryFlowNodeType::ForEachImageLoop:
-	case EStoryFlowNodeType::ForEachCharacterLoop:
-	case EStoryFlowNodeType::ForEachAudioLoop:
-		HandleForEachLoop(Node);
-		break;
-
-	// Media Handlers
-	case EStoryFlowNodeType::GetImage:
-	case EStoryFlowNodeType::GetAudio:
-	case EStoryFlowNodeType::GetCharacter:
-		HandleLogicNode(Node);
-		break;
-
-	case EStoryFlowNodeType::SetImage:
-		HandleSetImage(Node);
-		break;
-
-	case EStoryFlowNodeType::SetBackgroundImage:
-		HandleSetBackgroundImage(Node);
-		break;
-
-	case EStoryFlowNodeType::SetAudio:
-		HandleSetAudio(Node);
-		break;
-
-	case EStoryFlowNodeType::PlayAudio:
-		HandlePlayAudio(Node);
-		break;
-
-	case EStoryFlowNodeType::SetCharacter:
-		HandleSetCharacter(Node);
-		break;
-
-	// Character Variable Handlers
-	case EStoryFlowNodeType::GetCharacterVar:
-		HandleGetCharacterVar(Node);
-		break;
-
-	case EStoryFlowNodeType::SetCharacterVar:
-		HandleSetCharacterVar(Node);
-		break;
-
-	default:
-		ReportError(FString::Printf(TEXT("Unknown node type: %s"), *Node->TypeString));
-		break;
+		(this->**Handler)(Node);
 	}
+	else
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Unhandled node type: %s (%d)"), *Node->TypeString, static_cast<int32>(Node->Type));
+		ProcessNextNode(FString::Printf(TEXT("source-%s-"), *Node->Id));
+	}
+
+	--ExecutionContext.ProcessingDepth;
+}
+
+const TMap<EStoryFlowNodeType, UStoryFlowComponent::FNodeHandler>& UStoryFlowComponent::GetDispatchTable()
+{
+	static const TMap<EStoryFlowNodeType, FNodeHandler> Table = []()
+	{
+		TMap<EStoryFlowNodeType, FNodeHandler> T;
+
+		// Control flow
+		T.Add(EStoryFlowNodeType::Start,      &UStoryFlowComponent::HandleStart);
+		T.Add(EStoryFlowNodeType::End,        &UStoryFlowComponent::HandleEnd);
+		T.Add(EStoryFlowNodeType::Branch,     &UStoryFlowComponent::HandleBranch);
+		T.Add(EStoryFlowNodeType::Dialogue,   &UStoryFlowComponent::HandleDialogue);
+		T.Add(EStoryFlowNodeType::RunScript,  &UStoryFlowComponent::HandleRunScript);
+		T.Add(EStoryFlowNodeType::RunFlow,    &UStoryFlowComponent::HandleRunFlow);
+		T.Add(EStoryFlowNodeType::EntryFlow,  &UStoryFlowComponent::HandleEntryFlow);
+
+		// Variable get/set
+		T.Add(EStoryFlowNodeType::GetBool,    &UStoryFlowComponent::HandleGetBool);
+		T.Add(EStoryFlowNodeType::SetBool,    &UStoryFlowComponent::HandleSetBool);
+		T.Add(EStoryFlowNodeType::GetInt,     &UStoryFlowComponent::HandleGetInt);
+		T.Add(EStoryFlowNodeType::SetInt,     &UStoryFlowComponent::HandleSetInt);
+		T.Add(EStoryFlowNodeType::GetFloat,   &UStoryFlowComponent::HandleGetFloat);
+		T.Add(EStoryFlowNodeType::SetFloat,   &UStoryFlowComponent::HandleSetFloat);
+		T.Add(EStoryFlowNodeType::GetString,  &UStoryFlowComponent::HandleGetString);
+		T.Add(EStoryFlowNodeType::SetString,  &UStoryFlowComponent::HandleSetString);
+		T.Add(EStoryFlowNodeType::GetEnum,    &UStoryFlowComponent::HandleGetEnum);
+		T.Add(EStoryFlowNodeType::SetEnum,    &UStoryFlowComponent::HandleSetEnum);
+		T.Add(EStoryFlowNodeType::SwitchOnEnum, &UStoryFlowComponent::HandleSwitchOnEnum);
+
+		// Logic nodes (no-op, evaluated lazily)
+		const FNodeHandler LogicHandler = &UStoryFlowComponent::HandleLogicNode;
+		for (EStoryFlowNodeType Type : {
+			EStoryFlowNodeType::AndBool, EStoryFlowNodeType::OrBool,
+			EStoryFlowNodeType::NotBool, EStoryFlowNodeType::EqualBool,
+			EStoryFlowNodeType::GreaterThan, EStoryFlowNodeType::GreaterThanOrEqual,
+			EStoryFlowNodeType::LessThan, EStoryFlowNodeType::LessThanOrEqual,
+			EStoryFlowNodeType::EqualInt,
+			EStoryFlowNodeType::Plus, EStoryFlowNodeType::Minus,
+			EStoryFlowNodeType::Multiply, EStoryFlowNodeType::Divide,
+			EStoryFlowNodeType::Random,
+			EStoryFlowNodeType::GreaterThanFloat, EStoryFlowNodeType::GreaterThanOrEqualFloat,
+			EStoryFlowNodeType::LessThanFloat, EStoryFlowNodeType::LessThanOrEqualFloat,
+			EStoryFlowNodeType::EqualFloat,
+			EStoryFlowNodeType::PlusFloat, EStoryFlowNodeType::MinusFloat,
+			EStoryFlowNodeType::MultiplyFloat, EStoryFlowNodeType::DivideFloat,
+			EStoryFlowNodeType::RandomFloat,
+			EStoryFlowNodeType::ConcatenateString, EStoryFlowNodeType::EqualString,
+			EStoryFlowNodeType::ContainsString, EStoryFlowNodeType::ToUpperCase,
+			EStoryFlowNodeType::ToLowerCase, EStoryFlowNodeType::EqualEnum,
+			EStoryFlowNodeType::IntToBoolean, EStoryFlowNodeType::FloatToBoolean,
+			EStoryFlowNodeType::BooleanToInt, EStoryFlowNodeType::BooleanToFloat,
+			EStoryFlowNodeType::IntToString, EStoryFlowNodeType::FloatToString,
+			EStoryFlowNodeType::StringToInt, EStoryFlowNodeType::StringToFloat,
+			EStoryFlowNodeType::IntToEnum, EStoryFlowNodeType::StringToEnum,
+			EStoryFlowNodeType::IntToFloat, EStoryFlowNodeType::FloatToInt,
+			EStoryFlowNodeType::EnumToString, EStoryFlowNodeType::LengthString })
+		{
+			T.Add(Type, LogicHandler);
+		}
+
+		// Array set handlers
+		const FNodeHandler ArraySetHandler = &UStoryFlowComponent::HandleArraySet;
+		for (EStoryFlowNodeType Type : {
+			EStoryFlowNodeType::SetBoolArray, EStoryFlowNodeType::SetIntArray,
+			EStoryFlowNodeType::SetFloatArray, EStoryFlowNodeType::SetStringArray,
+			EStoryFlowNodeType::SetImageArray, EStoryFlowNodeType::SetCharacterArray,
+			EStoryFlowNodeType::SetAudioArray,
+			EStoryFlowNodeType::SetBoolArrayElement, EStoryFlowNodeType::SetIntArrayElement,
+			EStoryFlowNodeType::SetFloatArrayElement, EStoryFlowNodeType::SetStringArrayElement,
+			EStoryFlowNodeType::SetImageArrayElement, EStoryFlowNodeType::SetCharacterArrayElement,
+			EStoryFlowNodeType::SetAudioArrayElement })
+		{
+			T.Add(Type, ArraySetHandler);
+		}
+
+		// Array modify handlers
+		const FNodeHandler ArrayModifyHandler = &UStoryFlowComponent::HandleArrayModify;
+		for (EStoryFlowNodeType Type : {
+			EStoryFlowNodeType::AddToBoolArray, EStoryFlowNodeType::AddToIntArray,
+			EStoryFlowNodeType::AddToFloatArray, EStoryFlowNodeType::AddToStringArray,
+			EStoryFlowNodeType::AddToImageArray, EStoryFlowNodeType::AddToCharacterArray,
+			EStoryFlowNodeType::AddToAudioArray,
+			EStoryFlowNodeType::RemoveFromBoolArray, EStoryFlowNodeType::RemoveFromIntArray,
+			EStoryFlowNodeType::RemoveFromFloatArray, EStoryFlowNodeType::RemoveFromStringArray,
+			EStoryFlowNodeType::RemoveFromImageArray, EStoryFlowNodeType::RemoveFromCharacterArray,
+			EStoryFlowNodeType::RemoveFromAudioArray,
+			EStoryFlowNodeType::ClearBoolArray, EStoryFlowNodeType::ClearIntArray,
+			EStoryFlowNodeType::ClearFloatArray, EStoryFlowNodeType::ClearStringArray,
+			EStoryFlowNodeType::ClearImageArray, EStoryFlowNodeType::ClearCharacterArray,
+			EStoryFlowNodeType::ClearAudioArray })
+		{
+			T.Add(Type, ArrayModifyHandler);
+		}
+
+		// Array get handlers (data nodes, just continue)
+		for (EStoryFlowNodeType Type : {
+			EStoryFlowNodeType::GetBoolArray, EStoryFlowNodeType::GetIntArray,
+			EStoryFlowNodeType::GetFloatArray, EStoryFlowNodeType::GetStringArray,
+			EStoryFlowNodeType::GetImageArray, EStoryFlowNodeType::GetCharacterArray,
+			EStoryFlowNodeType::GetAudioArray,
+			EStoryFlowNodeType::GetBoolArrayElement, EStoryFlowNodeType::GetIntArrayElement,
+			EStoryFlowNodeType::GetFloatArrayElement, EStoryFlowNodeType::GetStringArrayElement,
+			EStoryFlowNodeType::GetImageArrayElement, EStoryFlowNodeType::GetCharacterArrayElement,
+			EStoryFlowNodeType::GetAudioArrayElement,
+			EStoryFlowNodeType::GetRandomBoolArrayElement, EStoryFlowNodeType::GetRandomIntArrayElement,
+			EStoryFlowNodeType::GetRandomFloatArrayElement, EStoryFlowNodeType::GetRandomStringArrayElement,
+			EStoryFlowNodeType::GetRandomImageArrayElement, EStoryFlowNodeType::GetRandomCharacterArrayElement,
+			EStoryFlowNodeType::GetRandomAudioArrayElement,
+			EStoryFlowNodeType::ArrayLengthBool, EStoryFlowNodeType::ArrayLengthInt,
+			EStoryFlowNodeType::ArrayLengthFloat, EStoryFlowNodeType::ArrayLengthString,
+			EStoryFlowNodeType::ArrayLengthImage, EStoryFlowNodeType::ArrayLengthCharacter,
+			EStoryFlowNodeType::ArrayLengthAudio,
+			EStoryFlowNodeType::ArrayContainsBool, EStoryFlowNodeType::ArrayContainsInt,
+			EStoryFlowNodeType::ArrayContainsFloat, EStoryFlowNodeType::ArrayContainsString,
+			EStoryFlowNodeType::ArrayContainsImage, EStoryFlowNodeType::ArrayContainsCharacter,
+			EStoryFlowNodeType::ArrayContainsAudio,
+			EStoryFlowNodeType::FindInBoolArray, EStoryFlowNodeType::FindInIntArray,
+			EStoryFlowNodeType::FindInFloatArray, EStoryFlowNodeType::FindInStringArray,
+			EStoryFlowNodeType::FindInImageArray, EStoryFlowNodeType::FindInCharacterArray,
+			EStoryFlowNodeType::FindInAudioArray })
+		{
+			T.Add(Type, LogicHandler);
+		}
+
+		// Loop handlers
+		const FNodeHandler ForEachHandler = &UStoryFlowComponent::HandleForEachLoop;
+		for (EStoryFlowNodeType Type : {
+			EStoryFlowNodeType::ForEachBoolLoop, EStoryFlowNodeType::ForEachIntLoop,
+			EStoryFlowNodeType::ForEachFloatLoop, EStoryFlowNodeType::ForEachStringLoop,
+			EStoryFlowNodeType::ForEachImageLoop, EStoryFlowNodeType::ForEachCharacterLoop,
+			EStoryFlowNodeType::ForEachAudioLoop })
+		{
+			T.Add(Type, ForEachHandler);
+		}
+
+		// Media get handlers (data nodes)
+		T.Add(EStoryFlowNodeType::GetImage,     LogicHandler);
+		T.Add(EStoryFlowNodeType::GetAudio,     LogicHandler);
+		T.Add(EStoryFlowNodeType::GetCharacter,  LogicHandler);
+
+		// Media set handlers
+		T.Add(EStoryFlowNodeType::SetImage,           &UStoryFlowComponent::HandleSetImage);
+		T.Add(EStoryFlowNodeType::SetBackgroundImage,  &UStoryFlowComponent::HandleSetBackgroundImage);
+		T.Add(EStoryFlowNodeType::SetAudio,            &UStoryFlowComponent::HandleSetAudio);
+		T.Add(EStoryFlowNodeType::PlayAudio,           &UStoryFlowComponent::HandlePlayAudio);
+		T.Add(EStoryFlowNodeType::SetCharacter,        &UStoryFlowComponent::HandleSetCharacter);
+
+		// Character variable handlers
+		T.Add(EStoryFlowNodeType::GetCharacterVar,  &UStoryFlowComponent::HandleGetCharacterVar);
+		T.Add(EStoryFlowNodeType::SetCharacterVar,  &UStoryFlowComponent::HandleSetCharacterVar);
+
+		return T;
+	}();
+
+	return Table;
 }
 
 void UStoryFlowComponent::ProcessNextNode(const FString& SourceHandle)
 {
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: ProcessNextNode looking for edge with sourceHandle='%s'"), *SourceHandle);
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: ProcessNextNode looking for edge with sourceHandle='%s'"), *SourceHandle);
 
 	const FStoryFlowConnection* Edge = ExecutionContext.FindEdgeBySourceHandle(SourceHandle);
 	if (!Edge)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("StoryFlow: No edge found for sourceHandle='%s' - execution stopping"), *SourceHandle);
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: No edge found for sourceHandle='%s' - execution stopping"), *SourceHandle);
 
 		// Debug: List all available connections
 		if (UStoryFlowScriptAsset* DebugScript = ExecutionContext.CurrentScript.Get())
@@ -743,20 +675,20 @@ void UStoryFlowComponent::ProcessNextNode(const FString& SourceHandle)
 			FString CurrentNodeId = ExecutionContext.CurrentNodeId;
 			if (FStoryFlowNode* CurrentNode = DebugScript->Nodes.Find(CurrentNodeId))
 			{
-				UE_LOG(LogTemp, Warning, TEXT("StoryFlow: Current node '%s' is type '%s'"), *CurrentNodeId, *CurrentNode->TypeString);
+				UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Current node '%s' is type '%s'"), *CurrentNodeId, *CurrentNode->TypeString);
 			}
 
-			UE_LOG(LogTemp, Warning, TEXT("StoryFlow: Available connections in script:"));
+			UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Available connections in script:"));
 			for (const FStoryFlowConnection& Conn : DebugScript->Connections)
 			{
-				UE_LOG(LogTemp, Warning, TEXT("StoryFlow:   source='%s' sourceHandle='%s' -> target='%s'"),
+				UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow:   source='%s' sourceHandle='%s' -> target='%s'"),
 					*Conn.Source, *Conn.SourceHandle, *Conn.Target);
 			}
 		}
 		return;
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: Found edge: source='%s' -> target='%s'"), *Edge->Source, *Edge->Target);
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Found edge: source='%s' -> target='%s'"), *Edge->Source, *Edge->Target);
 
 	FStoryFlowNode* TargetNode = ExecutionContext.GetNode(Edge->Target);
 	if (!TargetNode)
@@ -765,7 +697,7 @@ void UStoryFlowComponent::ProcessNextNode(const FString& SourceHandle)
 		return;
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: Continuing to node '%s' (type='%s')"), *TargetNode->Id, *TargetNode->TypeString);
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Continuing to node '%s' (type='%s')"), *TargetNode->Id, *TargetNode->TypeString);
 
 	// Mark that we're entering via edge (fresh entry) - dialogue uses this to know whether to play audio
 	if (TargetNode->Type == EStoryFlowNodeType::Dialogue)
@@ -784,7 +716,7 @@ void UStoryFlowComponent::HandleStart(FStoryFlowNode* Node)
 {
 	// Start node just continues to next - handle format is "source-{nodeId}-" (empty suffix)
 	FString Handle = FString::Printf(TEXT("source-%s-"), *Node->Id);
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: HandleStart - Continuing to next via handle '%s'"), *Handle);
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: HandleStart - Continuing to next via handle '%s'"), *Handle);
 	ProcessNextNode(Handle);
 }
 
@@ -796,6 +728,9 @@ void UStoryFlowComponent::HandleEnd(FStoryFlowNode* Node)
 	{
 		ExecutionContext.FlowCallStack.Pop();
 	}
+
+	// Clean up any active loop state for the ending script
+	ExecutionContext.LoopStack.Empty();
 
 	// Check if we're in a nested script (runScript call)
 	if (ExecutionContext.CallStack.Num() > 0)
@@ -860,7 +795,7 @@ void UStoryFlowComponent::HandleBranch(FStoryFlowNode* Node)
 	{
 		// No edge for taken branch - just stop execution (matches HTML runtime behavior)
 		// Unlike Set* nodes, branches do NOT return to dialogue to re-render
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: Branch '%s' took %s path but no edge exists, stopping"),
+		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Branch '%s' took %s path but no edge exists, stopping"),
 			*Node->Id, Condition ? TEXT("true") : TEXT("false"));
 
 		// Check if inside forEach loop - if so, continue the loop
@@ -882,7 +817,7 @@ void UStoryFlowComponent::HandleBranch(FStoryFlowNode* Node)
 
 void UStoryFlowComponent::HandleDialogue(FStoryFlowNode* Node)
 {
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: HandleDialogue - Building state for node '%s'"), *Node->Id);
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: HandleDialogue - Building state for node '%s'"), *Node->Id);
 
 	// Check if this is a fresh entry (via edge) or returning from a Set* node
 	// When returning from Set*, we only update text/options but don't re-trigger audio
@@ -900,21 +835,21 @@ void UStoryFlowComponent::HandleDialogue(FStoryFlowNode* Node)
 	ExecutionContext.CurrentDialogueState = BuildDialogueState(Node);
 	ExecutionContext.bIsWaitingForInput = true;
 
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: HandleDialogue - State built (FreshEntry=%s):"),
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: HandleDialogue - State built (FreshEntry=%s):"),
 		bIsFreshEntry ? TEXT("true") : TEXT("false"));
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow:   NodeId='%s'"), *ExecutionContext.CurrentDialogueState.NodeId);
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow:   Title='%s'"), *ExecutionContext.CurrentDialogueState.Title);
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow:   Text='%s'"), *ExecutionContext.CurrentDialogueState.Text);
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow:   Options=%d"), ExecutionContext.CurrentDialogueState.Options.Num());
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow:   bIsValid=%s"), ExecutionContext.CurrentDialogueState.bIsValid ? TEXT("true") : TEXT("false"));
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow:   HasImage=%s"), ExecutionContext.CurrentDialogueState.Image ? TEXT("true") : TEXT("false"));
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow:   HasAudio=%s"), ExecutionContext.CurrentDialogueState.Audio ? TEXT("true") : TEXT("false"));
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow:   Character='%s'"), *ExecutionContext.CurrentDialogueState.Character.Name);
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow:   NodeId='%s'"), *ExecutionContext.CurrentDialogueState.NodeId);
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow:   Title='%s'"), *ExecutionContext.CurrentDialogueState.Title);
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow:   Text='%s'"), *ExecutionContext.CurrentDialogueState.Text);
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow:   Options=%d"), ExecutionContext.CurrentDialogueState.Options.Num());
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow:   bIsValid=%s"), ExecutionContext.CurrentDialogueState.bIsValid ? TEXT("true") : TEXT("false"));
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow:   HasImage=%s"), ExecutionContext.CurrentDialogueState.Image ? TEXT("true") : TEXT("false"));
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow:   HasAudio=%s"), ExecutionContext.CurrentDialogueState.Audio ? TEXT("true") : TEXT("false"));
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow:   Character='%s'"), *ExecutionContext.CurrentDialogueState.Character.Name);
 
 	for (int32 i = 0; i < ExecutionContext.CurrentDialogueState.Options.Num(); i++)
 	{
 		const FStoryFlowDialogueOption& Opt = ExecutionContext.CurrentDialogueState.Options[i];
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow:   Option[%d]: id='%s' text='%s'"), i, *Opt.Id, *Opt.Text);
+		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow:   Option[%d]: id='%s' text='%s'"), i, *Opt.Id, *Opt.Text);
 	}
 
 	// Handle dialogue audio only on fresh entry (not when returning from Set* node)
@@ -923,21 +858,21 @@ void UStoryFlowComponent::HandleDialogue(FStoryFlowNode* Node)
 		if (ExecutionContext.CurrentDialogueState.Audio)
 		{
 			// Stop previous audio and play new one
-			UE_LOG(LogTemp, Log, TEXT("StoryFlow: Playing dialogue audio (fresh entry, loop=%s)"),
+			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Playing dialogue audio (fresh entry, loop=%s)"),
 				Node->Data.bAudioLoop ? TEXT("true") : TEXT("false"));
 			PlayDialogueAudio(ExecutionContext.CurrentDialogueState.Audio, Node->Data.bAudioLoop);
 		}
 		else if (Node->Data.bAudioReset)
 		{
 			// No audio on this dialogue but audioReset is true - stop previous audio
-			UE_LOG(LogTemp, Log, TEXT("StoryFlow: Stopping audio (audioReset=true, no new audio)"));
+			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Stopping audio (audioReset=true, no new audio)"));
 			StopDialogueAudio();
 		}
 		// If no audio and audioReset=false, previous audio continues playing
 	}
 
 	// Broadcast update
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: Broadcasting OnDialogueUpdated"));
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Broadcasting OnDialogueUpdated"));
 	OnDialogueUpdated.Broadcast(ExecutionContext.CurrentDialogueState);
 }
 
@@ -1062,7 +997,7 @@ void UStoryFlowComponent::HandleSetBool(FStoryFlowNode* Node)
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 	NotifyVariableChanged(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 
-	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-"), *Node->Id));
+	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
 }
 
 void UStoryFlowComponent::HandleGetInt(FStoryFlowNode* Node)
@@ -1083,7 +1018,7 @@ void UStoryFlowComponent::HandleSetInt(FStoryFlowNode* Node)
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 	NotifyVariableChanged(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 
-	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-"), *Node->Id));
+	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
 }
 
 void UStoryFlowComponent::HandleGetFloat(FStoryFlowNode* Node)
@@ -1104,7 +1039,7 @@ void UStoryFlowComponent::HandleSetFloat(FStoryFlowNode* Node)
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 	NotifyVariableChanged(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 
-	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-"), *Node->Id));
+	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
 }
 
 void UStoryFlowComponent::HandleGetString(FStoryFlowNode* Node)
@@ -1125,7 +1060,7 @@ void UStoryFlowComponent::HandleSetString(FStoryFlowNode* Node)
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 	NotifyVariableChanged(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 
-	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-"), *Node->Id));
+	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
 }
 
 void UStoryFlowComponent::HandleGetEnum(FStoryFlowNode* Node)
@@ -1146,7 +1081,7 @@ void UStoryFlowComponent::HandleSetEnum(FStoryFlowNode* Node)
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 	NotifyVariableChanged(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 
-	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-"), *Node->Id));
+	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
 }
 
 void UStoryFlowComponent::HandleLogicNode(FStoryFlowNode* Node)
@@ -1158,21 +1093,185 @@ void UStoryFlowComponent::HandleLogicNode(FStoryFlowNode* Node)
 
 void UStoryFlowComponent::HandleArraySet(FStoryFlowNode* Node)
 {
-	// Array set operations
-	// Implementation depends on specific node type
-	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-"), *Node->Id));
+	// Set array variable or set element at index
+	FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
+	if (!Var)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: HandleArraySet - variable '%s' not found"), *Node->Data.Variable);
+		HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
+		return;
+	}
+
+	// Determine if this is a SetArray (whole array) or SetArrayElement (index)
+	bool bIsSetElement = false;
+	switch (Node->Type)
+	{
+	case EStoryFlowNodeType::SetBoolArrayElement:
+	case EStoryFlowNodeType::SetIntArrayElement:
+	case EStoryFlowNodeType::SetFloatArrayElement:
+	case EStoryFlowNodeType::SetStringArrayElement:
+	case EStoryFlowNodeType::SetImageArrayElement:
+	case EStoryFlowNodeType::SetCharacterArrayElement:
+	case EStoryFlowNodeType::SetAudioArrayElement:
+		bIsSetElement = true;
+		break;
+	default:
+		break;
+	}
+
+	if (bIsSetElement && Evaluator)
+	{
+		// Set element at index
+		int32 Index = Evaluator->EvaluateIntegerInput(Node, TEXT("integer"), Node->Data.Value.GetInt(0));
+		TArray<FStoryFlowVariant>& Arr = Var->Value.GetArrayMutable();
+		if (Index >= 0 && Index < Arr.Num())
+		{
+			// Evaluate the value to set based on the element type
+			switch (Node->Type)
+			{
+			case EStoryFlowNodeType::SetBoolArrayElement:
+				Arr[Index].SetBool(Evaluator->EvaluateBooleanInput(Node, TEXT("boolean"), Node->Data.Value.GetBool(false)));
+				break;
+			case EStoryFlowNodeType::SetIntArrayElement:
+				Arr[Index].SetInt(Evaluator->EvaluateIntegerInput(Node, TEXT("integer-value"), Node->Data.Value.GetInt(0)));
+				break;
+			case EStoryFlowNodeType::SetFloatArrayElement:
+				Arr[Index].SetFloat(Evaluator->EvaluateFloatInput(Node, TEXT("float"), Node->Data.Value.GetFloat(0.0f)));
+				break;
+			default:
+				Arr[Index].SetString(Evaluator->EvaluateStringInput(Node, TEXT("string"), Node->Data.Value.GetString()));
+				break;
+			}
+		}
+	}
+	else if (!bIsSetElement && Evaluator)
+	{
+		// Set the whole array variable from connected array input
+		TArray<FStoryFlowVariant> NewArray;
+		switch (Node->Type)
+		{
+		case EStoryFlowNodeType::SetBoolArray:
+			NewArray = Evaluator->EvaluateBoolArrayInput(Node, TEXT("boolean-array"));
+			break;
+		case EStoryFlowNodeType::SetIntArray:
+			NewArray = Evaluator->EvaluateIntArrayInput(Node, TEXT("integer-array"));
+			break;
+		case EStoryFlowNodeType::SetFloatArray:
+			NewArray = Evaluator->EvaluateFloatArrayInput(Node, TEXT("float-array"));
+			break;
+		case EStoryFlowNodeType::SetStringArray:
+			NewArray = Evaluator->EvaluateStringArrayInput(Node, TEXT("string-array"));
+			break;
+		case EStoryFlowNodeType::SetImageArray:
+			NewArray = Evaluator->EvaluateImageArrayInput(Node, TEXT("image-array"));
+			break;
+		case EStoryFlowNodeType::SetCharacterArray:
+			NewArray = Evaluator->EvaluateCharacterArrayInput(Node, TEXT("character-array"));
+			break;
+		case EStoryFlowNodeType::SetAudioArray:
+			NewArray = Evaluator->EvaluateAudioArrayInput(Node, TEXT("audio-array"));
+			break;
+		default:
+			break;
+		}
+		Var->Value.SetArray(NewArray);
+	}
+
+	NotifyVariableChanged(Node->Data.Variable, Var->Value, Node->Data.bIsGlobal);
+	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
 }
 
 void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 {
 	// Array modification operations (add, remove, clear)
-	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-"), *Node->Id));
+	FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
+	if (!Var)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: HandleArrayModify - variable '%s' not found"), *Node->Data.Variable);
+		HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
+		return;
+	}
+
+	TArray<FStoryFlowVariant>& Arr = Var->Value.GetArrayMutable();
+
+	// Determine operation type from node type name
+	switch (Node->Type)
+	{
+	// Add operations
+	case EStoryFlowNodeType::AddToBoolArray:
+	{
+		FStoryFlowVariant Elem;
+		Elem.SetBool(Evaluator ? Evaluator->EvaluateBooleanInput(Node, TEXT("boolean"), Node->Data.Value.GetBool(false)) : Node->Data.Value.GetBool(false));
+		Arr.Add(Elem);
+		break;
+	}
+	case EStoryFlowNodeType::AddToIntArray:
+	{
+		FStoryFlowVariant Elem;
+		Elem.SetInt(Evaluator ? Evaluator->EvaluateIntegerInput(Node, TEXT("integer"), Node->Data.Value.GetInt(0)) : Node->Data.Value.GetInt(0));
+		Arr.Add(Elem);
+		break;
+	}
+	case EStoryFlowNodeType::AddToFloatArray:
+	{
+		FStoryFlowVariant Elem;
+		Elem.SetFloat(Evaluator ? Evaluator->EvaluateFloatInput(Node, TEXT("float"), Node->Data.Value.GetFloat(0.0f)) : Node->Data.Value.GetFloat(0.0f));
+		Arr.Add(Elem);
+		break;
+	}
+	case EStoryFlowNodeType::AddToStringArray:
+	case EStoryFlowNodeType::AddToImageArray:
+	case EStoryFlowNodeType::AddToCharacterArray:
+	case EStoryFlowNodeType::AddToAudioArray:
+	{
+		FStoryFlowVariant Elem;
+		Elem.SetString(Evaluator ? Evaluator->EvaluateStringInput(Node, TEXT("string"), Node->Data.Value.GetString()) : Node->Data.Value.GetString());
+		Arr.Add(Elem);
+		break;
+	}
+
+	// Remove operations
+	case EStoryFlowNodeType::RemoveFromBoolArray:
+	case EStoryFlowNodeType::RemoveFromIntArray:
+	case EStoryFlowNodeType::RemoveFromFloatArray:
+	case EStoryFlowNodeType::RemoveFromStringArray:
+	case EStoryFlowNodeType::RemoveFromImageArray:
+	case EStoryFlowNodeType::RemoveFromCharacterArray:
+	case EStoryFlowNodeType::RemoveFromAudioArray:
+	{
+		int32 Index = Evaluator ? Evaluator->EvaluateIntegerInput(Node, TEXT("integer"), Node->Data.Value.GetInt(0)) : Node->Data.Value.GetInt(0);
+		if (Index >= 0 && Index < Arr.Num())
+		{
+			Arr.RemoveAt(Index);
+		}
+		break;
+	}
+
+	// Clear operations
+	case EStoryFlowNodeType::ClearBoolArray:
+	case EStoryFlowNodeType::ClearIntArray:
+	case EStoryFlowNodeType::ClearFloatArray:
+	case EStoryFlowNodeType::ClearStringArray:
+	case EStoryFlowNodeType::ClearImageArray:
+	case EStoryFlowNodeType::ClearCharacterArray:
+	case EStoryFlowNodeType::ClearAudioArray:
+		Arr.Empty();
+		break;
+
+	default:
+		break;
+	}
+
+	NotifyVariableChanged(Node->Data.Variable, Var->Value, Node->Data.bIsGlobal);
+	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
 }
 
 void UStoryFlowComponent::HandleForEachLoop(FStoryFlowNode* Node)
 {
+	FNodeRuntimeState& NodeState = ExecutionContext.GetNodeState(Node->Id);
+
 	// Initialize loop on first entry
-	if (!Node->Data.bLoopInitialized)
+	if (!NodeState.bLoopInitialized)
 	{
 		// Get array from input
 		TArray<FStoryFlowVariant> Array;
@@ -1206,9 +1305,9 @@ void UStoryFlowComponent::HandleForEachLoop(FStoryFlowNode* Node)
 			}
 		}
 
-		Node->Data.LoopArray = Array;
-		Node->Data.LoopIndex = 0;
-		Node->Data.bLoopInitialized = true;
+		NodeState.LoopArray = Array;
+		NodeState.LoopIndex = 0;
+		NodeState.bLoopInitialized = true;
 
 		// Push loop context
 		FStoryFlowLoopContext LoopContext;
@@ -1218,11 +1317,11 @@ void UStoryFlowComponent::HandleForEachLoop(FStoryFlowNode* Node)
 		ExecutionContext.LoopStack.Push(LoopContext);
 	}
 
-	if (Node->Data.LoopIndex < Node->Data.LoopArray.Num())
+	if (NodeState.LoopIndex < NodeState.LoopArray.Num())
 	{
 		// Set current element as cached output
-		Node->Data.CachedOutput = Node->Data.LoopArray[Node->Data.LoopIndex];
-		Node->Data.bHasCachedOutput = true;
+		NodeState.CachedOutput = NodeState.LoopArray[NodeState.LoopIndex];
+		NodeState.bHasCachedOutput = true;
 
 		// Execute loop body
 		ProcessNextNode(FString::Printf(TEXT("source-%s-loopBody"), *Node->Id));
@@ -1230,8 +1329,10 @@ void UStoryFlowComponent::HandleForEachLoop(FStoryFlowNode* Node)
 	else
 	{
 		// Loop complete - cleanup
-		Node->Data.bLoopInitialized = false;
-		Node->Data.LoopArray.Empty();
+		NodeState.bLoopInitialized = false;
+		NodeState.LoopArray.Empty();
+		NodeState.bHasCachedOutput = false;
+		NodeState.CachedOutput.Reset();
 
 		if (ExecutionContext.LoopStack.Num() > 0)
 		{
@@ -1245,20 +1346,65 @@ void UStoryFlowComponent::HandleForEachLoop(FStoryFlowNode* Node)
 
 void UStoryFlowComponent::HandleSetImage(FStoryFlowNode* Node)
 {
-	// Set image variable
-	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-"), *Node->Id));
+	// Evaluate image value from connected input or inline
+	FString NewValue;
+	if (Evaluator)
+	{
+		NewValue = Evaluator->EvaluateStringInput(Node, TEXT("image"), Node->Data.Value.GetString());
+	}
+	else
+	{
+		NewValue = Node->Data.Value.GetString();
+	}
+
+	FStoryFlowVariant Value;
+	Value.SetString(NewValue);
+	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
+	NotifyVariableChanged(Node->Data.Variable, Value, Node->Data.bIsGlobal);
+
+	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
 }
 
 void UStoryFlowComponent::HandleSetAudio(FStoryFlowNode* Node)
 {
-	// Set audio variable
-	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-"), *Node->Id));
+	// Evaluate audio value from connected input or inline
+	FString NewValue;
+	if (Evaluator)
+	{
+		NewValue = Evaluator->EvaluateStringInput(Node, TEXT("audio"), Node->Data.Value.GetString());
+	}
+	else
+	{
+		NewValue = Node->Data.Value.GetString();
+	}
+
+	FStoryFlowVariant Value;
+	Value.SetString(NewValue);
+	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
+	NotifyVariableChanged(Node->Data.Variable, Value, Node->Data.bIsGlobal);
+
+	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
 }
 
 void UStoryFlowComponent::HandleSetCharacter(FStoryFlowNode* Node)
 {
-	// Set character variable
-	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-"), *Node->Id));
+	// Evaluate character value from connected input or inline
+	FString NewValue;
+	if (Evaluator)
+	{
+		NewValue = Evaluator->EvaluateStringInput(Node, TEXT("character"), Node->Data.Value.GetString());
+	}
+	else
+	{
+		NewValue = Node->Data.Value.GetString();
+	}
+
+	FStoryFlowVariant Value;
+	Value.SetString(NewValue);
+	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
+	NotifyVariableChanged(Node->Data.Variable, Value, Node->Data.bIsGlobal);
+
+	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
 }
 
 void UStoryFlowComponent::HandleSwitchOnEnum(FStoryFlowNode* Node)
@@ -1281,7 +1427,7 @@ void UStoryFlowComponent::HandleSwitchOnEnum(FStoryFlowNode* Node)
 	}
 	else
 	{
-		UE_LOG(LogTemp, Warning, TEXT("StoryFlow: switchOnEnum - No output handle found for enum value '%s'"), *EnumValue);
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: switchOnEnum - No output handle found for enum value '%s'"), *EnumValue);
 	}
 }
 
@@ -1351,7 +1497,7 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 	FString VariableName = Node->Data.VariableName;
 	FString VariableType = Node->Data.VariableType;
 
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: HandleSetCharacterVar - CharPath='%s' VarName='%s' VarType='%s' InlineValue='%s'"),
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: HandleSetCharacterVar - CharPath='%s' VarName='%s' VarType='%s' InlineValue='%s'"),
 		*CharacterPath, *VariableName, *VariableType, *Node->Data.Value.ToString());
 
 	// First check if there's a connected character input
@@ -1381,8 +1527,8 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 
 	if (CharacterPath.IsEmpty())
 	{
-		UE_LOG(LogTemp, Warning, TEXT("StoryFlow: SetCharacterVar has no character path"));
-		ProcessNextNode(FString::Printf(TEXT("source-%s-"), *Node->Id));
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: SetCharacterVar has no character path"));
+		HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
 		return;
 	}
 
@@ -1395,7 +1541,7 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 	{
 		// Evaluate the connected node
 		FStoryFlowNode* SourceNode = ExecutionContext.GetNode(InputEdge->Source);
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: HandleSetCharacterVar - Found connected input from node '%s' (type='%s')"),
+		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: HandleSetCharacterVar - Found connected input from node '%s' (type='%s')"),
 			SourceNode ? *SourceNode->Id : TEXT("null"), SourceNode ? *SourceNode->TypeString : TEXT("null"));
 
 		if (SourceNode && Evaluator)
@@ -1417,7 +1563,7 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 				// String, image, audio, character - all stored as string paths
 				NewValue.SetString(Evaluator->EvaluateStringFromNode(SourceNode, Node->Id, InputEdge->SourceHandle));
 			}
-			UE_LOG(LogTemp, Log, TEXT("StoryFlow: HandleSetCharacterVar - Evaluated connected value: '%s'"), *NewValue.ToString());
+			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: HandleSetCharacterVar - Evaluated connected value: '%s'"), *NewValue.ToString());
 		}
 	}
 	else
@@ -1429,23 +1575,23 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 			FString StringKey = Node->Data.Value.GetString();
 			FString ResolvedString = ExecutionContext.GetString(StringKey, LanguageCode);
 			NewValue.SetString(ResolvedString);
-			UE_LOG(LogTemp, Log, TEXT("StoryFlow: HandleSetCharacterVar - Using inline string: key='%s' resolved='%s'"), *StringKey, *ResolvedString);
+			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: HandleSetCharacterVar - Using inline string: key='%s' resolved='%s'"), *StringKey, *ResolvedString);
 		}
 		else
 		{
 			NewValue = Node->Data.Value;
-			UE_LOG(LogTemp, Log, TEXT("StoryFlow: HandleSetCharacterVar - Using inline value: '%s'"), *NewValue.ToString());
+			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: HandleSetCharacterVar - Using inline value: '%s'"), *NewValue.ToString());
 		}
 	}
 
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: HandleSetCharacterVar - Setting '%s' on character '%s' to '%s'"),
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: HandleSetCharacterVar - Setting '%s' on character '%s' to '%s'"),
 		*VariableName, *CharacterPath, *NewValue.ToString());
 
 	// Set the character variable
 	ExecutionContext.SetCharacterVariable(CharacterPath, VariableName, NewValue);
 
 	// Continue execution
-	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-"), *Node->Id));
+	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
 }
 
 // ============================================================================
@@ -1462,14 +1608,14 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 	// The character must be set in CurrentDialogueState BEFORE interpolating text
 	if (!DialogueNode->Data.Character.IsEmpty())
 	{
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: BuildDialogueState - Looking up character '%s'"), *DialogueNode->Data.Character);
+		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: BuildDialogueState - Looking up character '%s'"), *DialogueNode->Data.Character);
 
 		// Use ExecutionContext.FindCharacter to get the runtime copy (mutable)
 		if (FStoryFlowCharacterDef* CharDef = ExecutionContext.FindCharacter(DialogueNode->Data.Character))
 		{
-			UE_LOG(LogTemp, Log, TEXT("StoryFlow: BuildDialogueState - Found character, raw Name='%s'"), *CharDef->Name);
+			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: BuildDialogueState - Found character, raw Name='%s'"), *CharDef->Name);
 			State.Character.Name = ExecutionContext.GetString(CharDef->Name, LanguageCode);
-			UE_LOG(LogTemp, Log, TEXT("StoryFlow: BuildDialogueState - Resolved Name='%s'"), *State.Character.Name);
+			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: BuildDialogueState - Resolved Name='%s'"), *State.Character.Name);
 
 			// Load character image if specified (character assets are stored in Project->ResolvedAssets)
 			if (!CharDef->Image.IsEmpty())
@@ -1492,7 +1638,7 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 		}
 		else
 		{
-			UE_LOG(LogTemp, Warning, TEXT("StoryFlow: BuildDialogueState - Character NOT FOUND: '%s'"), *DialogueNode->Data.Character);
+			UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: BuildDialogueState - Character NOT FOUND: '%s'"), *DialogueNode->Data.Character);
 		}
 	}
 
@@ -1524,7 +1670,7 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 		// No image and imageReset=true - clear image
 		State.Image = nullptr;
 		ExecutionContext.PersistentBackgroundImage = nullptr;
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: Image reset (imageReset=true)"));
+		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Image reset (imageReset=true)"));
 	}
 	else
 	{
@@ -1532,7 +1678,7 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 		State.Image = ExecutionContext.PersistentBackgroundImage;
 		if (State.Image)
 		{
-			UE_LOG(LogTemp, Log, TEXT("StoryFlow: Using persistent background image"));
+			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Using persistent background image"));
 		}
 	}
 
@@ -1595,7 +1741,7 @@ void UStoryFlowComponent::NotifyVariableChanged(const FString& VariableId, const
 		FStoryFlowNode* CurrentNode = ExecutionContext.GetNode(ExecutionContext.CurrentDialogueState.NodeId);
 		if (CurrentNode && CurrentNode->Type == EStoryFlowNodeType::Dialogue)
 		{
-			UE_LOG(LogTemp, Log, TEXT("StoryFlow: Variable '%s' changed, re-interpolating dialogue text"), *VariableId);
+			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Variable '%s' changed, re-interpolating dialogue text"), *VariableId);
 
 			// Rebuild dialogue state with updated variable values
 			ExecutionContext.CurrentDialogueState = BuildDialogueState(CurrentNode);
@@ -1608,20 +1754,26 @@ void UStoryFlowComponent::NotifyVariableChanged(const FString& VariableId, const
 
 void UStoryFlowComponent::ReportError(const FString& ErrorMessage)
 {
-	UE_LOG(LogTemp, Error, TEXT("StoryFlow Error: %s"), *ErrorMessage);
+	UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow Error: %s"), *ErrorMessage);
 	OnError.Broadcast(ErrorMessage);
 }
 
 void UStoryFlowComponent::ContinueForEachLoop(const FString& NodeId)
 {
 	FStoryFlowNode* LoopNode = ExecutionContext.GetNode(NodeId);
-	if (!LoopNode || !LoopNode->Data.bLoopInitialized)
+	if (!LoopNode)
+	{
+		return;
+	}
+
+	FNodeRuntimeState& NodeState = ExecutionContext.GetNodeState(NodeId);
+	if (!NodeState.bLoopInitialized)
 	{
 		return;
 	}
 
 	// Increment loop index
-	LoopNode->Data.LoopIndex++;
+	NodeState.LoopIndex++;
 
 	// Pop the loop context that was pushed for this iteration
 	if (ExecutionContext.LoopStack.Num() > 0)
@@ -1659,28 +1811,25 @@ void UStoryFlowComponent::HandleSetNodeEnd(FStoryFlowNode* Node, const FString& 
 	// Need to find a FLOW edge (not data edge) from a dialogue
 	if (UStoryFlowScriptAsset* CurrentScriptAsset = ExecutionContext.CurrentScript.Get())
 	{
-		for (const FStoryFlowConnection& Conn : CurrentScriptAsset->Connections)
+		for (const FStoryFlowConnection* ConnPtr : CurrentScriptAsset->GetEdgesByTarget(Node->Id))
 		{
-			if (Conn.Target == Node->Id)
-			{
-				// Check if this is a flow edge (not a data edge)
-				bool bIsDataEdge = Conn.SourceHandle.Contains(TEXT("-boolean-")) ||
-								   Conn.SourceHandle.Contains(TEXT("-integer-")) ||
-								   Conn.SourceHandle.Contains(TEXT("-float-")) ||
-								   Conn.SourceHandle.Contains(TEXT("-string-")) ||
-								   Conn.SourceHandle.Contains(TEXT("-enum-")) ||
-								   Conn.SourceHandle.Contains(TEXT("-image-")) ||
-								   Conn.SourceHandle.Contains(TEXT("-character-")) ||
-								   Conn.SourceHandle.Contains(TEXT("-audio-"));
+			// Check if this is a flow edge (not a data edge)
+			bool bIsDataEdge = ConnPtr->SourceHandle.Contains(TEXT("-boolean-")) ||
+							   ConnPtr->SourceHandle.Contains(TEXT("-integer-")) ||
+							   ConnPtr->SourceHandle.Contains(TEXT("-float-")) ||
+							   ConnPtr->SourceHandle.Contains(TEXT("-string-")) ||
+							   ConnPtr->SourceHandle.Contains(TEXT("-enum-")) ||
+							   ConnPtr->SourceHandle.Contains(TEXT("-image-")) ||
+							   ConnPtr->SourceHandle.Contains(TEXT("-character-")) ||
+							   ConnPtr->SourceHandle.Contains(TEXT("-audio-"));
 
-				if (!bIsDataEdge)
+			if (!bIsDataEdge)
+			{
+				FStoryFlowNode* SourceNode = ExecutionContext.GetNode(ConnPtr->Source);
+				if (SourceNode && SourceNode->Type == EStoryFlowNodeType::Dialogue)
 				{
-					FStoryFlowNode* SourceNode = ExecutionContext.GetNode(Conn.Source);
-					if (SourceNode && SourceNode->Type == EStoryFlowNodeType::Dialogue)
-					{
-						ProcessNode(SourceNode);
-						return;
-					}
+					ProcessNode(SourceNode);
+					return;
 				}
 			}
 		}
@@ -1733,7 +1882,7 @@ void UStoryFlowComponent::PlayDialogueAudio(USoundBase* Sound, bool bLoop)
 			CurrentDialogueAudio->ComponentTags.Add(FName("StoryFlowLoop"));
 		}
 
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: Audio started (loop=%s)"), bLoop ? TEXT("true") : TEXT("false"));
+		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Audio started (loop=%s)"), bLoop ? TEXT("true") : TEXT("false"));
 	}
 }
 
@@ -1746,7 +1895,7 @@ void UStoryFlowComponent::StopDialogueAudio()
 
 		if (CurrentDialogueAudio->IsPlaying())
 		{
-			UE_LOG(LogTemp, Log, TEXT("StoryFlow: Stopping dialogue audio"));
+			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Stopping dialogue audio"));
 			CurrentDialogueAudio->Stop();
 		}
 
@@ -1761,7 +1910,7 @@ void UStoryFlowComponent::OnDialogueAudioFinished()
 	if (CurrentDialogueAudio && CurrentDialogueAudio->ComponentTags.Contains(FName("StoryFlowLoop")))
 	{
 		// Restart the audio for looping
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: Looping dialogue audio"));
+		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Looping dialogue audio"));
 		CurrentDialogueAudio->Play();
 	}
 }

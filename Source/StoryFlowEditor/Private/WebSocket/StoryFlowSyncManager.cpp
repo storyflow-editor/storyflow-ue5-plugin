@@ -1,9 +1,11 @@
 // Copyright 2026 StoryFlow. All Rights Reserved.
 
 #include "WebSocket/StoryFlowSyncManager.h"
+#include "StoryFlowRuntime.h"
 #include "WebSocket/StoryFlowWebSocketClient.h"
 #include "Import/StoryFlowImporter.h"
 #include "Data/StoryFlowProjectAsset.h"
+#include "Async/Async.h"
 
 FStoryFlowSyncManager::FStoryFlowSyncManager()
 {
@@ -53,7 +55,7 @@ void FStoryFlowSyncManager::HandleMessage(const FString& Type, TSharedPtr<FJsonO
 	}
 }
 
-void FStoryFlowSyncManager::HandleProjectUpdated(TSharedPtr<FJsonObject> Payload)
+void FStoryFlowSyncManager::HandleProjectUpdated(const TSharedPtr<FJsonObject>& Payload)
 {
 	if (!Payload.IsValid())
 	{
@@ -71,21 +73,35 @@ void FStoryFlowSyncManager::HandleProjectUpdated(TSharedPtr<FJsonObject> Payload
 	FString BuildDir = FPaths::Combine(ProjectPath, TEXT("build"));
 	if (!FPaths::DirectoryExists(BuildDir))
 	{
-		UE_LOG(LogTemp, Warning, TEXT("StoryFlow: Build directory not found: %s"), *BuildDir);
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Build directory not found: %s"), *BuildDir);
 		return;
 	}
 
-	// Import the project
-	ProjectAsset = UStoryFlowImporter::ImportProject(BuildDir, ContentPath);
+	// Ensure import runs on the game thread (WebSocket callbacks may arrive on other threads)
+	FString CapturedBuildDir = BuildDir;
+	FString CapturedContentPath = ContentPath;
+	TWeakPtr<FStoryFlowSyncManager> WeakSelf = AsShared();
 
-	if (ProjectAsset)
+	AsyncTask(ENamedThreads::GameThread, [WeakSelf, CapturedBuildDir, CapturedContentPath]()
 	{
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: Project synced successfully"));
-		OnSyncComplete.Broadcast(ProjectAsset);
-	}
-	else
-	{
-		UE_LOG(LogTemp, Error, TEXT("StoryFlow: Failed to import project"));
-	}
+		TSharedPtr<FStoryFlowSyncManager> Self = WeakSelf.Pin();
+		if (!Self.IsValid())
+		{
+			return;
+		}
+
+		UStoryFlowProjectAsset* ImportedAsset = UStoryFlowImporter::ImportProject(CapturedBuildDir, CapturedContentPath);
+		Self->ProjectAsset.Reset(ImportedAsset);
+
+		if (ImportedAsset)
+		{
+			UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Project synced successfully"));
+			Self->OnSyncComplete.Broadcast(ImportedAsset);
+		}
+		else
+		{
+			UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Failed to import project"));
+		}
+	});
 }
 

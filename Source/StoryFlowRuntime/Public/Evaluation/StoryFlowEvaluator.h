@@ -96,20 +96,17 @@ public:
 	void ClearCache();
 
 private:
+	/** Evaluate an integer comparison (GT, GTE, LT, LTE, EQ) */
+	bool EvaluateIntegerComparison(FStoryFlowNode* Node, EStoryFlowNodeType ComparisonType);
+
+	/** Evaluate a float comparison (GT, GTE, LT, LTE, EQ with NearlyEqual) */
+	bool EvaluateFloatComparison(FStoryFlowNode* Node, EStoryFlowNodeType ComparisonType);
+
+	/** Generic array input evaluator — all typed array evaluators delegate to this */
+	TArray<FStoryFlowVariant> EvaluateArrayInputGeneric(FStoryFlowNode* Node, const FString& HandleSuffix, EStoryFlowNodeType ExpectedGetArrayType);
+
 	/** Execution context */
 	FStoryFlowExecutionContext* Context;
-
-	/** Helper to check if node type produces boolean output */
-	bool IsBooleanProducer(EStoryFlowNodeType Type) const;
-
-	/** Helper to check if node type produces integer output */
-	bool IsIntegerProducer(EStoryFlowNodeType Type) const;
-
-	/** Helper to check if node type produces float output */
-	bool IsFloatProducer(EStoryFlowNodeType Type) const;
-
-	/** Helper to check if node type produces string output */
-	bool IsStringProducer(EStoryFlowNodeType Type) const;
 
 	/** RAII depth tracker for recursion protection */
 	struct FDepthGuard

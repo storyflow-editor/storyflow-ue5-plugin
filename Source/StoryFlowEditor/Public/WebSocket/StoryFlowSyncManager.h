@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "UObject/StrongObjectPtr.h"
 
 class FStoryFlowWebSocketClient;
 class UStoryFlowProjectAsset;
@@ -54,17 +55,17 @@ public:
 	/**
 	 * Get the currently loaded project asset
 	 */
-	UStoryFlowProjectAsset* GetProjectAsset() const { return ProjectAsset; }
+	UStoryFlowProjectAsset* GetProjectAsset() const { return ProjectAsset.Get(); }
 
 	// Events
 	FOnStoryFlowSyncComplete OnSyncComplete;
 
 private:
-	/** Handle incoming WebSocket messages */
+	/** Handle incoming WebSocket messages (signature must match FOnStoryFlowMessageReceived delegate) */
 	void HandleMessage(const FString& Type, TSharedPtr<FJsonObject> Payload);
 
 	/** Handle project-updated message */
-	void HandleProjectUpdated(TSharedPtr<FJsonObject> Payload);
+	void HandleProjectUpdated(const TSharedPtr<FJsonObject>& Payload);
 
 	/** WebSocket client */
 	TSharedPtr<FStoryFlowWebSocketClient> Client;
@@ -78,6 +79,6 @@ private:
 	/** Project root path */
 	FString ProjectPath;
 
-	/** Currently loaded project asset */
-	UStoryFlowProjectAsset* ProjectAsset = nullptr;
+	/** Currently loaded project asset (prevents GC collection in non-UObject class) */
+	TStrongObjectPtr<UStoryFlowProjectAsset> ProjectAsset;
 };

@@ -38,7 +38,7 @@ public:
 	 * @param Type Message type
 	 * @param Payload Message payload
 	 */
-	void SendMessage(const FString& Type, TSharedPtr<FJsonObject> Payload = nullptr);
+	void SendMessage(const FString& Type, const TSharedPtr<FJsonObject>& Payload = nullptr);
 
 	/**
 	 * Request a full project sync
@@ -84,7 +84,4 @@ private:
 
 	/** Max reconnect attempts */
 	static constexpr int32 MaxReconnectAttempts = 5;
-
-	/** Base reconnect delay in seconds */
-	static constexpr float BaseReconnectDelay = 1.0f;
 };

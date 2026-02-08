@@ -1,6 +1,7 @@
 // Copyright 2026 StoryFlow. All Rights Reserved.
 
 #include "Evaluation/StoryFlowEvaluator.h"
+#include "StoryFlowRuntime.h"
 #include "Evaluation/StoryFlowExecutionContext.h"
 #include "Data/StoryFlowScriptAsset.h"
 
@@ -19,7 +20,7 @@ FStoryFlowEvaluator::FDepthGuard::FDepthGuard(int32& InDepth, int32 MaxDepth, bo
 	}
 	else
 	{
-		UE_LOG(LogTemp, Error, TEXT("StoryFlow: Max evaluation depth exceeded"));
+		UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Max evaluation depth exceeded"));
 	}
 	OutValid = bValid;
 }
@@ -73,9 +74,10 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 	}
 
 	// Check cache first
-	if (Node->Data.bHasCachedOutput && Node->Data.CachedOutput.GetType() == EStoryFlowVariableType::Boolean)
+	FNodeRuntimeState& NodeState = Context->GetNodeState(Node->Id);
+	if (NodeState.bHasCachedOutput && NodeState.CachedOutput.GetType() == EStoryFlowVariableType::Boolean)
 	{
-		return Node->Data.CachedOutput.GetBool();
+		return NodeState.CachedOutput.GetBool();
 	}
 
 	bool Result = false;
@@ -121,84 +123,20 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 	}
 
 	case EStoryFlowNodeType::GreaterThan:
-	{
-		int32 Input1 = EvaluateIntegerInput(Node, TEXT("integer-1"), Node->Data.Value1.GetInt(0));
-		int32 Input2 = EvaluateIntegerInput(Node, TEXT("integer-2"), Node->Data.Value2.GetInt(0));
-		Result = Input1 > Input2;
-		break;
-	}
-
 	case EStoryFlowNodeType::GreaterThanOrEqual:
-	{
-		int32 Input1 = EvaluateIntegerInput(Node, TEXT("integer-1"), Node->Data.Value1.GetInt(0));
-		int32 Input2 = EvaluateIntegerInput(Node, TEXT("integer-2"), Node->Data.Value2.GetInt(0));
-		Result = Input1 >= Input2;
-		break;
-	}
-
 	case EStoryFlowNodeType::LessThan:
-	{
-		int32 Input1 = EvaluateIntegerInput(Node, TEXT("integer-1"), Node->Data.Value1.GetInt(0));
-		int32 Input2 = EvaluateIntegerInput(Node, TEXT("integer-2"), Node->Data.Value2.GetInt(0));
-		Result = Input1 < Input2;
-		break;
-	}
-
 	case EStoryFlowNodeType::LessThanOrEqual:
-	{
-		int32 Input1 = EvaluateIntegerInput(Node, TEXT("integer-1"), Node->Data.Value1.GetInt(0));
-		int32 Input2 = EvaluateIntegerInput(Node, TEXT("integer-2"), Node->Data.Value2.GetInt(0));
-		Result = Input1 <= Input2;
-		break;
-	}
-
 	case EStoryFlowNodeType::EqualInt:
-	{
-		int32 Input1 = EvaluateIntegerInput(Node, TEXT("integer-1"), Node->Data.Value1.GetInt(0));
-		int32 Input2 = EvaluateIntegerInput(Node, TEXT("integer-2"), Node->Data.Value2.GetInt(0));
-		Result = Input1 == Input2;
+		Result = EvaluateIntegerComparison(Node, Node->Type);
 		break;
-	}
 
 	case EStoryFlowNodeType::GreaterThanFloat:
-	{
-		float Input1 = EvaluateFloatInput(Node, TEXT("float-1"), Node->Data.Value1.GetFloat(0.0f));
-		float Input2 = EvaluateFloatInput(Node, TEXT("float-2"), Node->Data.Value2.GetFloat(0.0f));
-		Result = Input1 > Input2;
-		break;
-	}
-
 	case EStoryFlowNodeType::GreaterThanOrEqualFloat:
-	{
-		float Input1 = EvaluateFloatInput(Node, TEXT("float-1"), Node->Data.Value1.GetFloat(0.0f));
-		float Input2 = EvaluateFloatInput(Node, TEXT("float-2"), Node->Data.Value2.GetFloat(0.0f));
-		Result = Input1 >= Input2;
-		break;
-	}
-
 	case EStoryFlowNodeType::LessThanFloat:
-	{
-		float Input1 = EvaluateFloatInput(Node, TEXT("float-1"), Node->Data.Value1.GetFloat(0.0f));
-		float Input2 = EvaluateFloatInput(Node, TEXT("float-2"), Node->Data.Value2.GetFloat(0.0f));
-		Result = Input1 < Input2;
-		break;
-	}
-
 	case EStoryFlowNodeType::LessThanOrEqualFloat:
-	{
-		float Input1 = EvaluateFloatInput(Node, TEXT("float-1"), Node->Data.Value1.GetFloat(0.0f));
-		float Input2 = EvaluateFloatInput(Node, TEXT("float-2"), Node->Data.Value2.GetFloat(0.0f));
-		Result = Input1 <= Input2;
-		break;
-	}
-
 	case EStoryFlowNodeType::EqualFloat:
-	{
-		float Input1 = EvaluateFloatInput(Node, TEXT("float-1"), Node->Data.Value1.GetFloat(0.0f));
-		float Input2 = EvaluateFloatInput(Node, TEXT("float-2"), Node->Data.Value2.GetFloat(0.0f));
-		Result = FMath::IsNearlyEqual(Input1, Input2);
+		Result = EvaluateFloatComparison(Node, Node->Type);
 		break;
-	}
 
 	case EStoryFlowNodeType::EqualString:
 	{
@@ -321,10 +259,46 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 	}
 
 	// Cache result
-	Node->Data.CachedOutput.SetBool(Result);
-	Node->Data.bHasCachedOutput = true;
+	NodeState.CachedOutput.SetBool(Result);
+	NodeState.bHasCachedOutput = true;
 
 	return Result;
+}
+
+// ============================================================================
+// Comparison Helpers
+// ============================================================================
+
+bool FStoryFlowEvaluator::EvaluateIntegerComparison(FStoryFlowNode* Node, EStoryFlowNodeType ComparisonType)
+{
+	int32 Input1 = EvaluateIntegerInput(Node, TEXT("integer-1"), Node->Data.Value1.GetInt(0));
+	int32 Input2 = EvaluateIntegerInput(Node, TEXT("integer-2"), Node->Data.Value2.GetInt(0));
+
+	switch (ComparisonType)
+	{
+	case EStoryFlowNodeType::GreaterThan:        return Input1 > Input2;
+	case EStoryFlowNodeType::GreaterThanOrEqual: return Input1 >= Input2;
+	case EStoryFlowNodeType::LessThan:           return Input1 < Input2;
+	case EStoryFlowNodeType::LessThanOrEqual:    return Input1 <= Input2;
+	case EStoryFlowNodeType::EqualInt:           return Input1 == Input2;
+	default:                                     return false;
+	}
+}
+
+bool FStoryFlowEvaluator::EvaluateFloatComparison(FStoryFlowNode* Node, EStoryFlowNodeType ComparisonType)
+{
+	float Input1 = EvaluateFloatInput(Node, TEXT("float-1"), Node->Data.Value1.GetFloat(0.0f));
+	float Input2 = EvaluateFloatInput(Node, TEXT("float-2"), Node->Data.Value2.GetFloat(0.0f));
+
+	switch (ComparisonType)
+	{
+	case EStoryFlowNodeType::GreaterThanFloat:        return Input1 > Input2;
+	case EStoryFlowNodeType::GreaterThanOrEqualFloat: return Input1 >= Input2;
+	case EStoryFlowNodeType::LessThanFloat:           return Input1 < Input2;
+	case EStoryFlowNodeType::LessThanOrEqualFloat:    return Input1 <= Input2;
+	case EStoryFlowNodeType::EqualFloat:              return FMath::IsNearlyEqual(Input1, Input2);
+	default:                                          return false;
+	}
 }
 
 // ============================================================================
@@ -511,14 +485,15 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 	case EStoryFlowNodeType::ForEachCharacterLoop:
 	case EStoryFlowNodeType::ForEachAudioLoop:
 	{
+		FNodeRuntimeState& LoopState = Context->GetNodeState(Node->Id);
 		if (SourceHandle.Contains(TEXT("integer-index")))
 		{
-			Result = Node->Data.LoopIndex;
+			Result = LoopState.LoopIndex;
 		}
-		else if (Node->Type == EStoryFlowNodeType::ForEachIntLoop && Node->Data.bHasCachedOutput)
+		else if (Node->Type == EStoryFlowNodeType::ForEachIntLoop && LoopState.bHasCachedOutput)
 		{
 			// Return current element value for ForEachIntLoop
-			Result = Node->Data.CachedOutput.GetInt();
+			Result = LoopState.CachedOutput.GetInt();
 		}
 		break;
 	}
@@ -744,9 +719,10 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 	case EStoryFlowNodeType::ForEachFloatLoop:
 	{
 		// Return current element value
-		if (Node->Data.bHasCachedOutput)
+		FNodeRuntimeState& LoopState = Context->GetNodeState(Node->Id);
+		if (LoopState.bHasCachedOutput)
 		{
-			Result = Node->Data.CachedOutput.GetFloat();
+			Result = LoopState.CachedOutput.GetFloat();
 		}
 		break;
 	}
@@ -972,9 +948,10 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 	case EStoryFlowNodeType::ForEachCharacterLoop:
 	case EStoryFlowNodeType::ForEachAudioLoop:
 	{
-		if (Node->Data.bHasCachedOutput)
+		FNodeRuntimeState& LoopState = Context->GetNodeState(Node->Id);
+		if (LoopState.bHasCachedOutput)
 		{
-			Result = Node->Data.CachedOutput.GetString();
+			Result = LoopState.CachedOutput.GetString();
 		}
 		break;
 	}
@@ -1001,7 +978,7 @@ FString FStoryFlowEvaluator::EvaluateEnumInput(FStoryFlowNode* Node, const FStri
 // Array Evaluation
 // ============================================================================
 
-TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateBoolArrayInput(FStoryFlowNode* Node, const FString& HandleSuffix)
+TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateArrayInputGeneric(FStoryFlowNode* Node, const FString& HandleSuffix, EStoryFlowNodeType ExpectedGetArrayType)
 {
 	if (!Context || !Node)
 	{
@@ -1015,7 +992,7 @@ TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateBoolArrayInput(FStoryFlow
 	}
 
 	FStoryFlowNode* SourceNode = Context->GetNode(Edge->Source);
-	if (!SourceNode || SourceNode->Type != EStoryFlowNodeType::GetBoolArray)
+	if (!SourceNode || SourceNode->Type != ExpectedGetArrayType)
 	{
 		return TArray<FStoryFlowVariant>();
 	}
@@ -1027,174 +1004,41 @@ TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateBoolArrayInput(FStoryFlow
 	}
 
 	return TArray<FStoryFlowVariant>();
+}
+
+TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateBoolArrayInput(FStoryFlowNode* Node, const FString& HandleSuffix)
+{
+	return EvaluateArrayInputGeneric(Node, HandleSuffix, EStoryFlowNodeType::GetBoolArray);
 }
 
 TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateIntArrayInput(FStoryFlowNode* Node, const FString& HandleSuffix)
 {
-	if (!Context || !Node)
-	{
-		return TArray<FStoryFlowVariant>();
-	}
-
-	const FStoryFlowConnection* Edge = Context->FindInputEdge(Node->Id, HandleSuffix);
-	if (!Edge)
-	{
-		return TArray<FStoryFlowVariant>();
-	}
-
-	FStoryFlowNode* SourceNode = Context->GetNode(Edge->Source);
-	if (!SourceNode || SourceNode->Type != EStoryFlowNodeType::GetIntArray)
-	{
-		return TArray<FStoryFlowVariant>();
-	}
-
-	FStoryFlowVariable* Var = Context->FindVariable(SourceNode->Data.Variable, SourceNode->Data.bIsGlobal);
-	if (Var && Var->bIsArray)
-	{
-		return Var->Value.GetArray();
-	}
-
-	return TArray<FStoryFlowVariant>();
+	return EvaluateArrayInputGeneric(Node, HandleSuffix, EStoryFlowNodeType::GetIntArray);
 }
 
 TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateFloatArrayInput(FStoryFlowNode* Node, const FString& HandleSuffix)
 {
-	if (!Context || !Node)
-	{
-		return TArray<FStoryFlowVariant>();
-	}
-
-	const FStoryFlowConnection* Edge = Context->FindInputEdge(Node->Id, HandleSuffix);
-	if (!Edge)
-	{
-		return TArray<FStoryFlowVariant>();
-	}
-
-	FStoryFlowNode* SourceNode = Context->GetNode(Edge->Source);
-	if (!SourceNode || SourceNode->Type != EStoryFlowNodeType::GetFloatArray)
-	{
-		return TArray<FStoryFlowVariant>();
-	}
-
-	FStoryFlowVariable* Var = Context->FindVariable(SourceNode->Data.Variable, SourceNode->Data.bIsGlobal);
-	if (Var && Var->bIsArray)
-	{
-		return Var->Value.GetArray();
-	}
-
-	return TArray<FStoryFlowVariant>();
+	return EvaluateArrayInputGeneric(Node, HandleSuffix, EStoryFlowNodeType::GetFloatArray);
 }
 
 TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateStringArrayInput(FStoryFlowNode* Node, const FString& HandleSuffix)
 {
-	if (!Context || !Node)
-	{
-		return TArray<FStoryFlowVariant>();
-	}
-
-	const FStoryFlowConnection* Edge = Context->FindInputEdge(Node->Id, HandleSuffix);
-	if (!Edge)
-	{
-		return TArray<FStoryFlowVariant>();
-	}
-
-	FStoryFlowNode* SourceNode = Context->GetNode(Edge->Source);
-	if (!SourceNode || SourceNode->Type != EStoryFlowNodeType::GetStringArray)
-	{
-		return TArray<FStoryFlowVariant>();
-	}
-
-	FStoryFlowVariable* Var = Context->FindVariable(SourceNode->Data.Variable, SourceNode->Data.bIsGlobal);
-	if (Var && Var->bIsArray)
-	{
-		return Var->Value.GetArray();
-	}
-
-	return TArray<FStoryFlowVariant>();
+	return EvaluateArrayInputGeneric(Node, HandleSuffix, EStoryFlowNodeType::GetStringArray);
 }
 
 TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateImageArrayInput(FStoryFlowNode* Node, const FString& HandleSuffix)
 {
-	if (!Context || !Node)
-	{
-		return TArray<FStoryFlowVariant>();
-	}
-
-	const FStoryFlowConnection* Edge = Context->FindInputEdge(Node->Id, HandleSuffix);
-	if (!Edge)
-	{
-		return TArray<FStoryFlowVariant>();
-	}
-
-	FStoryFlowNode* SourceNode = Context->GetNode(Edge->Source);
-	if (!SourceNode || SourceNode->Type != EStoryFlowNodeType::GetImageArray)
-	{
-		return TArray<FStoryFlowVariant>();
-	}
-
-	FStoryFlowVariable* Var = Context->FindVariable(SourceNode->Data.Variable, SourceNode->Data.bIsGlobal);
-	if (Var && Var->bIsArray)
-	{
-		return Var->Value.GetArray();
-	}
-
-	return TArray<FStoryFlowVariant>();
+	return EvaluateArrayInputGeneric(Node, HandleSuffix, EStoryFlowNodeType::GetImageArray);
 }
 
 TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateCharacterArrayInput(FStoryFlowNode* Node, const FString& HandleSuffix)
 {
-	if (!Context || !Node)
-	{
-		return TArray<FStoryFlowVariant>();
-	}
-
-	const FStoryFlowConnection* Edge = Context->FindInputEdge(Node->Id, HandleSuffix);
-	if (!Edge)
-	{
-		return TArray<FStoryFlowVariant>();
-	}
-
-	FStoryFlowNode* SourceNode = Context->GetNode(Edge->Source);
-	if (!SourceNode || SourceNode->Type != EStoryFlowNodeType::GetCharacterArray)
-	{
-		return TArray<FStoryFlowVariant>();
-	}
-
-	FStoryFlowVariable* Var = Context->FindVariable(SourceNode->Data.Variable, SourceNode->Data.bIsGlobal);
-	if (Var && Var->bIsArray)
-	{
-		return Var->Value.GetArray();
-	}
-
-	return TArray<FStoryFlowVariant>();
+	return EvaluateArrayInputGeneric(Node, HandleSuffix, EStoryFlowNodeType::GetCharacterArray);
 }
 
 TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateAudioArrayInput(FStoryFlowNode* Node, const FString& HandleSuffix)
 {
-	if (!Context || !Node)
-	{
-		return TArray<FStoryFlowVariant>();
-	}
-
-	const FStoryFlowConnection* Edge = Context->FindInputEdge(Node->Id, HandleSuffix);
-	if (!Edge)
-	{
-		return TArray<FStoryFlowVariant>();
-	}
-
-	FStoryFlowNode* SourceNode = Context->GetNode(Edge->Source);
-	if (!SourceNode || SourceNode->Type != EStoryFlowNodeType::GetAudioArray)
-	{
-		return TArray<FStoryFlowVariant>();
-	}
-
-	FStoryFlowVariable* Var = Context->FindVariable(SourceNode->Data.Variable, SourceNode->Data.bIsGlobal);
-	if (Var && Var->bIsArray)
-	{
-		return Var->Value.GetArray();
-	}
-
-	return TArray<FStoryFlowVariant>();
+	return EvaluateArrayInputGeneric(Node, HandleSuffix, EStoryFlowNodeType::GetAudioArray);
 }
 
 // ============================================================================
@@ -1208,10 +1052,15 @@ void FStoryFlowEvaluator::ProcessBooleanChain(FStoryFlowNode* Node)
 		return;
 	}
 
-	if (!IsBooleanProducer(Node->Type))
+	// Use depth guard to prevent infinite recursion
+	bool bDepthValid;
+	FDepthGuard Guard(Context->EvaluationDepth, STORYFLOW_MAX_EVALUATION_DEPTH, bDepthValid);
+	if (!bDepthValid)
 	{
 		return;
 	}
+
+	FNodeRuntimeState& NodeState = Context->GetNodeState(Node->Id);
 
 	switch (Node->Type)
 	{
@@ -1227,8 +1076,8 @@ void FStoryFlowEvaluator::ProcessBooleanChain(FStoryFlowNode* Node)
 		}
 		// Then evaluate
 		bool Input = EvaluateBooleanInput(Node, TEXT("boolean"), Node->Data.Value.GetBool(false));
-		Node->Data.CachedOutput.SetBool(!Input);
-		Node->Data.bHasCachedOutput = true;
+		NodeState.CachedOutput.SetBool(!Input);
+		NodeState.bHasCachedOutput = true;
 		break;
 	}
 
@@ -1254,43 +1103,6 @@ void FStoryFlowEvaluator::ProcessBooleanChain(FStoryFlowNode* Node)
 		break;
 	}
 
-	case EStoryFlowNodeType::GreaterThan:
-	case EStoryFlowNodeType::GreaterThanOrEqual:
-	case EStoryFlowNodeType::LessThan:
-	case EStoryFlowNodeType::LessThanOrEqual:
-	case EStoryFlowNodeType::EqualInt:
-	{
-		// Compute and cache comparison result
-		int32 Input1 = EvaluateIntegerInput(Node, TEXT("integer-1"), Node->Data.Value1.GetInt(0));
-		int32 Input2 = EvaluateIntegerInput(Node, TEXT("integer-2"), Node->Data.Value2.GetInt(0));
-		bool Result = false;
-
-		switch (Node->Type)
-		{
-		case EStoryFlowNodeType::GreaterThan:
-			Result = Input1 > Input2;
-			break;
-		case EStoryFlowNodeType::GreaterThanOrEqual:
-			Result = Input1 >= Input2;
-			break;
-		case EStoryFlowNodeType::LessThan:
-			Result = Input1 < Input2;
-			break;
-		case EStoryFlowNodeType::LessThanOrEqual:
-			Result = Input1 <= Input2;
-			break;
-		case EStoryFlowNodeType::EqualInt:
-			Result = Input1 == Input2;
-			break;
-		default:
-			break;
-		}
-
-		Node->Data.CachedOutput.SetBool(Result);
-		Node->Data.bHasCachedOutput = true;
-		break;
-	}
-
 	case EStoryFlowNodeType::Branch:
 	{
 		// Process condition input
@@ -1305,7 +1117,13 @@ void FStoryFlowEvaluator::ProcessBooleanChain(FStoryFlowNode* Node)
 	}
 
 	default:
+	{
+		// For any other type that produces a boolean (comparisons, array contains, type conversions, etc.),
+		// delegate to EvaluateBooleanFromNode which handles all 47+ types.
+		// This fixes the mismatch where ProcessBooleanChain handled ~12 types but IsBooleanProducer listed 30+.
+		EvaluateBooleanFromNode(Node, TEXT(""), TEXT(""));
 		break;
+	}
 	}
 }
 
@@ -1346,127 +1164,3 @@ void FStoryFlowEvaluator::ClearCache()
 	}
 }
 
-bool FStoryFlowEvaluator::IsBooleanProducer(EStoryFlowNodeType Type) const
-{
-	switch (Type)
-	{
-	case EStoryFlowNodeType::GetBool:
-	case EStoryFlowNodeType::NotBool:
-	case EStoryFlowNodeType::AndBool:
-	case EStoryFlowNodeType::OrBool:
-	case EStoryFlowNodeType::EqualBool:
-	case EStoryFlowNodeType::GreaterThan:
-	case EStoryFlowNodeType::GreaterThanOrEqual:
-	case EStoryFlowNodeType::LessThan:
-	case EStoryFlowNodeType::LessThanOrEqual:
-	case EStoryFlowNodeType::EqualInt:
-	case EStoryFlowNodeType::GreaterThanFloat:
-	case EStoryFlowNodeType::GreaterThanOrEqualFloat:
-	case EStoryFlowNodeType::LessThanFloat:
-	case EStoryFlowNodeType::LessThanOrEqualFloat:
-	case EStoryFlowNodeType::EqualFloat:
-	case EStoryFlowNodeType::EqualString:
-	case EStoryFlowNodeType::ContainsString:
-	case EStoryFlowNodeType::EqualEnum:
-	case EStoryFlowNodeType::IntToBoolean:
-	case EStoryFlowNodeType::FloatToBoolean:
-	case EStoryFlowNodeType::ArrayContainsBool:
-	case EStoryFlowNodeType::ArrayContainsInt:
-	case EStoryFlowNodeType::ArrayContainsFloat:
-	case EStoryFlowNodeType::ArrayContainsString:
-	case EStoryFlowNodeType::ArrayContainsImage:
-	case EStoryFlowNodeType::ArrayContainsCharacter:
-	case EStoryFlowNodeType::ArrayContainsAudio:
-	case EStoryFlowNodeType::GetBoolArrayElement:
-	case EStoryFlowNodeType::GetRandomBoolArrayElement:
-		return true;
-	default:
-		return false;
-	}
-}
-
-bool FStoryFlowEvaluator::IsIntegerProducer(EStoryFlowNodeType Type) const
-{
-	switch (Type)
-	{
-	case EStoryFlowNodeType::GetInt:
-	case EStoryFlowNodeType::Plus:
-	case EStoryFlowNodeType::Minus:
-	case EStoryFlowNodeType::Multiply:
-	case EStoryFlowNodeType::Divide:
-	case EStoryFlowNodeType::Random:
-	case EStoryFlowNodeType::BooleanToInt:
-	case EStoryFlowNodeType::FloatToInt:
-	case EStoryFlowNodeType::StringToInt:
-	case EStoryFlowNodeType::ArrayLengthBool:
-	case EStoryFlowNodeType::ArrayLengthInt:
-	case EStoryFlowNodeType::ArrayLengthFloat:
-	case EStoryFlowNodeType::ArrayLengthString:
-	case EStoryFlowNodeType::FindInBoolArray:
-	case EStoryFlowNodeType::FindInIntArray:
-	case EStoryFlowNodeType::FindInFloatArray:
-	case EStoryFlowNodeType::FindInStringArray:
-	case EStoryFlowNodeType::FindInImageArray:
-	case EStoryFlowNodeType::FindInCharacterArray:
-	case EStoryFlowNodeType::FindInAudioArray:
-	case EStoryFlowNodeType::GetIntArrayElement:
-	case EStoryFlowNodeType::GetRandomIntArrayElement:
-	case EStoryFlowNodeType::LengthString:
-	case EStoryFlowNodeType::ArrayLengthImage:
-	case EStoryFlowNodeType::ArrayLengthCharacter:
-	case EStoryFlowNodeType::ArrayLengthAudio:
-		return true;
-	default:
-		return false;
-	}
-}
-
-bool FStoryFlowEvaluator::IsFloatProducer(EStoryFlowNodeType Type) const
-{
-	switch (Type)
-	{
-	case EStoryFlowNodeType::GetFloat:
-	case EStoryFlowNodeType::PlusFloat:
-	case EStoryFlowNodeType::MinusFloat:
-	case EStoryFlowNodeType::MultiplyFloat:
-	case EStoryFlowNodeType::DivideFloat:
-	case EStoryFlowNodeType::RandomFloat:
-	case EStoryFlowNodeType::BooleanToFloat:
-	case EStoryFlowNodeType::IntToFloat:
-	case EStoryFlowNodeType::StringToFloat:
-	case EStoryFlowNodeType::GetFloatArrayElement:
-	case EStoryFlowNodeType::GetRandomFloatArrayElement:
-		return true;
-	default:
-		return false;
-	}
-}
-
-bool FStoryFlowEvaluator::IsStringProducer(EStoryFlowNodeType Type) const
-{
-	switch (Type)
-	{
-	case EStoryFlowNodeType::GetString:
-	case EStoryFlowNodeType::ConcatenateString:
-	case EStoryFlowNodeType::ToUpperCase:
-	case EStoryFlowNodeType::ToLowerCase:
-	case EStoryFlowNodeType::IntToString:
-	case EStoryFlowNodeType::FloatToString:
-	case EStoryFlowNodeType::GetEnum:
-	case EStoryFlowNodeType::EnumToString:
-	case EStoryFlowNodeType::GetImage:
-	case EStoryFlowNodeType::GetAudio:
-	case EStoryFlowNodeType::GetCharacter:
-	case EStoryFlowNodeType::GetStringArrayElement:
-	case EStoryFlowNodeType::GetRandomStringArrayElement:
-	case EStoryFlowNodeType::GetImageArrayElement:
-	case EStoryFlowNodeType::GetRandomImageArrayElement:
-	case EStoryFlowNodeType::GetCharacterArrayElement:
-	case EStoryFlowNodeType::GetRandomCharacterArrayElement:
-	case EStoryFlowNodeType::GetAudioArrayElement:
-	case EStoryFlowNodeType::GetRandomAudioArrayElement:
-		return true;
-	default:
-		return false;
-	}
-}

@@ -1,6 +1,7 @@
 // Copyright 2026 StoryFlow. All Rights Reserved.
 
 #include "Subsystems/StoryFlowEditorSubsystem.h"
+#include "StoryFlowRuntime.h"
 #include "WebSocket/StoryFlowWebSocketClient.h"
 #include "WebSocket/StoryFlowSyncManager.h"
 #include "Import/StoryFlowImporter.h"
@@ -26,7 +27,7 @@ void UStoryFlowEditorSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	SyncCompleteHandle = SyncManager->OnSyncComplete.AddUObject(
 		this, &UStoryFlowEditorSubsystem::HandleSyncComplete);
 
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: Editor subsystem initialized"));
+	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Editor subsystem initialized"));
 }
 
 void UStoryFlowEditorSubsystem::Deinitialize()
@@ -63,7 +64,7 @@ void UStoryFlowEditorSubsystem::ConnectToStoryFlow(const FString& Host, int32 Po
 {
 	if (!WebSocketClient.IsValid())
 	{
-		UE_LOG(LogTemp, Error, TEXT("StoryFlow: WebSocket client not initialized"));
+		UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: WebSocket client not initialized"));
 		return;
 	}
 
@@ -142,19 +143,19 @@ void UStoryFlowEditorSubsystem::HandleConnectionStateChanged(bool bConnected)
 {
 	if (bConnected)
 	{
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: Connected to editor"));
+		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Connected to editor"));
 		OnConnected.Broadcast();
 	}
 	else
 	{
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: Disconnected from editor"));
+		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Disconnected from editor"));
 		OnDisconnected.Broadcast();
 	}
 }
 
 void UStoryFlowEditorSubsystem::HandleSyncComplete(UStoryFlowProjectAsset* Project)
 {
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: Sync complete"));
+	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Sync complete"));
 	OnSyncComplete.Broadcast(Project);
 }
 

@@ -328,6 +328,11 @@ public:
 	void SetArray(const TArray<FStoryFlowVariant>& Value)
 	{
 		ArrayValue = Value;
+		// Infer type from first element, or keep current type
+		if (Value.Num() > 0)
+		{
+			Type = Value[0].GetType();
+		}
 	}
 
 	// Getters with default fallbacks
@@ -624,16 +629,6 @@ struct STORYFLOWRUNTIME_API FStoryFlowNodeData
 	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
 	FString VariableType;
 
-	// === Runtime State (not serialized) ===
-
-	/** Cached output value (for evaluators) */
-	FStoryFlowVariant CachedOutput;
-	bool bHasCachedOutput = false;
-
-	/** Loop state (for forEach nodes) */
-	int32 LoopIndex = -1;
-	TArray<FStoryFlowVariant> LoopArray;
-	bool bLoopInitialized = false;
 };
 
 // ============================================================================
@@ -670,7 +665,18 @@ struct STORYFLOWRUNTIME_API FStoryFlowNode
 // ============================================================================
 
 /**
- * Edge connecting two nodes
+ * Edge connecting two nodes.
+ *
+ * Handle format (matches StoryFlow Editor node graph conventions):
+ *   Source: "source-{nodeId}-{suffix}"
+ *     - Flow outputs:    "source-{nodeId}-"  (empty suffix for default output)
+ *     - Branch:          "source-{nodeId}-true", "source-{nodeId}-false"
+ *     - Typed outputs:   "source-{nodeId}-{type}-"  (boolean, integer, float, string, enum, image, character, audio)
+ *     - Dialogue option: "source-{nodeId}-{optionId}"
+ *   Target: "target-{nodeId}-{suffix}"
+ *
+ * Data edges (typed outputs) are distinguished from flow edges by containing a type segment
+ * such as "-boolean-", "-integer-", etc. in the SourceHandle.
  */
 USTRUCT(BlueprintType)
 struct STORYFLOWRUNTIME_API FStoryFlowConnection
@@ -689,11 +695,11 @@ struct STORYFLOWRUNTIME_API FStoryFlowConnection
 	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
 	FString Target;
 
-	/** Source handle (for multi-output nodes) */
+	/** Source handle (for multi-output nodes). See handle format above. */
 	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
 	FString SourceHandle;
 
-	/** Target handle (for multi-input nodes) */
+	/** Target handle (for multi-input nodes). See handle format above. */
 	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
 	FString TargetHandle;
 };
@@ -793,7 +799,7 @@ struct STORYFLOWRUNTIME_API FStoryFlowCharacterData
 
 	/** Loaded character image */
 	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
-	UTexture2D* Image = nullptr;
+	TObjectPtr<UTexture2D> Image = nullptr;
 
 	/** Character variables (for interpolation) */
 	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
@@ -913,11 +919,11 @@ struct STORYFLOWRUNTIME_API FStoryFlowDialogueState
 
 	/** Current image asset */
 	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
-	UTexture2D* Image = nullptr;
+	TObjectPtr<UTexture2D> Image = nullptr;
 
 	/** Current audio asset */
 	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
-	USoundBase* Audio = nullptr;
+	TObjectPtr<USoundBase> Audio = nullptr;
 
 	/** Current character data */
 	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")

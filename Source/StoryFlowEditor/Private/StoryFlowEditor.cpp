@@ -1,6 +1,7 @@
 // Copyright 2026 StoryFlow. All Rights Reserved.
 
 #include "StoryFlowEditor.h"
+#include "StoryFlowRuntime.h"
 #include "StoryFlowEditorSettings.h"
 #include "Import/StoryFlowImporter.h"
 #include "Data/StoryFlowProjectAsset.h"
@@ -41,9 +42,9 @@ static FAutoConsoleCommand ImportProjectCmd(
 	{
 		if (Args.Num() < 1)
 		{
-			UE_LOG(LogTemp, Warning, TEXT("Usage: StoryFlow.Import <BuildDirectory> [ContentPath]"));
-			UE_LOG(LogTemp, Warning, TEXT("Example: StoryFlow.Import C:/MyProject/build"));
-			UE_LOG(LogTemp, Warning, TEXT("Default ContentPath is /Game/StoryFlow (auto-detected by subsystem)"));
+			UE_LOG(LogStoryFlow, Warning, TEXT("Usage: StoryFlow.Import <BuildDirectory> [ContentPath]"));
+			UE_LOG(LogStoryFlow, Warning, TEXT("Example: StoryFlow.Import C:/MyProject/build"));
+			UE_LOG(LogStoryFlow, Warning, TEXT("Default ContentPath is /Game/StoryFlow (auto-detected by subsystem)"));
 			return;
 		}
 
@@ -51,18 +52,18 @@ static FAutoConsoleCommand ImportProjectCmd(
 		// Default to /Game/StoryFlow so the subsystem auto-detects it
 		FString ContentPath = Args.Num() > 1 ? Args[1] : TEXT("/Game/StoryFlow");
 
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: Importing from %s to %s"), *BuildDirectory, *ContentPath);
+		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Importing from %s to %s"), *BuildDirectory, *ContentPath);
 
 		UStoryFlowProjectAsset* Project = UStoryFlowImporter::ImportProject(BuildDirectory, ContentPath);
 
 		if (Project)
 		{
-			UE_LOG(LogTemp, Log, TEXT("StoryFlow: Import successful! Project: %s"), *Project->GetPathName());
-			UE_LOG(LogTemp, Log, TEXT("StoryFlow: Scripts imported: %d"), Project->Scripts.Num());
+			UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Import successful! Project: %s"), *Project->GetPathName());
+			UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Scripts imported: %d"), Project->Scripts.Num());
 		}
 		else
 		{
-			UE_LOG(LogTemp, Error, TEXT("StoryFlow: Import failed!"));
+			UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Import failed!"));
 		}
 	})
 );
@@ -73,15 +74,15 @@ static FAutoConsoleCommand TestCmd(
 	TEXT("Test if StoryFlow plugin is loaded"),
 	FConsoleCommandDelegate::CreateLambda([]()
 	{
-		UE_LOG(LogTemp, Log, TEXT("StoryFlow: Plugin is loaded and working!"));
+		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Plugin is loaded and working!"));
 	})
 );
 
 void FStoryFlowEditorModule::StartupModule()
 {
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: Editor module loaded"));
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: Use 'StoryFlow.Test' to verify plugin"));
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: Use 'StoryFlow.Import <path>' to import a project"));
+	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Editor module loaded"));
+	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Use 'StoryFlow.Test' to verify plugin"));
+	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Use 'StoryFlow.Import <path>' to import a project"));
 
 	// Create and register the style set
 	StyleSet = MakeShareable(new FSlateStyleSet(STORYFLOW_STYLE_NAME));
@@ -146,7 +147,7 @@ void FStoryFlowEditorModule::StartupModule()
 
 void FStoryFlowEditorModule::ShutdownModule()
 {
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: Editor module unloaded"));
+	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Editor module unloaded"));
 
 	UnregisterToolbarExtension();
 
@@ -172,7 +173,7 @@ void FStoryFlowEditorModule::RegisterToolbarExtension()
 	UToolMenu* ToolbarMenu = UToolMenus::Get()->ExtendMenu("LevelEditor.LevelEditorToolBar.PlayToolBar");
 	if (!ToolbarMenu)
 	{
-		UE_LOG(LogTemp, Warning, TEXT("StoryFlow: Could not find LevelEditor toolbar to extend"));
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Could not find LevelEditor toolbar to extend"));
 		return;
 	}
 
@@ -262,7 +263,7 @@ void FStoryFlowEditorModule::RegisterToolbarExtension()
 		FText::GetEmpty()
 	));
 
-	UE_LOG(LogTemp, Log, TEXT("StoryFlow: Toolbar extension registered"));
+	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Toolbar extension registered"));
 }
 
 void FStoryFlowEditorModule::UnregisterToolbarExtension()
