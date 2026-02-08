@@ -1,0 +1,6 @@
+# UE Plugin build artifacts
+Binaries/
+Intermediate/
+
+# Content (assets, not source code)
+Content/

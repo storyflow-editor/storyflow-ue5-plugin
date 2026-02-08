@@ -1,0 +1,46 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0.0",
+	"EngineVersion": "5.3.0",
+	"FriendlyName": "StoryFlow",
+	"Description": "Interactive story and dialogue system with visual node editor integration. Import stories from StoryFlow Editor and run them in your game with full Blueprint support.",
+	"Category": "Gameplay",
+	"CreatedBy": "StoryFlow",
+	"CreatedByURL": "https://storyflow-editor.com",
+	"DocsURL": "https://storyflow-editor.com/docs",
+	"MarketplaceURL": "",
+	"SupportURL": "https://storyflow-editor.com/support",
+	"CanContainContent": true,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Installed": true,
+	"Plugins": [
+		{
+			"Name": "EditorScriptingUtilities",
+			"Enabled": true
+		}
+	],
+	"Modules": [
+		{
+			"Name": "StoryFlowRuntime",
+			"Type": "Runtime",
+			"LoadingPhase": "Default",
+			"WhitelistPlatforms": [
+				"Win64",
+				"Mac",
+				"Linux"
+			]
+		},
+		{
+			"Name": "StoryFlowEditor",
+			"Type": "Editor",
+			"LoadingPhase": "Default",
+			"WhitelistPlatforms": [
+				"Win64",
+				"Mac",
+				"Linux"
+			]
+		}
+	]
+}

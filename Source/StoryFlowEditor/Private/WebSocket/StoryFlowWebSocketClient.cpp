@@ -1,0 +1,183 @@
+// Copyright 2026 StoryFlow. All Rights Reserved.
+
+#include "WebSocket/StoryFlowWebSocketClient.h"
+#include "WebSocketsModule.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
+
+FStoryFlowWebSocketClient::FStoryFlowWebSocketClient()
+{
+}
+
+FStoryFlowWebSocketClient::~FStoryFlowWebSocketClient()
+{
+	Disconnect();
+}
+
+void FStoryFlowWebSocketClient::Connect(const FString& URL)
+{
+	LastURL = URL;
+	ReconnectAttempts = 0;
+
+	// Disconnect if already connected
+	if (WebSocket.IsValid())
+	{
+		Disconnect();
+	}
+
+	// Create WebSocket
+	WebSocket = FWebSocketsModule::Get().CreateWebSocket(URL, TEXT("ws"));
+	if (!WebSocket.IsValid())
+	{
+		UE_LOG(LogTemp, Error, TEXT("StoryFlow: Failed to create WebSocket"));
+		return;
+	}
+
+	// Bind events
+	WebSocket->OnConnected().AddRaw(this, &FStoryFlowWebSocketClient::HandleConnected);
+	WebSocket->OnConnectionError().AddRaw(this, &FStoryFlowWebSocketClient::HandleConnectionError);
+	WebSocket->OnClosed().AddRaw(this, &FStoryFlowWebSocketClient::HandleClosed);
+	WebSocket->OnMessage().AddRaw(this, &FStoryFlowWebSocketClient::HandleMessage);
+
+	// Connect
+	WebSocket->Connect();
+
+	UE_LOG(LogTemp, Log, TEXT("StoryFlow: Connecting to %s"), *URL);
+}
+
+void FStoryFlowWebSocketClient::Disconnect()
+{
+	if (WebSocket.IsValid())
+	{
+		WebSocket->Close();
+		WebSocket.Reset();
+	}
+
+	bIsConnected = false;
+}
+
+bool FStoryFlowWebSocketClient::IsConnected() const
+{
+	return bIsConnected && WebSocket.IsValid() && WebSocket->IsConnected();
+}
+
+void FStoryFlowWebSocketClient::SendMessage(const FString& Type, TSharedPtr<FJsonObject> Payload)
+{
+	if (!IsConnected())
+	{
+		return;
+	}
+
+	// Build message
+	TSharedPtr<FJsonObject> Message = MakeShared<FJsonObject>();
+	Message->SetStringField(TEXT("type"), Type);
+
+	if (Payload.IsValid())
+	{
+		Message->SetObjectField(TEXT("payload"), Payload);
+	}
+	else
+	{
+		Message->SetObjectField(TEXT("payload"), MakeShared<FJsonObject>());
+	}
+
+	// Serialize to string
+	FString MessageString;
+	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&MessageString);
+	FJsonSerializer::Serialize(Message.ToSharedRef(), Writer);
+
+	// Send
+	WebSocket->Send(MessageString);
+}
+
+void FStoryFlowWebSocketClient::RequestSync()
+{
+	SendMessage(TEXT("request-sync"));
+}
+
+void FStoryFlowWebSocketClient::SendPing()
+{
+	SendMessage(TEXT("ping"));
+}
+
+void FStoryFlowWebSocketClient::HandleConnected()
+{
+	UE_LOG(LogTemp, Log, TEXT("StoryFlow: Connected to editor"));
+
+	bIsConnected = true;
+	ReconnectAttempts = 0;
+
+	// Send handshake
+	SendHandshake();
+
+	// Broadcast connection state
+	OnConnectionStateChanged.Broadcast(true);
+}
+
+void FStoryFlowWebSocketClient::HandleConnectionError(const FString& Error)
+{
+	UE_LOG(LogTemp, Warning, TEXT("StoryFlow: Connection error: %s"), *Error);
+
+	bIsConnected = false;
+	OnConnectionStateChanged.Broadcast(false);
+
+	// Notify that manual reconnection may be needed
+	if (ReconnectAttempts < MaxReconnectAttempts && !LastURL.IsEmpty())
+	{
+		ReconnectAttempts++;
+		UE_LOG(LogTemp, Log, TEXT("StoryFlow: Connection lost (attempt %d/%d). Use Connect() to reconnect."),
+			   ReconnectAttempts, MaxReconnectAttempts);
+	}
+}
+
+void FStoryFlowWebSocketClient::HandleClosed(int32 StatusCode, const FString& Reason, bool bWasClean)
+{
+	UE_LOG(LogTemp, Log, TEXT("StoryFlow: Connection closed (code: %d, reason: %s, clean: %s)"),
+		   StatusCode, *Reason, bWasClean ? TEXT("yes") : TEXT("no"));
+
+	bIsConnected = false;
+	OnConnectionStateChanged.Broadcast(false);
+}
+
+void FStoryFlowWebSocketClient::HandleMessage(const FString& Message)
+{
+	// Parse JSON
+	TSharedPtr<FJsonObject> JsonObject;
+	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Message);
+
+	if (!FJsonSerializer::Deserialize(Reader, JsonObject) || !JsonObject.IsValid())
+	{
+		UE_LOG(LogTemp, Warning, TEXT("StoryFlow: Failed to parse message: %s"), *Message);
+		return;
+	}
+
+	// Extract type and payload
+	FString Type = JsonObject->GetStringField(TEXT("type"));
+	TSharedPtr<FJsonObject> Payload;
+
+	if (JsonObject->HasField(TEXT("payload")))
+	{
+		Payload = JsonObject->GetObjectField(TEXT("payload"));
+	}
+
+	// Handle pong
+	if (Type == TEXT("pong"))
+	{
+		// Keep-alive response, ignore
+		return;
+	}
+
+	// Broadcast message
+	OnMessageReceived.Broadcast(Type, Payload);
+}
+
+void FStoryFlowWebSocketClient::SendHandshake()
+{
+	TSharedPtr<FJsonObject> Payload = MakeShared<FJsonObject>();
+	Payload->SetStringField(TEXT("engine"), TEXT("unreal"));
+	Payload->SetStringField(TEXT("version"), TEXT("5.3.2"));
+	Payload->SetStringField(TEXT("pluginVersion"), TEXT("1.0.0"));
+
+	SendMessage(TEXT("connect"), Payload);
+}

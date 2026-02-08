@@ -1,0 +1,79 @@
+// Copyright 2026 StoryFlow. All Rights Reserved.
+
+#pragma once
+
+#include "CoreMinimal.h"
+#include "Engine/DataAsset.h"
+#include "Data/StoryFlowTypes.h"
+#include "StoryFlowScriptAsset.generated.h"
+
+/**
+ * DataAsset containing a single StoryFlow script
+ */
+UCLASS(BlueprintType)
+class STORYFLOWRUNTIME_API UStoryFlowScriptAsset : public UDataAsset
+{
+	GENERATED_BODY()
+
+public:
+	/** Entry point node ID (always "0") */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	FString StartNode = TEXT("0");
+
+	/** Nodes keyed by ID for O(1) lookup */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	TMap<FString, FStoryFlowNode> Nodes;
+
+	/** Edge connections */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	TArray<FStoryFlowConnection> Connections;
+
+	/** Variables keyed by generated hash ID */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	TMap<FString, FStoryFlowVariable> Variables;
+
+	/** Flattened string table: "en.key" -> "value" */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	TMap<FString, FString> Strings;
+
+	/** Asset registry keyed by asset ID */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	TMap<FString, FStoryFlowAsset> Assets;
+
+	/** Resolved Unreal asset references */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	TMap<FString, TSoftObjectPtr<UObject>> ResolvedAssets;
+
+	/** Original script path (relative to project) */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	FString ScriptPath;
+
+public:
+	/** Get a node by ID */
+	UFUNCTION(BlueprintPure, Category = "StoryFlow")
+	FStoryFlowNode GetNode(const FString& NodeId) const;
+
+	/** Check if node exists */
+	UFUNCTION(BlueprintPure, Category = "StoryFlow")
+	bool HasNode(const FString& NodeId) const;
+
+	/** Get a localized string by key */
+	UFUNCTION(BlueprintPure, Category = "StoryFlow")
+	FString GetString(const FString& Key, const FString& LanguageCode = TEXT("en")) const;
+
+	/** Get a variable by ID */
+	UFUNCTION(BlueprintPure, Category = "StoryFlow")
+	FStoryFlowVariable GetVariable(const FString& VariableId) const;
+
+	/** Find edge by source handle */
+	const FStoryFlowConnection* FindEdgeBySourceHandle(const FString& SourceHandle) const;
+
+	/** Find edge by source node ID */
+	const FStoryFlowConnection* FindEdgeBySource(const FString& SourceNodeId) const;
+
+	/** Find input edge to a node */
+	const FStoryFlowConnection* FindInputEdge(const FString& NodeId, const FString& HandleSuffix) const;
+
+	/** Get all edges from a source node */
+	TArray<const FStoryFlowConnection*> GetEdgesFromSource(const FString& SourceNodeId) const;
+};
