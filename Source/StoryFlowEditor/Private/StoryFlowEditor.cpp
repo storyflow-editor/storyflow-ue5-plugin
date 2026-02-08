@@ -3,11 +3,7 @@
 #include "StoryFlowEditor.h"
 #include "StoryFlowRuntime.h"
 #include "StoryFlowEditorSettings.h"
-#include "Import/StoryFlowImporter.h"
-#include "Data/StoryFlowProjectAsset.h"
-#include "Data/StoryFlowScriptAsset.h"
 #include "Subsystems/StoryFlowEditorSubsystem.h"
-#include "HAL/IConsoleManager.h"
 #include "ToolMenus.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
@@ -34,55 +30,9 @@
 #define STORYFLOW_URL_CHANGELOG "https://storyflow-editor.com/changelog"
 #define STORYFLOW_URL_DISCORD "https://discord.com/invite/3mp5vyKRtN"
 
-// Console command to import a StoryFlow project
-static FAutoConsoleCommand ImportProjectCmd(
-	TEXT("StoryFlow.Import"),
-	TEXT("Import a StoryFlow project. Usage: StoryFlow.Import <BuildDirectory> [ContentPath]. Default content path is /Game/StoryFlow for auto-detection."),
-	FConsoleCommandWithArgsDelegate::CreateLambda([](const TArray<FString>& Args)
-	{
-		if (Args.Num() < 1)
-		{
-			UE_LOG(LogStoryFlow, Warning, TEXT("Usage: StoryFlow.Import <BuildDirectory> [ContentPath]"));
-			UE_LOG(LogStoryFlow, Warning, TEXT("Example: StoryFlow.Import C:/MyProject/build"));
-			UE_LOG(LogStoryFlow, Warning, TEXT("Default ContentPath is /Game/StoryFlow (auto-detected by subsystem)"));
-			return;
-		}
-
-		FString BuildDirectory = Args[0];
-		// Default to /Game/StoryFlow so the subsystem auto-detects it
-		FString ContentPath = Args.Num() > 1 ? Args[1] : TEXT("/Game/StoryFlow");
-
-		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Importing from %s to %s"), *BuildDirectory, *ContentPath);
-
-		UStoryFlowProjectAsset* Project = UStoryFlowImporter::ImportProject(BuildDirectory, ContentPath);
-
-		if (Project)
-		{
-			UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Import successful! Project: %s"), *Project->GetPathName());
-			UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Scripts imported: %d"), Project->Scripts.Num());
-		}
-		else
-		{
-			UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Import failed!"));
-		}
-	})
-);
-
-// Console command to test if plugin is loaded
-static FAutoConsoleCommand TestCmd(
-	TEXT("StoryFlow.Test"),
-	TEXT("Test if StoryFlow plugin is loaded"),
-	FConsoleCommandDelegate::CreateLambda([]()
-	{
-		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Plugin is loaded and working!"));
-	})
-);
-
 void FStoryFlowEditorModule::StartupModule()
 {
 	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Editor module loaded"));
-	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Use 'StoryFlow.Test' to verify plugin"));
-	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Use 'StoryFlow.Import <path>' to import a project"));
 
 	// Create and register the style set
 	StyleSet = MakeShareable(new FSlateStyleSet(STORYFLOW_STYLE_NAME));
