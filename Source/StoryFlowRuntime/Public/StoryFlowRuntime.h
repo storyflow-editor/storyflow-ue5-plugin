@@ -7,6 +7,14 @@
 
 STORYFLOWRUNTIME_API DECLARE_LOG_CATEGORY_EXTERN(LogStoryFlow, Log, All);
 
+/** Normalize a script path by stripping the .json extension if present */
+inline FString NormalizeScriptPath(const FString& Path)
+{
+	FString Result = Path;
+	Result.RemoveFromEnd(TEXT(".json"));
+	return Result;
+}
+
 class FStoryFlowRuntimeModule : public IModuleInterface
 {
 public:

@@ -79,7 +79,7 @@ public:
 	 * @return The imported script asset
 	 */
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow")
-	UStoryFlowScriptAsset* ImportScript(const FString& JsonPath, const FString& InContentPath = TEXT("/Game/StoryFlow/Scripts"));
+	UStoryFlowScriptAsset* ImportScript(const FString& JsonPath, const FString& InContentPath = TEXT("/Game/StoryFlow/Data"));
 
 	// ========================================================================
 	// Configuration

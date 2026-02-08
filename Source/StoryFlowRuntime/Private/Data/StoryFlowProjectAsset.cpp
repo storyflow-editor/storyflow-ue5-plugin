@@ -2,6 +2,7 @@
 
 #include "Data/StoryFlowProjectAsset.h"
 #include "Data/StoryFlowScriptAsset.h"
+#include "StoryFlowRuntime.h"
 
 UStoryFlowScriptAsset* UStoryFlowProjectAsset::GetStartupScriptAsset() const
 {
@@ -10,17 +11,13 @@ UStoryFlowScriptAsset* UStoryFlowProjectAsset::GetStartupScriptAsset() const
 		return nullptr;
 	}
 
-	if (UStoryFlowScriptAsset* const* Script = Scripts.Find(StartupScript))
-	{
-		return *Script;
-	}
-
-	return nullptr;
+	return GetScriptByPath(StartupScript);
 }
 
 UStoryFlowScriptAsset* UStoryFlowProjectAsset::GetScriptByPath(const FString& ScriptPath) const
 {
-	if (UStoryFlowScriptAsset* const* Script = Scripts.Find(ScriptPath))
+	FString NormalizedPath = NormalizeScriptPath(ScriptPath);
+	if (UStoryFlowScriptAsset* const* Script = Scripts.Find(NormalizedPath))
 	{
 		return *Script;
 	}

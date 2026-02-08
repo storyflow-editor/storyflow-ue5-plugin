@@ -60,7 +60,7 @@ UStoryFlowScriptAsset* UStoryFlowImporter::ImportScript(const FString& JsonPath,
 		return nullptr;
 	}
 
-	FString ScriptPath = FPaths::GetCleanFilename(JsonPath);
+	FString ScriptPath = FPaths::GetBaseFilename(JsonPath);
 	return ImportScriptFromJson(ScriptJson, ScriptPath, ContentPath);
 }
 
@@ -84,7 +84,7 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 	}
 	if (JsonObject->HasField(TEXT("startupScript")))
 	{
-		ProjectAsset->StartupScript = JsonObject->GetStringField(TEXT("startupScript"));
+		ProjectAsset->StartupScript = NormalizeScriptPath(JsonObject->GetStringField(TEXT("startupScript")));
 	}
 
 	// Parse metadata
@@ -110,9 +110,6 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 			}
 		}
 	}
-
-	// Media content path for imported assets
-	FString MediaContentPath = FPaths::Combine(ContentPath, TEXT("Media"));
 
 	// Load characters
 	FString CharactersPath = FPaths::Combine(BuildDirectory, TEXT("characters.json"));
@@ -144,7 +141,7 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 				UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Importing %d character assets"), CharacterAssets.Num());
 
 				// Import the media files and store in project's resolved assets
-				ImportMediaAssets(BuildDirectory, MediaContentPath, CharacterAssets, ProjectAsset->ResolvedAssets);
+				ImportMediaAssets(BuildDirectory, ContentPath, CharacterAssets, ProjectAsset->ResolvedAssets);
 			}
 		}
 	}
@@ -165,20 +162,21 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 			continue;
 		}
 
-		// Calculate relative path
+		// Calculate relative path without .json extension
 		FString RelativePath = ScriptFile;
 		FPaths::MakePathRelativeTo(RelativePath, *(BuildDirectory + TEXT("/")));
+		RelativePath = NormalizeScriptPath(RelativePath);
 
 		// Import script
 		TSharedPtr<FJsonObject> ScriptJson = LoadJsonFile(ScriptFile);
 		if (ScriptJson.IsValid())
 		{
-			FString ScriptContentPath = FPaths::Combine(ContentPath, TEXT("Scripts"));
+			FString ScriptContentPath = FPaths::Combine(ContentPath, TEXT("Data"));
 			UStoryFlowScriptAsset* ScriptAsset = ImportScriptFromJson(ScriptJson, RelativePath, ScriptContentPath);
 			if (ScriptAsset)
 			{
 				// Import media assets referenced by this script
-				ImportMediaAssets(BuildDirectory, MediaContentPath, ScriptAsset->Assets, ScriptAsset->ResolvedAssets);
+				ImportMediaAssets(BuildDirectory, ContentPath, ScriptAsset->Assets, ScriptAsset->ResolvedAssets);
 
 				// Re-save script with resolved asset references
 				SavePackageSafe(ScriptAsset->GetOutermost(), ScriptAsset);
@@ -201,9 +199,13 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 
 UStoryFlowScriptAsset* UStoryFlowImporter::ImportScriptFromJson(const TSharedPtr<FJsonObject>& JsonObject, const FString& ScriptPath, const FString& ContentPath)
 {
-	// Create script asset
-	FString AssetName = NormalizePathForAssetName(ScriptPath);
-	UStoryFlowScriptAsset* ScriptAsset = CreateScriptAsset(ContentPath, AssetName);
+	// Create script asset — mirror subfolder structure under ContentPath
+	// "chapters/intro.json" with ContentPath "/Game/StoryFlow/Data"
+	//   → AssetName "intro", FullContentPath "/Game/StoryFlow/Data/chapters"
+	FString AssetName = FPaths::GetBaseFilename(ScriptPath);
+	FString SubDir = FPaths::GetPath(ScriptPath);
+	FString FullContentPath = SubDir.IsEmpty() ? ContentPath : FPaths::Combine(ContentPath, SubDir);
+	UStoryFlowScriptAsset* ScriptAsset = CreateScriptAsset(FullContentPath, AssetName);
 	if (!ScriptAsset)
 	{
 		return nullptr;
@@ -385,7 +387,7 @@ FStoryFlowNodeData UStoryFlowImporter::ParseNodeData(const TSharedPtr<FJsonObjec
 	// Script execution
 	if (NodeObject->HasField(TEXT("script")))
 	{
-		Data.Script = NodeObject->GetStringField(TEXT("script"));
+		Data.Script = NormalizeScriptPath(NodeObject->GetStringField(TEXT("script")));
 	}
 	if (NodeObject->HasField(TEXT("flowId")))
 	{
@@ -816,18 +818,6 @@ UStoryFlowScriptAsset* UStoryFlowImporter::CreateScriptAsset(const FString& Cont
 	return CreateAssetInternal<UStoryFlowScriptAsset>(ContentPath, AssetName);
 }
 
-FString UStoryFlowImporter::NormalizePathForAssetName(const FString& Path)
-{
-	// Convert path to valid asset name
-	// "chapters/intro.json" -> "SF_chapters_intro"
-	FString Result = TEXT("SF_") + Path;
-	Result = Result.Replace(TEXT("/"), TEXT("_"));
-	Result = Result.Replace(TEXT("\\"), TEXT("_"));
-	Result = Result.Replace(TEXT(".json"), TEXT(""));
-	Result = Result.Replace(TEXT(" "), TEXT("_"));
-	return Result;
-}
-
 TSharedPtr<FJsonObject> UStoryFlowImporter::LoadJsonFile(const FString& FilePath)
 {
 	FString JsonString;
@@ -866,9 +856,24 @@ void UStoryFlowImporter::ImportMediaAssets(
 		const FStoryFlowAsset& Asset = AssetPair.Value;
 		FString SourcePath = FPaths::Combine(BuildDirectory, Asset.Path);
 
+		// Compute type-specific target directory
+		FString TypeDirectory;
+		switch (Asset.Type)
+		{
+		case EStoryFlowAssetType::Image:
+			TypeDirectory = FPaths::Combine(ContentPath, TEXT("Textures"));
+			break;
+		case EStoryFlowAssetType::Audio:
+			TypeDirectory = FPaths::Combine(ContentPath, TEXT("Audio"));
+			break;
+		default:
+			TypeDirectory = ContentPath;
+			break;
+		}
+
 		// Normalize the path - convert forward slashes and remove extension
 		FString AssetName = NormalizeAssetPath(Asset.Path);
-		FString PackagePath = FPaths::Combine(ContentPath, AssetName);
+		FString PackagePath = FPaths::Combine(TypeDirectory, AssetName);
 
 		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Processing asset %s (type: %d) from %s"),
 			*Asset.Id, static_cast<int32>(Asset.Type), *SourcePath);
@@ -904,11 +909,11 @@ void UStoryFlowImporter::ImportMediaAssets(
 		switch (Asset.Type)
 		{
 		case EStoryFlowAssetType::Image:
-			ImportedAsset = ImportImageAsset(SourcePath, ContentPath, AssetName);
+			ImportedAsset = ImportImageAsset(SourcePath, TypeDirectory, AssetName);
 			break;
 
 		case EStoryFlowAssetType::Audio:
-			ImportedAsset = ImportAudioAsset(SourcePath, ContentPath, AssetName);
+			ImportedAsset = ImportAudioAsset(SourcePath, TypeDirectory, AssetName);
 			break;
 
 		case EStoryFlowAssetType::Video:

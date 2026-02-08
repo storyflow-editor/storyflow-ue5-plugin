@@ -109,9 +109,6 @@ private:
 	/** Create a new script asset */
 	static UStoryFlowScriptAsset* CreateScriptAsset(const FString& ContentPath, const FString& AssetName);
 
-	/** Normalize a script path for use as asset name */
-	static FString NormalizePathForAssetName(const FString& Path);
-
 	// === File Helpers ===
 
 	/** Load and parse a JSON file */
@@ -123,7 +120,7 @@ private:
 	 * Import media assets from the build directory into Unreal content
 	 *
 	 * @param BuildDirectory Source directory containing exported media files
-	 * @param ContentPath Target Unreal content path for imported assets
+	 * @param ContentPath Base Unreal content path (type-specific subdirectories Textures/Audio are created automatically)
 	 * @param Assets Map of asset metadata to process
 	 * @param OutResolvedAssets Output map of imported asset references
 	 */
