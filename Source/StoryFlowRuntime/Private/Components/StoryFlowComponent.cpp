@@ -237,6 +237,47 @@ void UStoryFlowComponent::SelectOption(const FString& OptionId)
 	}
 }
 
+void UStoryFlowComponent::AdvanceDialogue()
+{
+	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: AdvanceDialogue() called"));
+
+	if (!ExecutionContext.bIsExecuting || !ExecutionContext.bIsWaitingForInput)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: AdvanceDialogue ignored - not in valid state"));
+		return;
+	}
+
+	FStoryFlowNode* CurrentNode = ExecutionContext.GetNode(ExecutionContext.CurrentDialogueState.NodeId);
+	if (!CurrentNode || CurrentNode->Type != EStoryFlowNodeType::Dialogue)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: AdvanceDialogue ignored - current node is not a dialogue"));
+		return;
+	}
+
+	if (CurrentNode->Data.Options.Num() > 0)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: AdvanceDialogue ignored - dialogue has %d defined options (use SelectOption instead)"), CurrentNode->Data.Options.Num());
+		return;
+	}
+
+	const FString HeaderHandle = FString::Printf(TEXT("source-%s-"), *ExecutionContext.CurrentDialogueState.NodeId);
+
+	if (!ExecutionContext.FindEdgeBySourceHandle(HeaderHandle))
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: AdvanceDialogue - no outgoing edge for handle '%s' (terminal dialogue)"), *HeaderHandle);
+		return;
+	}
+
+	ExecutionContext.bIsWaitingForInput = false;
+
+	if (Evaluator)
+	{
+		Evaluator->ClearCache();
+	}
+
+	ProcessNextNode(HeaderHandle);
+}
+
 void UStoryFlowComponent::StopDialogue()
 {
 	if (!ExecutionContext.bIsExecuting)
@@ -1756,6 +1797,13 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 		Option.Text = ExecutionContext.InterpolateVariables(ExecutionContext.GetString(Choice.Text, LanguageCode));
 
 		State.Options.Add(Option);
+	}
+
+	// Can advance: node defines ZERO options AND header output handle has an edge
+	if (DialogueNode->Data.Options.Num() == 0)
+	{
+		const FString HeaderHandle = FString::Printf(TEXT("source-%s-"), *DialogueNode->Id);
+		State.bCanAdvance = (ExecutionContext.FindEdgeBySourceHandle(HeaderHandle) != nullptr);
 	}
 
 	return State;

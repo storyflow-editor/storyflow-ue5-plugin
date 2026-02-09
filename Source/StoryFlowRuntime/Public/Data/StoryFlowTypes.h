@@ -940,6 +940,10 @@ struct STORYFLOWRUNTIME_API FStoryFlowDialogueState
 	/** Is this state valid/active */
 	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
 	bool bIsValid = false;
+
+	/** True when dialogue can be advanced without options (narrative-only with connected output) */
+	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	bool bCanAdvance = false;
 };
 
 // ============================================================================

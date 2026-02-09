@@ -143,6 +143,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow")
 	void SelectOption(const FString& OptionId);
 
+	/** Advance a narrative-only dialogue (no options defined). Uses the header output edge. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow")
+	void AdvanceDialogue();
+
 	/** Stop dialogue execution */
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow")
 	void StopDialogue();

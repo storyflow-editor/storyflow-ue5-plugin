@@ -125,6 +125,14 @@ void UStoryFlowDialogueWidget::SelectOption(const FString& OptionId)
 	}
 }
 
+void UStoryFlowDialogueWidget::AdvanceDialogue()
+{
+	if (StoryFlowComponent)
+	{
+		StoryFlowComponent->AdvanceDialogue();
+	}
+}
+
 FStoryFlowDialogueState UStoryFlowDialogueWidget::GetCurrentDialogueState() const
 {
 	if (StoryFlowComponent)

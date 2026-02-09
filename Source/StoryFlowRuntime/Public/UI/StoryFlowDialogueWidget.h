@@ -83,6 +83,12 @@ public:
 	void SelectOption(const FString& OptionId);
 
 	/**
+	 * Advance a narrative-only dialogue (no options defined)
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow")
+	void AdvanceDialogue();
+
+	/**
 	 * Get the current dialogue state
 	 */
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")
