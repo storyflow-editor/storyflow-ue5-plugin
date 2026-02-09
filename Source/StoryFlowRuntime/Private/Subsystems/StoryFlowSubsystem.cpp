@@ -4,6 +4,7 @@
 #include "StoryFlowRuntime.h"
 #include "Data/StoryFlowProjectAsset.h"
 #include "Data/StoryFlowScriptAsset.h"
+#include "Data/StoryFlowCharacterAsset.h"
 #include "Engine/AssetManager.h"
 
 const FString UStoryFlowSubsystem::DefaultProjectPath = TEXT("/Game/StoryFlow/SF_Project");
@@ -35,9 +36,10 @@ void UStoryFlowSubsystem::SetProject(UStoryFlowProjectAsset* NewProject)
 	{
 		// Initialize global variables from project
 		GlobalVariables = ProjectAsset->GlobalVariables;
+		ResolveStringVariableValues(GlobalVariables);
 
-		// Initialize runtime characters from project (mutable copies)
-		RuntimeCharacters = ProjectAsset->Characters;
+		// Initialize runtime characters from character assets (mutable copies)
+		ResetRuntimeCharacters();
 
 		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Project set: %s (%d scripts, %d global variables, %d characters)"),
 			*ProjectAsset->GetName(),
@@ -90,6 +92,7 @@ void UStoryFlowSubsystem::ResetGlobalVariables()
 	if (ProjectAsset)
 	{
 		GlobalVariables = ProjectAsset->GlobalVariables;
+		ResolveStringVariableValues(GlobalVariables);
 		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Global variables reset to defaults"));
 	}
 }
@@ -98,8 +101,54 @@ void UStoryFlowSubsystem::ResetRuntimeCharacters()
 {
 	if (ProjectAsset)
 	{
-		RuntimeCharacters = ProjectAsset->Characters;
+		RuntimeCharacters.Empty();
+		for (const auto& CharPair : ProjectAsset->Characters)
+		{
+			if (CharPair.Value)
+			{
+				FStoryFlowCharacterDef CharDef;
+				CharDef.Name = CharPair.Value->Name;
+				CharDef.Image = CharPair.Value->Image;
+				CharDef.Variables = CharPair.Value->Variables;
+				ResolveStringVariableValues(CharDef.Variables);
+				RuntimeCharacters.Add(CharPair.Key, CharDef);
+			}
+		}
 		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Runtime characters reset to defaults"));
+	}
+}
+
+void UStoryFlowSubsystem::ResolveStringVariableValues(TMap<FString, FStoryFlowVariable>& Variables)
+{
+	if (!ProjectAsset)
+	{
+		return;
+	}
+
+	for (auto& VarPair : Variables)
+	{
+		if (VarPair.Value.Type == EStoryFlowVariableType::String)
+		{
+			if (VarPair.Value.bIsArray)
+			{
+				for (auto& Element : VarPair.Value.Value.GetArrayMutable())
+				{
+					FString Key = Element.GetString();
+					if (!Key.IsEmpty())
+					{
+						Element.SetString(ProjectAsset->GetGlobalString(Key));
+					}
+				}
+			}
+			else
+			{
+				FString Key = VarPair.Value.Value.GetString();
+				if (!Key.IsEmpty())
+				{
+					VarPair.Value.Value.SetString(ProjectAsset->GetGlobalString(Key));
+				}
+			}
+		}
 	}
 }
 

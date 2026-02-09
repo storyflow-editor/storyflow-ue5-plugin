@@ -4,6 +4,7 @@
 #include "StoryFlowRuntime.h"
 #include "Data/StoryFlowProjectAsset.h"
 #include "Data/StoryFlowScriptAsset.h"
+#include "Data/StoryFlowCharacterAsset.h"
 #include "Misc/FileHelper.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -118,10 +119,6 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 		TSharedPtr<FJsonObject> CharactersJson = LoadJsonFile(CharactersPath);
 		if (CharactersJson.IsValid())
 		{
-			if (CharactersJson->HasField(TEXT("characters")))
-			{
-				ParseCharacters(CharactersJson->GetObjectField(TEXT("characters")), ProjectAsset->Characters);
-			}
 			// Merge character strings into global strings
 			if (CharactersJson->HasField(TEXT("strings")))
 			{
@@ -132,16 +129,72 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 					ProjectAsset->GlobalStrings.Add(Pair.Key, Pair.Value);
 				}
 			}
-			// Import character assets (images, etc.)
+
+			// Parse character asset metadata (images, etc.) for import
+			TMap<FString, FStoryFlowAsset> CharacterMediaAssets;
 			if (CharactersJson->HasField(TEXT("assets")))
 			{
-				TMap<FString, FStoryFlowAsset> CharacterAssets;
-				ParseAssets(CharactersJson->GetObjectField(TEXT("assets")), CharacterAssets);
+				ParseAssets(CharactersJson->GetObjectField(TEXT("assets")), CharacterMediaAssets);
+			}
 
-				UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Importing %d character assets"), CharacterAssets.Num());
+			// Create per-character DataAssets
+			if (CharactersJson->HasField(TEXT("characters")))
+			{
+				TSharedPtr<FJsonObject> CharactersObject = CharactersJson->GetObjectField(TEXT("characters"));
+				FString CharacterContentPath = FPaths::Combine(ContentPath, TEXT("Characters"));
 
-				// Import the media files and store in project's resolved assets
-				ImportMediaAssets(BuildDirectory, ContentPath, CharacterAssets, ProjectAsset->ResolvedAssets);
+				for (const auto& CharPair : CharactersObject->Values)
+				{
+					FString CharPath = CharPair.Key;
+					TSharedPtr<FJsonObject> CharObject = CharPair.Value->AsObject();
+					if (!CharObject.IsValid())
+					{
+						continue;
+					}
+
+					// Normalize path for consistent lookup
+					FString NormalizedPath = CharPath.ToLower().Replace(TEXT("/"), TEXT("\\"));
+
+					// Create a safe asset name from the character path
+					FString AssetName = NormalizeAssetPath(CharPath);
+
+					UStoryFlowCharacterAsset* CharAsset = CreateCharacterAsset(CharacterContentPath, AssetName);
+					if (!CharAsset)
+					{
+						continue;
+					}
+
+					CharAsset->CharacterPath = NormalizedPath;
+
+					if (CharObject->HasField(TEXT("name")))
+					{
+						CharAsset->Name = CharObject->GetStringField(TEXT("name"));
+					}
+					if (CharObject->HasField(TEXT("image")))
+					{
+						CharAsset->Image = CharObject->GetStringField(TEXT("image"));
+					}
+					if (CharObject->HasField(TEXT("variables")))
+					{
+						ParseVariables(CharObject->GetObjectField(TEXT("variables")), CharAsset->Variables);
+					}
+
+					// Import media into shared top-level directories (e.g. /Game/StoryFlow/Textures/)
+					// so the same image used by both a character and a script won't be duplicated.
+					// The resolved reference is stored in the character asset's own ResolvedAssets.
+					if (!CharAsset->Image.IsEmpty() && CharacterMediaAssets.Contains(CharAsset->Image))
+					{
+						TMap<FString, FStoryFlowAsset> ThisCharMedia;
+						ThisCharMedia.Add(CharAsset->Image, CharacterMediaAssets[CharAsset->Image]);
+						ImportMediaAssets(BuildDirectory, ContentPath, ThisCharMedia, CharAsset->ResolvedAssets);
+					}
+
+					// Save the character asset
+					SavePackageSafe(CharAsset->GetOutermost(), CharAsset);
+
+					ProjectAsset->Characters.Add(NormalizedPath, CharAsset);
+					UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Created character asset '%s' at %s"), *CharPath, *CharAsset->GetPathName());
+				}
 			}
 		}
 	}
@@ -647,38 +700,6 @@ void UStoryFlowImporter::ParseChoices(const TArray<TSharedPtr<FJsonValue>>& Choi
 	}
 }
 
-void UStoryFlowImporter::ParseCharacters(const TSharedPtr<FJsonObject>& CharactersObject, TMap<FString, FStoryFlowCharacterDef>& OutCharacters)
-{
-	for (const auto& CharPair : CharactersObject->Values)
-	{
-		FString CharPath = CharPair.Key;
-		TSharedPtr<FJsonObject> CharObject = CharPair.Value->AsObject();
-
-		if (CharObject.IsValid())
-		{
-			FStoryFlowCharacterDef Character;
-
-			if (CharObject->HasField(TEXT("name")))
-			{
-				Character.Name = CharObject->GetStringField(TEXT("name"));
-			}
-			if (CharObject->HasField(TEXT("image")))
-			{
-				Character.Image = CharObject->GetStringField(TEXT("image"));
-			}
-			if (CharObject->HasField(TEXT("variables")))
-			{
-				ParseVariables(CharObject->GetObjectField(TEXT("variables")), Character.Variables);
-			}
-
-			// Normalize path for consistent lookup (lowercase + backslashes)
-			// Must match the normalization in FStoryFlowExecutionContext::FindCharacter
-			FString NormalizedPath = CharPath.ToLower().Replace(TEXT("/"), TEXT("\\"));
-			OutCharacters.Add(NormalizedPath, Character);
-		}
-	}
-}
-
 FStoryFlowVariant UStoryFlowImporter::ParseVariant(const TSharedPtr<FJsonValue>& Value, EStoryFlowVariableType ExpectedType)
 {
 	FStoryFlowVariant Variant;
@@ -816,6 +837,11 @@ UStoryFlowProjectAsset* UStoryFlowImporter::CreateProjectAsset(const FString& Co
 UStoryFlowScriptAsset* UStoryFlowImporter::CreateScriptAsset(const FString& ContentPath, const FString& AssetName)
 {
 	return CreateAssetInternal<UStoryFlowScriptAsset>(ContentPath, AssetName);
+}
+
+UStoryFlowCharacterAsset* UStoryFlowImporter::CreateCharacterAsset(const FString& ContentPath, const FString& AssetName)
+{
+	return CreateAssetInternal<UStoryFlowCharacterAsset>(ContentPath, AssetName);
 }
 
 TSharedPtr<FJsonObject> UStoryFlowImporter::LoadJsonFile(const FString& FilePath)

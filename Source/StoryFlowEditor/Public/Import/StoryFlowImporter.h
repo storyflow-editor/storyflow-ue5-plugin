@@ -9,6 +9,7 @@
 
 class UStoryFlowProjectAsset;
 class UStoryFlowScriptAsset;
+class UStoryFlowCharacterAsset;
 
 /**
  * JSON importer for StoryFlow project and script files
@@ -92,9 +93,6 @@ private:
 	/** Parse choices from JSON array (button options) */
 	static void ParseChoices(const TArray<TSharedPtr<FJsonValue>>& ChoicesArray, TArray<FStoryFlowChoice>& OutOptions);
 
-	/** Parse characters from JSON object */
-	static void ParseCharacters(const TSharedPtr<FJsonObject>& CharactersObject, TMap<FString, FStoryFlowCharacterDef>& OutCharacters);
-
 	/** Parse a variant value from JSON */
 	static FStoryFlowVariant ParseVariant(const TSharedPtr<FJsonValue>& Value, EStoryFlowVariableType ExpectedType = EStoryFlowVariableType::None);
 
@@ -108,6 +106,9 @@ private:
 
 	/** Create a new script asset */
 	static UStoryFlowScriptAsset* CreateScriptAsset(const FString& ContentPath, const FString& AssetName);
+
+	/** Create a new character asset */
+	static UStoryFlowCharacterAsset* CreateCharacterAsset(const FString& ContentPath, const FString& AssetName);
 
 	// === File Helpers ===
 

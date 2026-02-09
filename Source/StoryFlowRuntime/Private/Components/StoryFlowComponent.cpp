@@ -4,6 +4,7 @@
 #include "StoryFlowRuntime.h"
 #include "Data/StoryFlowProjectAsset.h"
 #include "Data/StoryFlowScriptAsset.h"
+#include "Data/StoryFlowCharacterAsset.h"
 #include "Evaluation/StoryFlowEvaluator.h"
 #include "Subsystems/StoryFlowSubsystem.h"
 #include "Engine/GameInstance.h"
@@ -428,6 +429,17 @@ void UStoryFlowComponent::SetEnumVariable(const FString& VariableId, const FStri
 	NewValue.SetEnum(Value);
 	ExecutionContext.SetVariable(VariableId, NewValue, bGlobal);
 	NotifyVariableChanged(VariableId, NewValue, bGlobal);
+}
+
+FStoryFlowVariant UStoryFlowComponent::GetCharacterVariable(const FString& CharacterPath, const FString& VariableName)
+{
+	return ExecutionContext.GetCharacterVariableValue(CharacterPath, VariableName);
+}
+
+void UStoryFlowComponent::SetCharacterVariable(const FString& CharacterPath, const FString& VariableName, const FStoryFlowVariant& Value)
+{
+	ExecutionContext.SetCharacterVariable(CharacterPath, VariableName, Value);
+	NotifyVariableChanged(CharacterPath + TEXT(".") + VariableName, Value, false);
 }
 
 // ============================================================================
@@ -1052,7 +1064,8 @@ void UStoryFlowComponent::HandleSetString(FStoryFlowNode* Node)
 	FString NewValue;
 	if (Evaluator)
 	{
-		NewValue = Evaluator->EvaluateStringInput(Node, TEXT("string"), Node->Data.Value.GetString());
+		FString ResolvedFallback = ExecutionContext.GetString(Node->Data.Value.GetString(), LanguageCode);
+		NewValue = Evaluator->EvaluateStringInput(Node, TEXT("string"), ResolvedFallback);
 	}
 
 	FStoryFlowVariant Value;
@@ -1138,6 +1151,12 @@ void UStoryFlowComponent::HandleArraySet(FStoryFlowNode* Node)
 			case EStoryFlowNodeType::SetFloatArrayElement:
 				Arr[Index].SetFloat(Evaluator->EvaluateFloatInput(Node, TEXT("float"), Node->Data.Value.GetFloat(0.0f)));
 				break;
+			case EStoryFlowNodeType::SetStringArrayElement:
+			{
+				FString ResolvedFallback = ExecutionContext.GetString(Node->Data.Value.GetString(), LanguageCode);
+				Arr[Index].SetString(Evaluator->EvaluateStringInput(Node, TEXT("string"), ResolvedFallback));
+				break;
+			}
 			default:
 				Arr[Index].SetString(Evaluator->EvaluateStringInput(Node, TEXT("string"), Node->Data.Value.GetString()));
 				break;
@@ -1220,6 +1239,13 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 		break;
 	}
 	case EStoryFlowNodeType::AddToStringArray:
+	{
+		FStoryFlowVariant Elem;
+		FString ResolvedFallback = ExecutionContext.GetString(Node->Data.Value.GetString(), LanguageCode);
+		Elem.SetString(Evaluator ? Evaluator->EvaluateStringInput(Node, TEXT("string"), ResolvedFallback) : ResolvedFallback);
+		Arr.Add(Elem);
+		break;
+	}
 	case EStoryFlowNodeType::AddToImageArray:
 	case EStoryFlowNodeType::AddToCharacterArray:
 	case EStoryFlowNodeType::AddToAudioArray:
@@ -1507,7 +1533,7 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 	{
 		for (const FStoryFlowConnection& Conn : CurrentScript->Connections)
 		{
-			if (Conn.TargetHandle.Contains(CharacterInputHandle))
+			if (Conn.TargetHandle == CharacterInputHandle)
 			{
 				CharEdge = &Conn;
 				break;
@@ -1617,15 +1643,20 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 			State.Character.Name = ExecutionContext.GetString(CharDef->Name, LanguageCode);
 			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: BuildDialogueState - Resolved Name='%s'"), *State.Character.Name);
 
-			// Load character image if specified (character assets are stored in Project->ResolvedAssets)
+			// Load character image from the character's own DataAsset
 			if (!CharDef->Image.IsEmpty())
 			{
+				// Normalize path to match the key used in Project->Characters
+				FString NormalizedCharPath = DialogueNode->Data.Character.ToLower().Replace(TEXT("/"), TEXT("\\"));
 				UStoryFlowProjectAsset* Project = ExecutionContext.Project.Get();
 				if (Project)
 				{
-					if (TSoftObjectPtr<UObject>* CharImagePtr = Project->ResolvedAssets.Find(CharDef->Image))
+					if (UStoryFlowCharacterAsset* const* CharAsset = Project->Characters.Find(NormalizedCharPath))
 					{
-						State.Character.Image = Cast<UTexture2D>(CharImagePtr->LoadSynchronous());
+						if (TSoftObjectPtr<UObject>* CharImagePtr = (*CharAsset)->ResolvedAssets.Find(CharDef->Image))
+						{
+							State.Character.Image = Cast<UTexture2D>(CharImagePtr->LoadSynchronous());
+						}
 					}
 				}
 			}

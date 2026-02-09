@@ -2,6 +2,7 @@
 
 #include "Data/StoryFlowProjectAsset.h"
 #include "Data/StoryFlowScriptAsset.h"
+#include "Data/StoryFlowCharacterAsset.h"
 #include "StoryFlowRuntime.h"
 
 UStoryFlowScriptAsset* UStoryFlowProjectAsset::GetStartupScriptAsset() const
@@ -39,13 +40,13 @@ bool UStoryFlowProjectAsset::HasGlobalVariable(const FString& VariableId) const
 	return GlobalVariables.Contains(VariableId);
 }
 
-FStoryFlowCharacterDef UStoryFlowProjectAsset::GetCharacter(const FString& CharacterPath) const
+UStoryFlowCharacterAsset* UStoryFlowProjectAsset::GetCharacterAsset(const FString& CharacterPath) const
 {
-	if (const FStoryFlowCharacterDef* Character = Characters.Find(CharacterPath))
+	if (UStoryFlowCharacterAsset* const* CharAsset = Characters.Find(CharacterPath))
 	{
-		return *Character;
+		return *CharAsset;
 	}
-	return FStoryFlowCharacterDef();
+	return nullptr;
 }
 
 FString UStoryFlowProjectAsset::GetGlobalString(const FString& Key, const FString& LanguageCode) const

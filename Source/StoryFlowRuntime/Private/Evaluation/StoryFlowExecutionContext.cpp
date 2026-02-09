@@ -4,6 +4,7 @@
 #include "StoryFlowRuntime.h"
 #include "Data/StoryFlowScriptAsset.h"
 #include "Data/StoryFlowProjectAsset.h"
+#include "Data/StoryFlowCharacterAsset.h"
 
 void FStoryFlowExecutionContext::Initialize(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript)
 {
@@ -17,6 +18,7 @@ void FStoryFlowExecutionContext::Initialize(UStoryFlowProjectAsset* InProject, U
 	{
 		// Copy local variables from script
 		LocalVariables = InScript->Variables;
+		ResolveStringVariableValues(LocalVariables);
 		CurrentNodeId = InScript->StartNode;
 	}
 }
@@ -34,6 +36,7 @@ void FStoryFlowExecutionContext::InitializeWithSubsystem(UStoryFlowProjectAsset*
 	{
 		// Copy local variables from script
 		LocalVariables = InScript->Variables;
+		ResolveStringVariableValues(LocalVariables);
 		CurrentNodeId = InScript->StartNode;
 	}
 }
@@ -127,18 +130,15 @@ FStoryFlowCharacterDef* FStoryFlowExecutionContext::FindCharacter(const FString&
 	// Normalize path for lookup
 	FString NormalizedPath = CharacterPath.ToLower().Replace(TEXT("/"), TEXT("\\"));
 
-	// Use external characters if available (from subsystem - mutable runtime copies)
+	// Use external characters (from subsystem - mutable runtime copies)
 	if (ExternalCharacters)
 	{
 		return ExternalCharacters->Find(NormalizedPath);
 	}
 
-	// Fall back to project's characters (read-only)
-	if (UStoryFlowProjectAsset* Proj = Project.Get())
-	{
-		return Proj->Characters.Find(NormalizedPath);
-	}
-
+	// No external characters available - characters are now stored as UStoryFlowCharacterAsset*
+	// in the project, so we can't return a mutable FStoryFlowCharacterDef* without a subsystem.
+	UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: FindCharacter called without external characters (no subsystem). Character: %s"), *CharacterPath);
 	return nullptr;
 }
 
@@ -300,6 +300,7 @@ bool FStoryFlowExecutionContext::PushScript(const FString& ScriptPath, const FSt
 	// Switch to new script
 	CurrentScript = NewScript;
 	LocalVariables = NewScript->Variables;
+	ResolveStringVariableValues(LocalVariables);
 	CurrentNodeId = NewScript->StartNode;
 
 	return true;
@@ -384,8 +385,7 @@ FString FStoryFlowExecutionContext::InterpolateVariables(const FString& Text) co
 	// Local variables (higher priority - added first, won't be overwritten)
 	for (const auto& Pair : LocalVariables)
 	{
-		FString DisplayName = GetString(Pair.Value.Name);
-		VarLookup.Add(DisplayName, &Pair.Value);
+		VarLookup.Add(Pair.Value.Name, &Pair.Value);
 		VarLookup.Add(Pair.Value.Id, &Pair.Value);
 	}
 
@@ -400,10 +400,9 @@ FString FStoryFlowExecutionContext::InterpolateVariables(const FString& Text) co
 	{
 		for (const auto& Pair : *GlobalVars)
 		{
-			FString DisplayName = GetString(Pair.Value.Name);
-			if (!VarLookup.Contains(DisplayName))
+			if (!VarLookup.Contains(Pair.Value.Name))
 			{
-				VarLookup.Add(DisplayName, &Pair.Value);
+				VarLookup.Add(Pair.Value.Name, &Pair.Value);
 			}
 			if (!VarLookup.Contains(Pair.Value.Id))
 			{
@@ -463,15 +462,11 @@ FString FStoryFlowExecutionContext::InterpolateVariables(const FString& Text) co
 					// Normalize path for lookup
 					FString NormalizedPath = CharacterPath.ToLower().Replace(TEXT("/"), TEXT("\\"));
 
-					// Find character definition
+					// Find character definition from runtime characters
 					const FStoryFlowCharacterDef* CharDef = nullptr;
 					if (ExternalCharacters)
 					{
 						CharDef = ExternalCharacters->Find(NormalizedPath);
-					}
-					else if (Project.IsValid())
-					{
-						CharDef = Project->Characters.Find(NormalizedPath);
 					}
 
 					if (CharDef)
@@ -488,11 +483,10 @@ FString FStoryFlowExecutionContext::InterpolateVariables(const FString& Text) co
 						}
 						else
 						{
-							// Look up custom variable by display name
+							// Look up custom variable by name
 							for (const auto& VarPair : CharDef->Variables)
 							{
-								FString VarDisplayName = GetString(VarPair.Value.Name);
-								if (VarDisplayName == InnerVarName || VarPair.Value.Id == InnerVarName)
+								if (VarPair.Value.Name == InnerVarName || VarPair.Value.Id == InnerVarName)
 								{
 									Replacement = VarPair.Value.Value.ToString();
 									break;
@@ -520,6 +514,35 @@ FString FStoryFlowExecutionContext::InterpolateVariables(const FString& Text) co
 	}
 
 	return Result;
+}
+
+void FStoryFlowExecutionContext::ResolveStringVariableValues(TMap<FString, FStoryFlowVariable>& Variables) const
+{
+	for (auto& VarPair : Variables)
+	{
+		if (VarPair.Value.Type == EStoryFlowVariableType::String)
+		{
+			if (VarPair.Value.bIsArray)
+			{
+				for (auto& Element : VarPair.Value.Value.GetArrayMutable())
+				{
+					FString Key = Element.GetString();
+					if (!Key.IsEmpty())
+					{
+						Element.SetString(GetString(Key));
+					}
+				}
+			}
+			else
+			{
+				FString Key = VarPair.Value.Value.GetString();
+				if (!Key.IsEmpty())
+				{
+					VarPair.Value.Value.SetString(GetString(Key));
+				}
+			}
+		}
+	}
 }
 
 void FStoryFlowExecutionContext::ClearEvaluationCache()

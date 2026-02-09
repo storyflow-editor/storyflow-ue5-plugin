@@ -98,6 +98,9 @@ public:
 	/** Default content path for auto-loading project */
 	static const FString DefaultProjectPath;
 
+	/** Resolve string table keys in string-type variable initial values using global string table */
+	void ResolveStringVariableValues(TMap<FString, FStoryFlowVariable>& Variables);
+
 private:
 	/** Try to auto-load project from default location */
 	void TryAutoLoadProject();

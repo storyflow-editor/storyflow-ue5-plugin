@@ -119,7 +119,7 @@ public:
 
 	/**
 	 * Non-owning pointer to external runtime characters (owned by UStoryFlowSubsystem).
-	 * When set, character variable operations use this instead of Project->Characters.
+	 * Character data assets (UStoryFlowCharacterAsset) are copied into this mutable map at startup.
 	 * This allows character variable modifications to persist across scripts.
 	 * Lifetime: valid as long as the subsystem exists (GameInstance scope).
 	 */
@@ -219,6 +219,9 @@ public:
 
 	/** Interpolate variables in text */
 	FString InterpolateVariables(const FString& Text) const;
+
+	/** Resolve string table keys in string-type variable initial values (scalar + array) */
+	void ResolveStringVariableValues(TMap<FString, FStoryFlowVariable>& Variables) const;
 
 	// === Validation ===
 

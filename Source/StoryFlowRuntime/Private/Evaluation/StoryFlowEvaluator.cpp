@@ -140,16 +140,16 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 
 	case EStoryFlowNodeType::EqualString:
 	{
-		FString Input1 = EvaluateStringInput(Node, TEXT("string-1"), Node->Data.Value1.GetString());
-		FString Input2 = EvaluateStringInput(Node, TEXT("string-2"), Node->Data.Value2.GetString());
+		FString Input1 = EvaluateStringInput(Node, TEXT("string-1"), Context->GetString(Node->Data.Value1.GetString()));
+		FString Input2 = EvaluateStringInput(Node, TEXT("string-2"), Context->GetString(Node->Data.Value2.GetString()));
 		Result = Input1.Equals(Input2);
 		break;
 	}
 
 	case EStoryFlowNodeType::ContainsString:
 	{
-		FString Haystack = EvaluateStringInput(Node, TEXT("string-1"), Node->Data.Value1.GetString());
-		FString Needle = EvaluateStringInput(Node, TEXT("string-2"), Node->Data.Value2.GetString());
+		FString Haystack = EvaluateStringInput(Node, TEXT("string-1"), Context->GetString(Node->Data.Value1.GetString()));
+		FString Needle = EvaluateStringInput(Node, TEXT("string-2"), Context->GetString(Node->Data.Value2.GetString()));
 		Result = Haystack.Contains(Needle);
 		break;
 	}
@@ -203,7 +203,7 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 	case EStoryFlowNodeType::ArrayContainsString:
 	{
 		TArray<FStoryFlowVariant> Array = EvaluateStringArrayInput(Node, TEXT("string-array"));
-		FString Value = EvaluateStringInput(Node, TEXT("string"), Node->Data.Value.GetString());
+		FString Value = EvaluateStringInput(Node, TEXT("string"), Context->GetString(Node->Data.Value.GetString()));
 		Result = Array.ContainsByPredicate([&Value](const FStoryFlowVariant& V) { return V.GetString().Equals(Value); });
 		break;
 	}
@@ -472,7 +472,7 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 	case EStoryFlowNodeType::FindInStringArray:
 	{
 		TArray<FStoryFlowVariant> Array = EvaluateStringArrayInput(Node, TEXT("string-array"));
-		FString Value = EvaluateStringInput(Node, TEXT("string"), Node->Data.Value.GetString());
+		FString Value = EvaluateStringInput(Node, TEXT("string"), Context->GetString(Node->Data.Value.GetString()));
 		Result = Array.IndexOfByPredicate([&Value](const FStoryFlowVariant& V) { return V.GetString().Equals(Value); });
 		break;
 	}
@@ -788,8 +788,8 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 
 	case EStoryFlowNodeType::ConcatenateString:
 	{
-		FString Input1 = EvaluateStringInput(Node, TEXT("string-1"), Node->Data.Value1.GetString());
-		FString Input2 = EvaluateStringInput(Node, TEXT("string-2"), Node->Data.Value2.GetString());
+		FString Input1 = EvaluateStringInput(Node, TEXT("string-1"), Context->GetString(Node->Data.Value1.GetString()));
+		FString Input2 = EvaluateStringInput(Node, TEXT("string-2"), Context->GetString(Node->Data.Value2.GetString()));
 		Result = Input1 + Input2;
 		break;
 	}

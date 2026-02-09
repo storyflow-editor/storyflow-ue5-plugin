@@ -8,6 +8,7 @@
 #include "StoryFlowProjectAsset.generated.h"
 
 class UStoryFlowScriptAsset;
+class UStoryFlowCharacterAsset;
 
 /**
  * DataAsset containing a StoryFlow project with all its scripts
@@ -42,15 +43,15 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TMap<FString, FStoryFlowVariable> GlobalVariables;
 
-	/** Characters */
+	/** Characters (each is a separate DataAsset) */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
-	TMap<FString, FStoryFlowCharacterDef> Characters;
+	TMap<FString, UStoryFlowCharacterAsset*> Characters;
 
 	/** Global string table */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TMap<FString, FString> GlobalStrings;
 
-	/** Resolved Unreal asset references (for character images, etc.) */
+	/** Resolved Unreal asset references */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TMap<FString, TSoftObjectPtr<UObject>> ResolvedAssets;
 
@@ -71,9 +72,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")
 	bool HasGlobalVariable(const FString& VariableId) const;
 
-	/** Get a character by path */
+	/** Get a character asset by path */
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")
-	FStoryFlowCharacterDef GetCharacter(const FString& CharacterPath) const;
+	UStoryFlowCharacterAsset* GetCharacterAsset(const FString& CharacterPath) const;
 
 	/** Get a global string */
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")

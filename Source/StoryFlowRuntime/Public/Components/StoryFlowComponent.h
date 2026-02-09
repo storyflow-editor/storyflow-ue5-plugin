@@ -228,6 +228,18 @@ public:
 	void SetEnumVariable(const FString& VariableId, const FString& Value, bool bGlobal = false);
 
 	// ========================================================================
+	// Character Variable Access
+	// ========================================================================
+
+	/** Get a character variable value */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	FStoryFlowVariant GetCharacterVariable(const FString& CharacterPath, const FString& VariableName);
+
+	/** Set a character variable value */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	void SetCharacterVariable(const FString& CharacterPath, const FString& VariableName, const FStoryFlowVariant& Value);
+
+	// ========================================================================
 	// Utility Functions
 	// ========================================================================
 
