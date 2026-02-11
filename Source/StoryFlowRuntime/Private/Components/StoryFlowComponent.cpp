@@ -27,11 +27,6 @@ UStoryFlowComponent::~UStoryFlowComponent()
 void UStoryFlowComponent::BeginPlay()
 {
 	Super::BeginPlay();
-
-	if (bAutoStart && !Script.IsEmpty())
-	{
-		StartDialogue();
-	}
 }
 
 void UStoryFlowComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)

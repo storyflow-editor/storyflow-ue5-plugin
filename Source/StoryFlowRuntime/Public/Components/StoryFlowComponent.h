@@ -65,10 +65,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow", meta=(GetOptions="GetAvailableScripts"))
 	FString Script;
 
-	/** Auto-start dialogue on BeginPlay */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow")
-	bool bAutoStart = false;
-
 	/** Language code for string lookup (empty = use default "en") */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow")
 	FString LanguageCode = TEXT("en");
