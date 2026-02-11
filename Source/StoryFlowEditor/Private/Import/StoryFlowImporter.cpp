@@ -17,6 +17,8 @@
 #include "Sound/SoundWave.h"
 #include "EditorAssetLibrary.h"
 #include "Editor.h"
+#include "HAL/FileManager.h"
+#include "Import/StoryFlowMp3Decoder.h"
 
 namespace
 {
@@ -1023,12 +1025,29 @@ USoundWave* UStoryFlowImporter::ImportAudioAsset(const FString& SourcePath, cons
 	// Check file extension
 	FString Extension = FPaths::GetExtension(SourcePath).ToLower();
 
-	// Only WAV files can be directly imported as USoundWave in UE5
-	// MP3 and OGG are handled by Media Framework and become FileMediaSource, not USoundWave
-	if (Extension != TEXT("wav"))
+	// Unreal only imports WAV as USoundWave — convert MP3 on the fly
+	FString ImportPath = SourcePath;
+	FString TempWavPath;
+	bool bNeedsCleanup = false;
+
+	if (Extension == TEXT("mp3"))
 	{
-		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Only WAV audio files are supported for direct import. File: %s"), *SourcePath);
-		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Please convert your audio files to WAV format, or export as WAV from StoryFlow Editor."));
+		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Converting MP3 to WAV for import: %s"), *SourcePath);
+
+		if (StoryFlowAudio::ConvertMp3ToWav(SourcePath, TempWavPath))
+		{
+			ImportPath = TempWavPath;
+			bNeedsCleanup = true;
+		}
+		else
+		{
+			UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Failed to convert MP3 to WAV: %s"), *SourcePath);
+			return nullptr;
+		}
+	}
+	else if (Extension != TEXT("wav"))
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Unsupported audio format '%s'. Only WAV and MP3 are supported. File: %s"), *Extension, *SourcePath);
 		return nullptr;
 	}
 
@@ -1039,6 +1058,10 @@ USoundWave* UStoryFlowImporter::ImportAudioAsset(const FString& SourcePath, cons
 	if (UEditorAssetLibrary::DoesAssetExist(PackagePath))
 	{
 		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Audio asset already exists at %s, loading existing"), *PackagePath);
+		if (bNeedsCleanup)
+		{
+			IFileManager::Get().Delete(*TempWavPath);
+		}
 		UObject* ExistingAsset = UEditorAssetLibrary::LoadAsset(PackagePath);
 		return Cast<USoundWave>(ExistingAsset);
 	}
@@ -1048,13 +1071,19 @@ USoundWave* UStoryFlowImporter::ImportAudioAsset(const FString& SourcePath, cons
 
 	// Import the asset - WAV files will automatically use the Sound Factory
 	TArray<FString> FilesToImport;
-	FilesToImport.Add(SourcePath);
+	FilesToImport.Add(ImportPath);
 
 	// Get the directory path for import
 	FString TargetDirectory = FPaths::GetPath(PackagePath);
 
 	// For WAV files, auto-detection will use the correct SoundFactory
 	TArray<UObject*> ImportedAssets = AssetTools.ImportAssets(FilesToImport, TargetDirectory, nullptr, false);
+
+	// Clean up temporary WAV file
+	if (bNeedsCleanup)
+	{
+		IFileManager::Get().Delete(*TempWavPath);
+	}
 
 	if (ImportedAssets.Num() > 0)
 	{
@@ -1112,3 +1141,4 @@ FString UStoryFlowImporter::NormalizeAssetPath(const FString& Path)
 
 	return CleanResult;
 }
+

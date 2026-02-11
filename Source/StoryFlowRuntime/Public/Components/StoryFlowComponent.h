@@ -14,6 +14,8 @@ class UStoryFlowScriptAsset;
 class UStoryFlowSubsystem;
 class UStoryFlowDialogueWidget;
 class UAudioComponent;
+class USoundClass;
+class USoundConcurrency;
 
 // ============================================================================
 // Delegates
@@ -82,6 +84,18 @@ public:
 	/** Stop any playing dialogue audio when dialogue ends */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Audio")
 	bool bStopAudioOnDialogueEnd = true;
+
+	/** Sound class for dialogue audio (controls volume category in audio mixer — e.g., separate "Dialogue" slider in settings) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Audio")
+	TObjectPtr<USoundClass> DialogueSoundClass;
+
+	/** Volume multiplier for dialogue audio (stacks with SoundClass mix) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Audio", meta=(ClampMin="0.0", ClampMax="2.0", UIMin="0.0", UIMax="2.0"))
+	float DialogueVolumeMultiplier = 1.0f;
+
+	/** Concurrency settings for dialogue audio (controls overlap behavior) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Audio")
+	TObjectPtr<USoundConcurrency> DialogueConcurrency;
 
 	// ========================================================================
 	// Events (Blueprint Assignable)

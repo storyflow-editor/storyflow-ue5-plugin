@@ -1931,10 +1931,16 @@ void UStoryFlowComponent::PlayDialogueAudio(USoundBase* Sound, bool bLoop)
 
 	// Spawn a new audio component for this dialogue
 	// bAutoDestroy=false so we can track and stop it later
-	CurrentDialogueAudio = UGameplayStatics::SpawnSound2D(this, Sound, 1.0f, 1.0f, 0.0f, nullptr, false, false);
+	CurrentDialogueAudio = UGameplayStatics::SpawnSound2D(this, Sound, DialogueVolumeMultiplier, 1.0f, 0.0f, DialogueConcurrency.Get(), false, false);
 
 	if (CurrentDialogueAudio)
 	{
+		// Apply sound class override for audio mixer categorization
+		if (DialogueSoundClass)
+		{
+			CurrentDialogueAudio->SoundClassOverride = DialogueSoundClass;
+		}
+
 		// Configure looping before playing
 		if (bLoop)
 		{
@@ -1944,10 +1950,6 @@ void UStoryFlowComponent::PlayDialogueAudio(USoundBase* Sound, bool bLoop)
 			// Stop the auto-started playback, configure loop, then restart
 			CurrentDialogueAudio->Stop();
 			CurrentDialogueAudio->Sound = Sound;
-
-			// Create a looping sound by manually handling it
-			// Note: We'll use OnAudioFinished delegate to restart if needed
-			// But first, let's try setting the sound to loop via the component
 		}
 
 		// Play the audio

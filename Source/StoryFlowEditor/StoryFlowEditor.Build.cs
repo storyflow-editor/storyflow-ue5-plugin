@@ -8,6 +8,9 @@ public class StoryFlowEditor : ModuleRules
 	{
 		PCHUsage = ModuleRules.PCHUsageMode.UseExplicitOrSharedPCHs;
 
+		// minimp3 (CC0 public domain) - MP3 to WAV conversion during import
+		PrivateIncludePaths.Add(System.IO.Path.Combine(ModuleDirectory, "..", "ThirdParty"));
+
 		PublicDependencyModuleNames.AddRange(
 			new string[]
 			{
