@@ -155,7 +155,12 @@ void FStoryFlowWebSocketClient::HandleMessage(const FString& Message)
 	}
 
 	// Extract type and payload
-	FString Type = JsonObject->GetStringField(TEXT("type"));
+	FString Type;
+	if (!JsonObject->TryGetStringField(TEXT("type"), Type))
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Message missing 'type' field: %s"), *Message);
+		return;
+	}
 	TSharedPtr<FJsonObject> Payload;
 
 	if (JsonObject->HasField(TEXT("payload")))
