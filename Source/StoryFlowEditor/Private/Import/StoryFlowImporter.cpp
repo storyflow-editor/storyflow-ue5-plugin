@@ -128,6 +128,10 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 				ParseStrings(CharactersJson->GetObjectField(TEXT("strings")), CharStrings);
 				for (const auto& Pair : CharStrings)
 				{
+					if (ProjectAsset->GlobalStrings.Contains(Pair.Key))
+					{
+						UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Character string key '%s' overwrites existing global string"), *Pair.Key);
+					}
 					ProjectAsset->GlobalStrings.Add(Pair.Key, Pair.Value);
 				}
 			}
@@ -155,7 +159,7 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 					}
 
 					// Normalize path for consistent lookup
-					FString NormalizedPath = CharPath.ToLower().Replace(TEXT("/"), TEXT("\\"));
+					FString NormalizedPath = NormalizeCharacterPath(CharPath);
 
 					// Create a safe asset name from the character path
 					FString AssetName = NormalizeAssetPath(CharPath);
@@ -328,6 +332,11 @@ void UStoryFlowImporter::ParseNodes(const TSharedPtr<FJsonObject>& NodesObject, 
 	for (const auto& NodePair : NodesObject->Values)
 	{
 		FString NodeId = NodePair.Key;
+		if (NodeId.IsEmpty())
+		{
+			UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Skipping node with empty ID"));
+			continue;
+		}
 		TSharedPtr<FJsonObject> NodeObject = NodePair.Value->AsObject();
 		if (NodeObject.IsValid())
 		{
@@ -456,14 +465,12 @@ FStoryFlowNodeData UStoryFlowImporter::ParseNodeData(const TSharedPtr<FJsonObjec
 	}
 
 	// Character Variable fields (for getCharacterVar/setCharacterVar nodes)
+	// Export reuses the "variable" JSON field for the character variable name,
+	// so only populate VariableName when characterPath is present (i.e., this is a character variable node)
 	if (NodeObject->HasField(TEXT("characterPath")))
 	{
 		Data.CharacterPath = NodeObject->GetStringField(TEXT("characterPath"));
-	}
-	// Export uses "variable" field name for character variable name
-	if (NodeObject->HasField(TEXT("variable")))
-	{
-		Data.VariableName = NodeObject->GetStringField(TEXT("variable"));
+		Data.VariableName = Data.Variable;
 	}
 	if (NodeObject->HasField(TEXT("variableType")))
 	{
@@ -1121,14 +1128,13 @@ FString UStoryFlowImporter::NormalizeAssetPath(const FString& Path)
 	// Remove extension
 	Result = FPaths::GetBaseFilename(Result, false);
 
-	// Replace path separators with underscores
+	// Replace common separators with underscores
 	Result = Result.Replace(TEXT("/"), TEXT("_"));
 	Result = Result.Replace(TEXT("\\"), TEXT("_"));
-
-	// Replace spaces
 	Result = Result.Replace(TEXT(" "), TEXT("_"));
+	Result = Result.Replace(TEXT("-"), TEXT("_"));
 
-	// Remove any characters not valid in asset names
+	// Remove any characters not valid in Unreal asset names
 	FString ValidChars = TEXT("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_");
 	FString CleanResult;
 	for (TCHAR Char : Result)

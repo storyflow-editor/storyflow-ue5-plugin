@@ -63,8 +63,8 @@ void FStoryFlowSyncManager::HandleProjectUpdated(const TSharedPtr<FJsonObject>& 
 	}
 
 	// Get project path from payload
-	FString NewProjectPath = Payload->GetStringField(TEXT("projectPath"));
-	if (!NewProjectPath.IsEmpty())
+	FString NewProjectPath;
+	if (Payload->TryGetStringField(TEXT("projectPath"), NewProjectPath) && !NewProjectPath.IsEmpty())
 	{
 		ProjectPath = NewProjectPath;
 	}

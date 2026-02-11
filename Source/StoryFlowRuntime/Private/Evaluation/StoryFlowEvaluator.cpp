@@ -4,6 +4,7 @@
 #include "StoryFlowRuntime.h"
 #include "Evaluation/StoryFlowExecutionContext.h"
 #include "Data/StoryFlowScriptAsset.h"
+#include "Data/StoryFlowHandles.h"
 
 FStoryFlowEvaluator::FStoryFlowEvaluator(FStoryFlowExecutionContext* InContext)
 	: Context(InContext)
@@ -93,31 +94,31 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 
 	case EStoryFlowNodeType::NotBool:
 	{
-		bool Input = EvaluateBooleanInput(Node, TEXT("boolean"), Node->Data.Value.GetBool(false));
+		bool Input = EvaluateBooleanInput(Node, StoryFlowHandles::In_Boolean, Node->Data.Value.GetBool(false));
 		Result = !Input;
 		break;
 	}
 
 	case EStoryFlowNodeType::AndBool:
 	{
-		bool Input1 = EvaluateBooleanInput(Node, TEXT("boolean-1"), Node->Data.Value1.GetBool(false));
-		bool Input2 = EvaluateBooleanInput(Node, TEXT("boolean-2"), Node->Data.Value2.GetBool(false));
+		bool Input1 = EvaluateBooleanInput(Node, StoryFlowHandles::In_Boolean1, Node->Data.Value1.GetBool(false));
+		bool Input2 = EvaluateBooleanInput(Node, StoryFlowHandles::In_Boolean2, Node->Data.Value2.GetBool(false));
 		Result = Input1 && Input2;
 		break;
 	}
 
 	case EStoryFlowNodeType::OrBool:
 	{
-		bool Input1 = EvaluateBooleanInput(Node, TEXT("boolean-1"), Node->Data.Value1.GetBool(false));
-		bool Input2 = EvaluateBooleanInput(Node, TEXT("boolean-2"), Node->Data.Value2.GetBool(false));
+		bool Input1 = EvaluateBooleanInput(Node, StoryFlowHandles::In_Boolean1, Node->Data.Value1.GetBool(false));
+		bool Input2 = EvaluateBooleanInput(Node, StoryFlowHandles::In_Boolean2, Node->Data.Value2.GetBool(false));
 		Result = Input1 || Input2;
 		break;
 	}
 
 	case EStoryFlowNodeType::EqualBool:
 	{
-		bool Input1 = EvaluateBooleanInput(Node, TEXT("boolean-1"), Node->Data.Value1.GetBool(false));
-		bool Input2 = EvaluateBooleanInput(Node, TEXT("boolean-2"), Node->Data.Value2.GetBool(false));
+		bool Input1 = EvaluateBooleanInput(Node, StoryFlowHandles::In_Boolean1, Node->Data.Value1.GetBool(false));
+		bool Input2 = EvaluateBooleanInput(Node, StoryFlowHandles::In_Boolean2, Node->Data.Value2.GetBool(false));
 		Result = (Input1 == Input2);
 		break;
 	}
@@ -140,102 +141,102 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 
 	case EStoryFlowNodeType::EqualString:
 	{
-		FString Input1 = EvaluateStringInput(Node, TEXT("string-1"), Context->GetString(Node->Data.Value1.GetString()));
-		FString Input2 = EvaluateStringInput(Node, TEXT("string-2"), Context->GetString(Node->Data.Value2.GetString()));
+		FString Input1 = EvaluateStringInput(Node, StoryFlowHandles::In_String1, Context->GetString(Node->Data.Value1.GetString()));
+		FString Input2 = EvaluateStringInput(Node, StoryFlowHandles::In_String2, Context->GetString(Node->Data.Value2.GetString()));
 		Result = Input1.Equals(Input2);
 		break;
 	}
 
 	case EStoryFlowNodeType::ContainsString:
 	{
-		FString Haystack = EvaluateStringInput(Node, TEXT("string-1"), Context->GetString(Node->Data.Value1.GetString()));
-		FString Needle = EvaluateStringInput(Node, TEXT("string-2"), Context->GetString(Node->Data.Value2.GetString()));
+		FString Haystack = EvaluateStringInput(Node, StoryFlowHandles::In_String1, Context->GetString(Node->Data.Value1.GetString()));
+		FString Needle = EvaluateStringInput(Node, StoryFlowHandles::In_String2, Context->GetString(Node->Data.Value2.GetString()));
 		Result = Haystack.Contains(Needle);
 		break;
 	}
 
 	case EStoryFlowNodeType::EqualEnum:
 	{
-		FString Input1 = EvaluateEnumInput(Node, TEXT("enum-1"), Node->Data.Value1.GetString());
-		FString Input2 = EvaluateEnumInput(Node, TEXT("enum-2"), Node->Data.Value2.GetString());
+		FString Input1 = EvaluateEnumInput(Node, StoryFlowHandles::In_Enum1, Node->Data.Value1.GetString());
+		FString Input2 = EvaluateEnumInput(Node, StoryFlowHandles::In_Enum2, Node->Data.Value2.GetString());
 		Result = Input1.Equals(Input2);
 		break;
 	}
 
 	case EStoryFlowNodeType::IntToBoolean:
 	{
-		int32 Input = EvaluateIntegerInput(Node, TEXT("integer"), Node->Data.Value.GetInt(0));
+		int32 Input = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer, Node->Data.Value.GetInt(0));
 		Result = Input != 0;
 		break;
 	}
 
 	case EStoryFlowNodeType::FloatToBoolean:
 	{
-		float Input = EvaluateFloatInput(Node, TEXT("float"), Node->Data.Value.GetFloat(0.0f));
+		float Input = EvaluateFloatInput(Node, StoryFlowHandles::In_Float, Node->Data.Value.GetFloat(0.0f));
 		Result = !FMath::IsNearlyZero(Input);
 		break;
 	}
 
 	case EStoryFlowNodeType::ArrayContainsBool:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateBoolArrayInput(Node, TEXT("boolean-array"));
-		bool Value = EvaluateBooleanInput(Node, TEXT("boolean"), Node->Data.Value.GetBool(false));
+		TArray<FStoryFlowVariant> Array = EvaluateBoolArrayInput(Node, StoryFlowHandles::In_BoolArray);
+		bool Value = EvaluateBooleanInput(Node, StoryFlowHandles::In_Boolean, Node->Data.Value.GetBool(false));
 		Result = Array.ContainsByPredicate([Value](const FStoryFlowVariant& V) { return V.GetBool() == Value; });
 		break;
 	}
 
 	case EStoryFlowNodeType::ArrayContainsInt:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateIntArrayInput(Node, TEXT("integer-array"));
-		int32 Value = EvaluateIntegerInput(Node, TEXT("integer"), Node->Data.Value.GetInt(0));
+		TArray<FStoryFlowVariant> Array = EvaluateIntArrayInput(Node, StoryFlowHandles::In_IntArray);
+		int32 Value = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer, Node->Data.Value.GetInt(0));
 		Result = Array.ContainsByPredicate([Value](const FStoryFlowVariant& V) { return V.GetInt() == Value; });
 		break;
 	}
 
 	case EStoryFlowNodeType::ArrayContainsFloat:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateFloatArrayInput(Node, TEXT("float-array"));
-		float Value = EvaluateFloatInput(Node, TEXT("float"), Node->Data.Value.GetFloat(0.0f));
+		TArray<FStoryFlowVariant> Array = EvaluateFloatArrayInput(Node, StoryFlowHandles::In_FloatArray);
+		float Value = EvaluateFloatInput(Node, StoryFlowHandles::In_Float, Node->Data.Value.GetFloat(0.0f));
 		Result = Array.ContainsByPredicate([Value](const FStoryFlowVariant& V) { return FMath::IsNearlyEqual(V.GetFloat(), Value); });
 		break;
 	}
 
 	case EStoryFlowNodeType::ArrayContainsString:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateStringArrayInput(Node, TEXT("string-array"));
-		FString Value = EvaluateStringInput(Node, TEXT("string"), Context->GetString(Node->Data.Value.GetString()));
+		TArray<FStoryFlowVariant> Array = EvaluateStringArrayInput(Node, StoryFlowHandles::In_StringArray);
+		FString Value = EvaluateStringInput(Node, StoryFlowHandles::In_String, Context->GetString(Node->Data.Value.GetString()));
 		Result = Array.ContainsByPredicate([&Value](const FStoryFlowVariant& V) { return V.GetString().Equals(Value); });
 		break;
 	}
 
 	case EStoryFlowNodeType::ArrayContainsImage:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateImageArrayInput(Node, TEXT("image-array"));
-		FString Value = EvaluateStringInput(Node, TEXT("image"), Node->Data.Value.GetString());
+		TArray<FStoryFlowVariant> Array = EvaluateImageArrayInput(Node, StoryFlowHandles::In_ImageArray);
+		FString Value = EvaluateStringInput(Node, StoryFlowHandles::In_Image, Node->Data.Value.GetString());
 		Result = Array.ContainsByPredicate([&Value](const FStoryFlowVariant& V) { return V.GetString().Equals(Value); });
 		break;
 	}
 
 	case EStoryFlowNodeType::ArrayContainsCharacter:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateCharacterArrayInput(Node, TEXT("character-array"));
-		FString Value = EvaluateStringInput(Node, TEXT("character"), Node->Data.Value.GetString());
+		TArray<FStoryFlowVariant> Array = EvaluateCharacterArrayInput(Node, StoryFlowHandles::In_CharacterArray);
+		FString Value = EvaluateStringInput(Node, StoryFlowHandles::In_Character, Node->Data.Value.GetString());
 		Result = Array.ContainsByPredicate([&Value](const FStoryFlowVariant& V) { return V.GetString().Equals(Value); });
 		break;
 	}
 
 	case EStoryFlowNodeType::ArrayContainsAudio:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateAudioArrayInput(Node, TEXT("audio-array"));
-		FString Value = EvaluateStringInput(Node, TEXT("audio"), Node->Data.Value.GetString());
+		TArray<FStoryFlowVariant> Array = EvaluateAudioArrayInput(Node, StoryFlowHandles::In_AudioArray);
+		FString Value = EvaluateStringInput(Node, StoryFlowHandles::In_Audio, Node->Data.Value.GetString());
 		Result = Array.ContainsByPredicate([&Value](const FStoryFlowVariant& V) { return V.GetString().Equals(Value); });
 		break;
 	}
 
 	case EStoryFlowNodeType::GetBoolArrayElement:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateBoolArrayInput(Node, TEXT("boolean-array"));
-		int32 Index = EvaluateIntegerInput(Node, TEXT("integer"), Node->Data.Value.GetInt(0));
+		TArray<FStoryFlowVariant> Array = EvaluateBoolArrayInput(Node, StoryFlowHandles::In_BoolArray);
+		int32 Index = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer, Node->Data.Value.GetInt(0));
 		if (Index >= 0 && Index < Array.Num())
 		{
 			Result = Array[Index].GetBool();
@@ -245,7 +246,7 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 
 	case EStoryFlowNodeType::GetRandomBoolArrayElement:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateBoolArrayInput(Node, TEXT("boolean-array"));
+		TArray<FStoryFlowVariant> Array = EvaluateBoolArrayInput(Node, StoryFlowHandles::In_BoolArray);
 		if (Array.Num() > 0)
 		{
 			Result = Array[FMath::RandRange(0, Array.Num() - 1)].GetBool();
@@ -271,8 +272,8 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 
 bool FStoryFlowEvaluator::EvaluateIntegerComparison(FStoryFlowNode* Node, EStoryFlowNodeType ComparisonType)
 {
-	int32 Input1 = EvaluateIntegerInput(Node, TEXT("integer-1"), Node->Data.Value1.GetInt(0));
-	int32 Input2 = EvaluateIntegerInput(Node, TEXT("integer-2"), Node->Data.Value2.GetInt(0));
+	int32 Input1 = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer1, Node->Data.Value1.GetInt(0));
+	int32 Input2 = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer2, Node->Data.Value2.GetInt(0));
 
 	switch (ComparisonType)
 	{
@@ -287,8 +288,8 @@ bool FStoryFlowEvaluator::EvaluateIntegerComparison(FStoryFlowNode* Node, EStory
 
 bool FStoryFlowEvaluator::EvaluateFloatComparison(FStoryFlowNode* Node, EStoryFlowNodeType ComparisonType)
 {
-	float Input1 = EvaluateFloatInput(Node, TEXT("float-1"), Node->Data.Value1.GetFloat(0.0f));
-	float Input2 = EvaluateFloatInput(Node, TEXT("float-2"), Node->Data.Value2.GetFloat(0.0f));
+	float Input1 = EvaluateFloatInput(Node, StoryFlowHandles::In_Float1, Node->Data.Value1.GetFloat(0.0f));
+	float Input2 = EvaluateFloatInput(Node, StoryFlowHandles::In_Float2, Node->Data.Value2.GetFloat(0.0f));
 
 	switch (ComparisonType)
 	{
@@ -354,40 +355,40 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 
 	case EStoryFlowNodeType::Plus:
 	{
-		int32 Input1 = EvaluateIntegerInput(Node, TEXT("integer-1"), Node->Data.Value1.GetInt(0));
-		int32 Input2 = EvaluateIntegerInput(Node, TEXT("integer-2"), Node->Data.Value2.GetInt(0));
+		int32 Input1 = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer1, Node->Data.Value1.GetInt(0));
+		int32 Input2 = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer2, Node->Data.Value2.GetInt(0));
 		Result = Input1 + Input2;
 		break;
 	}
 
 	case EStoryFlowNodeType::Minus:
 	{
-		int32 Input1 = EvaluateIntegerInput(Node, TEXT("integer-1"), Node->Data.Value1.GetInt(0));
-		int32 Input2 = EvaluateIntegerInput(Node, TEXT("integer-2"), Node->Data.Value2.GetInt(0));
+		int32 Input1 = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer1, Node->Data.Value1.GetInt(0));
+		int32 Input2 = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer2, Node->Data.Value2.GetInt(0));
 		Result = Input1 - Input2;
 		break;
 	}
 
 	case EStoryFlowNodeType::Multiply:
 	{
-		int32 Input1 = EvaluateIntegerInput(Node, TEXT("integer-1"), Node->Data.Value1.GetInt(0));
-		int32 Input2 = EvaluateIntegerInput(Node, TEXT("integer-2"), Node->Data.Value2.GetInt(0));
+		int32 Input1 = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer1, Node->Data.Value1.GetInt(0));
+		int32 Input2 = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer2, Node->Data.Value2.GetInt(0));
 		Result = Input1 * Input2;
 		break;
 	}
 
 	case EStoryFlowNodeType::Divide:
 	{
-		int32 Input1 = EvaluateIntegerInput(Node, TEXT("integer-1"), Node->Data.Value1.GetInt(0));
-		int32 Input2 = EvaluateIntegerInput(Node, TEXT("integer-2"), Node->Data.Value2.GetInt(1));
+		int32 Input1 = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer1, Node->Data.Value1.GetInt(0));
+		int32 Input2 = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer2, Node->Data.Value2.GetInt(1));
 		Result = (Input2 != 0) ? (Input1 / Input2) : 0;
 		break;
 	}
 
 	case EStoryFlowNodeType::Random:
 	{
-		int32 Min = EvaluateIntegerInput(Node, TEXT("integer-1"), Node->Data.Value1.GetInt(0));
-		int32 Max = EvaluateIntegerInput(Node, TEXT("integer-2"), Node->Data.Value2.GetInt(100));
+		int32 Min = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer1, Node->Data.Value1.GetInt(0));
+		int32 Max = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer2, Node->Data.Value2.GetInt(100));
 		if (Min > Max)
 		{
 			Swap(Min, Max);
@@ -398,81 +399,81 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 
 	case EStoryFlowNodeType::BooleanToInt:
 	{
-		bool Input = EvaluateBooleanInput(Node, TEXT("boolean"), Node->Data.Value.GetBool(false));
+		bool Input = EvaluateBooleanInput(Node, StoryFlowHandles::In_Boolean, Node->Data.Value.GetBool(false));
 		Result = Input ? 1 : 0;
 		break;
 	}
 
 	case EStoryFlowNodeType::FloatToInt:
 	{
-		float Input = EvaluateFloatInput(Node, TEXT("float"), Node->Data.Value.GetFloat(0.0f));
+		float Input = EvaluateFloatInput(Node, StoryFlowHandles::In_Float, Node->Data.Value.GetFloat(0.0f));
 		Result = FMath::FloorToInt(Input);
 		break;
 	}
 
 	case EStoryFlowNodeType::StringToInt:
 	{
-		FString Input = EvaluateStringInput(Node, TEXT("string"), Node->Data.Value.GetString());
+		FString Input = EvaluateStringInput(Node, StoryFlowHandles::In_String, Node->Data.Value.GetString());
 		Result = FCString::Atoi(*Input);
 		break;
 	}
 
 	case EStoryFlowNodeType::ArrayLengthBool:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateBoolArrayInput(Node, TEXT("boolean-array"));
+		TArray<FStoryFlowVariant> Array = EvaluateBoolArrayInput(Node, StoryFlowHandles::In_BoolArray);
 		Result = Array.Num();
 		break;
 	}
 
 	case EStoryFlowNodeType::ArrayLengthInt:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateIntArrayInput(Node, TEXT("integer-array"));
+		TArray<FStoryFlowVariant> Array = EvaluateIntArrayInput(Node, StoryFlowHandles::In_IntArray);
 		Result = Array.Num();
 		break;
 	}
 
 	case EStoryFlowNodeType::ArrayLengthFloat:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateFloatArrayInput(Node, TEXT("float-array"));
+		TArray<FStoryFlowVariant> Array = EvaluateFloatArrayInput(Node, StoryFlowHandles::In_FloatArray);
 		Result = Array.Num();
 		break;
 	}
 
 	case EStoryFlowNodeType::ArrayLengthString:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateStringArrayInput(Node, TEXT("string-array"));
+		TArray<FStoryFlowVariant> Array = EvaluateStringArrayInput(Node, StoryFlowHandles::In_StringArray);
 		Result = Array.Num();
 		break;
 	}
 
 	case EStoryFlowNodeType::FindInBoolArray:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateBoolArrayInput(Node, TEXT("boolean-array"));
-		bool Value = EvaluateBooleanInput(Node, TEXT("boolean"), Node->Data.Value.GetBool(false));
+		TArray<FStoryFlowVariant> Array = EvaluateBoolArrayInput(Node, StoryFlowHandles::In_BoolArray);
+		bool Value = EvaluateBooleanInput(Node, StoryFlowHandles::In_Boolean, Node->Data.Value.GetBool(false));
 		Result = Array.IndexOfByPredicate([Value](const FStoryFlowVariant& V) { return V.GetBool() == Value; });
 		break;
 	}
 
 	case EStoryFlowNodeType::FindInIntArray:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateIntArrayInput(Node, TEXT("integer-array"));
-		int32 Value = EvaluateIntegerInput(Node, TEXT("integer"), Node->Data.Value.GetInt(0));
+		TArray<FStoryFlowVariant> Array = EvaluateIntArrayInput(Node, StoryFlowHandles::In_IntArray);
+		int32 Value = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer, Node->Data.Value.GetInt(0));
 		Result = Array.IndexOfByPredicate([Value](const FStoryFlowVariant& V) { return V.GetInt() == Value; });
 		break;
 	}
 
 	case EStoryFlowNodeType::FindInFloatArray:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateFloatArrayInput(Node, TEXT("float-array"));
-		float Value = EvaluateFloatInput(Node, TEXT("float"), Node->Data.Value.GetFloat(0.0f));
+		TArray<FStoryFlowVariant> Array = EvaluateFloatArrayInput(Node, StoryFlowHandles::In_FloatArray);
+		float Value = EvaluateFloatInput(Node, StoryFlowHandles::In_Float, Node->Data.Value.GetFloat(0.0f));
 		Result = Array.IndexOfByPredicate([Value](const FStoryFlowVariant& V) { return FMath::IsNearlyEqual(V.GetFloat(), Value); });
 		break;
 	}
 
 	case EStoryFlowNodeType::FindInStringArray:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateStringArrayInput(Node, TEXT("string-array"));
-		FString Value = EvaluateStringInput(Node, TEXT("string"), Context->GetString(Node->Data.Value.GetString()));
+		TArray<FStoryFlowVariant> Array = EvaluateStringArrayInput(Node, StoryFlowHandles::In_StringArray);
+		FString Value = EvaluateStringInput(Node, StoryFlowHandles::In_String, Context->GetString(Node->Data.Value.GetString()));
 		Result = Array.IndexOfByPredicate([&Value](const FStoryFlowVariant& V) { return V.GetString().Equals(Value); });
 		break;
 	}
@@ -486,7 +487,7 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 	case EStoryFlowNodeType::ForEachAudioLoop:
 	{
 		FNodeRuntimeState& LoopState = Context->GetNodeState(Node->Id);
-		if (SourceHandle.Contains(TEXT("integer-index")))
+		if (SourceHandle.Contains(StoryFlowHandles::In_IntegerIndex))
 		{
 			Result = LoopState.LoopIndex;
 		}
@@ -500,8 +501,8 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 
 	case EStoryFlowNodeType::GetIntArrayElement:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateIntArrayInput(Node, TEXT("integer-array"));
-		int32 Index = EvaluateIntegerInput(Node, TEXT("integer"), Node->Data.Value.GetInt(0));
+		TArray<FStoryFlowVariant> Array = EvaluateIntArrayInput(Node, StoryFlowHandles::In_IntArray);
+		int32 Index = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer, Node->Data.Value.GetInt(0));
 		if (Index >= 0 && Index < Array.Num())
 		{
 			Result = Array[Index].GetInt();
@@ -511,7 +512,7 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 
 	case EStoryFlowNodeType::GetRandomIntArrayElement:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateIntArrayInput(Node, TEXT("integer-array"));
+		TArray<FStoryFlowVariant> Array = EvaluateIntArrayInput(Node, StoryFlowHandles::In_IntArray);
 		if (Array.Num() > 0)
 		{
 			Result = Array[FMath::RandRange(0, Array.Num() - 1)].GetInt();
@@ -521,52 +522,52 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 
 	case EStoryFlowNodeType::LengthString:
 	{
-		FString Input = EvaluateStringInput(Node, TEXT("string"), Node->Data.Value.GetString());
+		FString Input = EvaluateStringInput(Node, StoryFlowHandles::In_String, Node->Data.Value.GetString());
 		Result = Input.Len();
 		break;
 	}
 
 	case EStoryFlowNodeType::ArrayLengthImage:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateImageArrayInput(Node, TEXT("image-array"));
+		TArray<FStoryFlowVariant> Array = EvaluateImageArrayInput(Node, StoryFlowHandles::In_ImageArray);
 		Result = Array.Num();
 		break;
 	}
 
 	case EStoryFlowNodeType::ArrayLengthCharacter:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateCharacterArrayInput(Node, TEXT("character-array"));
+		TArray<FStoryFlowVariant> Array = EvaluateCharacterArrayInput(Node, StoryFlowHandles::In_CharacterArray);
 		Result = Array.Num();
 		break;
 	}
 
 	case EStoryFlowNodeType::ArrayLengthAudio:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateAudioArrayInput(Node, TEXT("audio-array"));
+		TArray<FStoryFlowVariant> Array = EvaluateAudioArrayInput(Node, StoryFlowHandles::In_AudioArray);
 		Result = Array.Num();
 		break;
 	}
 
 	case EStoryFlowNodeType::FindInImageArray:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateImageArrayInput(Node, TEXT("image-array"));
-		FString Value = EvaluateStringInput(Node, TEXT("image"), Node->Data.Value.GetString());
+		TArray<FStoryFlowVariant> Array = EvaluateImageArrayInput(Node, StoryFlowHandles::In_ImageArray);
+		FString Value = EvaluateStringInput(Node, StoryFlowHandles::In_Image, Node->Data.Value.GetString());
 		Result = Array.IndexOfByPredicate([&Value](const FStoryFlowVariant& V) { return V.GetString().Equals(Value); });
 		break;
 	}
 
 	case EStoryFlowNodeType::FindInCharacterArray:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateCharacterArrayInput(Node, TEXT("character-array"));
-		FString Value = EvaluateStringInput(Node, TEXT("character"), Node->Data.Value.GetString());
+		TArray<FStoryFlowVariant> Array = EvaluateCharacterArrayInput(Node, StoryFlowHandles::In_CharacterArray);
+		FString Value = EvaluateStringInput(Node, StoryFlowHandles::In_Character, Node->Data.Value.GetString());
 		Result = Array.IndexOfByPredicate([&Value](const FStoryFlowVariant& V) { return V.GetString().Equals(Value); });
 		break;
 	}
 
 	case EStoryFlowNodeType::FindInAudioArray:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateAudioArrayInput(Node, TEXT("audio-array"));
-		FString Value = EvaluateStringInput(Node, TEXT("audio"), Node->Data.Value.GetString());
+		TArray<FStoryFlowVariant> Array = EvaluateAudioArrayInput(Node, StoryFlowHandles::In_AudioArray);
+		FString Value = EvaluateStringInput(Node, StoryFlowHandles::In_Audio, Node->Data.Value.GetString());
 		Result = Array.IndexOfByPredicate([&Value](const FStoryFlowVariant& V) { return V.GetString().Equals(Value); });
 		break;
 	}
@@ -632,40 +633,40 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 
 	case EStoryFlowNodeType::PlusFloat:
 	{
-		float Input1 = EvaluateFloatInput(Node, TEXT("float-1"), Node->Data.Value1.GetFloat(0.0f));
-		float Input2 = EvaluateFloatInput(Node, TEXT("float-2"), Node->Data.Value2.GetFloat(0.0f));
+		float Input1 = EvaluateFloatInput(Node, StoryFlowHandles::In_Float1, Node->Data.Value1.GetFloat(0.0f));
+		float Input2 = EvaluateFloatInput(Node, StoryFlowHandles::In_Float2, Node->Data.Value2.GetFloat(0.0f));
 		Result = Input1 + Input2;
 		break;
 	}
 
 	case EStoryFlowNodeType::MinusFloat:
 	{
-		float Input1 = EvaluateFloatInput(Node, TEXT("float-1"), Node->Data.Value1.GetFloat(0.0f));
-		float Input2 = EvaluateFloatInput(Node, TEXT("float-2"), Node->Data.Value2.GetFloat(0.0f));
+		float Input1 = EvaluateFloatInput(Node, StoryFlowHandles::In_Float1, Node->Data.Value1.GetFloat(0.0f));
+		float Input2 = EvaluateFloatInput(Node, StoryFlowHandles::In_Float2, Node->Data.Value2.GetFloat(0.0f));
 		Result = Input1 - Input2;
 		break;
 	}
 
 	case EStoryFlowNodeType::MultiplyFloat:
 	{
-		float Input1 = EvaluateFloatInput(Node, TEXT("float-1"), Node->Data.Value1.GetFloat(0.0f));
-		float Input2 = EvaluateFloatInput(Node, TEXT("float-2"), Node->Data.Value2.GetFloat(0.0f));
+		float Input1 = EvaluateFloatInput(Node, StoryFlowHandles::In_Float1, Node->Data.Value1.GetFloat(0.0f));
+		float Input2 = EvaluateFloatInput(Node, StoryFlowHandles::In_Float2, Node->Data.Value2.GetFloat(0.0f));
 		Result = Input1 * Input2;
 		break;
 	}
 
 	case EStoryFlowNodeType::DivideFloat:
 	{
-		float Input1 = EvaluateFloatInput(Node, TEXT("float-1"), Node->Data.Value1.GetFloat(0.0f));
-		float Input2 = EvaluateFloatInput(Node, TEXT("float-2"), Node->Data.Value2.GetFloat(1.0f));
+		float Input1 = EvaluateFloatInput(Node, StoryFlowHandles::In_Float1, Node->Data.Value1.GetFloat(0.0f));
+		float Input2 = EvaluateFloatInput(Node, StoryFlowHandles::In_Float2, Node->Data.Value2.GetFloat(1.0f));
 		Result = !FMath::IsNearlyZero(Input2) ? (Input1 / Input2) : 0.0f;
 		break;
 	}
 
 	case EStoryFlowNodeType::RandomFloat:
 	{
-		float Min = EvaluateFloatInput(Node, TEXT("float-1"), Node->Data.Value1.GetFloat(0.0f));
-		float Max = EvaluateFloatInput(Node, TEXT("float-2"), Node->Data.Value2.GetFloat(1.0f));
+		float Min = EvaluateFloatInput(Node, StoryFlowHandles::In_Float1, Node->Data.Value1.GetFloat(0.0f));
+		float Max = EvaluateFloatInput(Node, StoryFlowHandles::In_Float2, Node->Data.Value2.GetFloat(1.0f));
 		if (Min > Max)
 		{
 			Swap(Min, Max);
@@ -676,29 +677,29 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 
 	case EStoryFlowNodeType::BooleanToFloat:
 	{
-		bool Input = EvaluateBooleanInput(Node, TEXT("boolean"), Node->Data.Value.GetBool(false));
+		bool Input = EvaluateBooleanInput(Node, StoryFlowHandles::In_Boolean, Node->Data.Value.GetBool(false));
 		Result = Input ? 1.0f : 0.0f;
 		break;
 	}
 
 	case EStoryFlowNodeType::IntToFloat:
 	{
-		int32 Input = EvaluateIntegerInput(Node, TEXT("integer"), Node->Data.Value.GetInt(0));
+		int32 Input = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer, Node->Data.Value.GetInt(0));
 		Result = static_cast<float>(Input);
 		break;
 	}
 
 	case EStoryFlowNodeType::StringToFloat:
 	{
-		FString Input = EvaluateStringInput(Node, TEXT("string"), Node->Data.Value.GetString());
+		FString Input = EvaluateStringInput(Node, StoryFlowHandles::In_String, Node->Data.Value.GetString());
 		Result = FCString::Atof(*Input);
 		break;
 	}
 
 	case EStoryFlowNodeType::GetFloatArrayElement:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateFloatArrayInput(Node, TEXT("float-array"));
-		int32 Index = EvaluateIntegerInput(Node, TEXT("integer"), Node->Data.Value.GetInt(0));
+		TArray<FStoryFlowVariant> Array = EvaluateFloatArrayInput(Node, StoryFlowHandles::In_FloatArray);
+		int32 Index = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer, Node->Data.Value.GetInt(0));
 		if (Index >= 0 && Index < Array.Num())
 		{
 			Result = Array[Index].GetFloat();
@@ -708,7 +709,7 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 
 	case EStoryFlowNodeType::GetRandomFloatArrayElement:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateFloatArrayInput(Node, TEXT("float-array"));
+		TArray<FStoryFlowVariant> Array = EvaluateFloatArrayInput(Node, StoryFlowHandles::In_FloatArray);
 		if (Array.Num() > 0)
 		{
 			Result = Array[FMath::RandRange(0, Array.Num() - 1)].GetFloat();
@@ -788,36 +789,36 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 
 	case EStoryFlowNodeType::ConcatenateString:
 	{
-		FString Input1 = EvaluateStringInput(Node, TEXT("string-1"), Context->GetString(Node->Data.Value1.GetString()));
-		FString Input2 = EvaluateStringInput(Node, TEXT("string-2"), Context->GetString(Node->Data.Value2.GetString()));
+		FString Input1 = EvaluateStringInput(Node, StoryFlowHandles::In_String1, Context->GetString(Node->Data.Value1.GetString()));
+		FString Input2 = EvaluateStringInput(Node, StoryFlowHandles::In_String2, Context->GetString(Node->Data.Value2.GetString()));
 		Result = Input1 + Input2;
 		break;
 	}
 
 	case EStoryFlowNodeType::ToUpperCase:
 	{
-		FString Input = EvaluateStringInput(Node, TEXT("string"), Node->Data.Value.GetString());
+		FString Input = EvaluateStringInput(Node, StoryFlowHandles::In_String, Node->Data.Value.GetString());
 		Result = Input.ToUpper();
 		break;
 	}
 
 	case EStoryFlowNodeType::ToLowerCase:
 	{
-		FString Input = EvaluateStringInput(Node, TEXT("string"), Node->Data.Value.GetString());
+		FString Input = EvaluateStringInput(Node, StoryFlowHandles::In_String, Node->Data.Value.GetString());
 		Result = Input.ToLower();
 		break;
 	}
 
 	case EStoryFlowNodeType::IntToString:
 	{
-		int32 Input = EvaluateIntegerInput(Node, TEXT("integer"), Node->Data.Value.GetInt(0));
+		int32 Input = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer, Node->Data.Value.GetInt(0));
 		Result = FString::FromInt(Input);
 		break;
 	}
 
 	case EStoryFlowNodeType::FloatToString:
 	{
-		float Input = EvaluateFloatInput(Node, TEXT("float"), Node->Data.Value.GetFloat(0.0f));
+		float Input = EvaluateFloatInput(Node, StoryFlowHandles::In_Float, Node->Data.Value.GetFloat(0.0f));
 		Result = FString::SanitizeFloat(Input);
 		break;
 	}
@@ -831,7 +832,7 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 
 	case EStoryFlowNodeType::EnumToString:
 	{
-		FString Input = EvaluateEnumInput(Node, TEXT("enum"), Node->Data.Value.GetString());
+		FString Input = EvaluateEnumInput(Node, StoryFlowHandles::In_Enum, Node->Data.Value.GetString());
 		Result = Input;
 		break;
 	}
@@ -860,8 +861,8 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 
 	case EStoryFlowNodeType::GetStringArrayElement:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateStringArrayInput(Node, TEXT("string-array"));
-		int32 Index = EvaluateIntegerInput(Node, TEXT("integer"), Node->Data.Value.GetInt(0));
+		TArray<FStoryFlowVariant> Array = EvaluateStringArrayInput(Node, StoryFlowHandles::In_StringArray);
+		int32 Index = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer, Node->Data.Value.GetInt(0));
 		if (Index >= 0 && Index < Array.Num())
 		{
 			Result = Array[Index].GetString();
@@ -871,7 +872,7 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 
 	case EStoryFlowNodeType::GetRandomStringArrayElement:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateStringArrayInput(Node, TEXT("string-array"));
+		TArray<FStoryFlowVariant> Array = EvaluateStringArrayInput(Node, StoryFlowHandles::In_StringArray);
 		if (Array.Num() > 0)
 		{
 			Result = Array[FMath::RandRange(0, Array.Num() - 1)].GetString();
@@ -881,8 +882,8 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 
 	case EStoryFlowNodeType::GetImageArrayElement:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateImageArrayInput(Node, TEXT("image-array"));
-		int32 Index = EvaluateIntegerInput(Node, TEXT("integer"), Node->Data.Value.GetInt(0));
+		TArray<FStoryFlowVariant> Array = EvaluateImageArrayInput(Node, StoryFlowHandles::In_ImageArray);
+		int32 Index = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer, Node->Data.Value.GetInt(0));
 		if (Index >= 0 && Index < Array.Num())
 		{
 			Result = Array[Index].GetString();
@@ -892,7 +893,7 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 
 	case EStoryFlowNodeType::GetRandomImageArrayElement:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateImageArrayInput(Node, TEXT("image-array"));
+		TArray<FStoryFlowVariant> Array = EvaluateImageArrayInput(Node, StoryFlowHandles::In_ImageArray);
 		if (Array.Num() > 0)
 		{
 			Result = Array[FMath::RandRange(0, Array.Num() - 1)].GetString();
@@ -902,8 +903,8 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 
 	case EStoryFlowNodeType::GetCharacterArrayElement:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateCharacterArrayInput(Node, TEXT("character-array"));
-		int32 Index = EvaluateIntegerInput(Node, TEXT("integer"), Node->Data.Value.GetInt(0));
+		TArray<FStoryFlowVariant> Array = EvaluateCharacterArrayInput(Node, StoryFlowHandles::In_CharacterArray);
+		int32 Index = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer, Node->Data.Value.GetInt(0));
 		if (Index >= 0 && Index < Array.Num())
 		{
 			Result = Array[Index].GetString();
@@ -913,7 +914,7 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 
 	case EStoryFlowNodeType::GetRandomCharacterArrayElement:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateCharacterArrayInput(Node, TEXT("character-array"));
+		TArray<FStoryFlowVariant> Array = EvaluateCharacterArrayInput(Node, StoryFlowHandles::In_CharacterArray);
 		if (Array.Num() > 0)
 		{
 			Result = Array[FMath::RandRange(0, Array.Num() - 1)].GetString();
@@ -923,8 +924,8 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 
 	case EStoryFlowNodeType::GetAudioArrayElement:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateAudioArrayInput(Node, TEXT("audio-array"));
-		int32 Index = EvaluateIntegerInput(Node, TEXT("integer"), Node->Data.Value.GetInt(0));
+		TArray<FStoryFlowVariant> Array = EvaluateAudioArrayInput(Node, StoryFlowHandles::In_AudioArray);
+		int32 Index = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer, Node->Data.Value.GetInt(0));
 		if (Index >= 0 && Index < Array.Num())
 		{
 			Result = Array[Index].GetString();
@@ -934,7 +935,7 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 
 	case EStoryFlowNodeType::GetRandomAudioArrayElement:
 	{
-		TArray<FStoryFlowVariant> Array = EvaluateAudioArrayInput(Node, TEXT("audio-array"));
+		TArray<FStoryFlowVariant> Array = EvaluateAudioArrayInput(Node, StoryFlowHandles::In_AudioArray);
 		if (Array.Num() > 0)
 		{
 			Result = Array[FMath::RandRange(0, Array.Num() - 1)].GetString();
@@ -1067,7 +1068,7 @@ void FStoryFlowEvaluator::ProcessBooleanChain(FStoryFlowNode* Node)
 	case EStoryFlowNodeType::NotBool:
 	{
 		// Process input first
-		if (const FStoryFlowConnection* InputEdge = Context->FindInputEdge(Node->Id, TEXT("boolean")))
+		if (const FStoryFlowConnection* InputEdge = Context->FindInputEdge(Node->Id, StoryFlowHandles::In_Boolean))
 		{
 			if (FStoryFlowNode* SourceNode = Context->GetNode(InputEdge->Source))
 			{
@@ -1075,7 +1076,7 @@ void FStoryFlowEvaluator::ProcessBooleanChain(FStoryFlowNode* Node)
 			}
 		}
 		// Then evaluate
-		bool Input = EvaluateBooleanInput(Node, TEXT("boolean"), Node->Data.Value.GetBool(false));
+		bool Input = EvaluateBooleanInput(Node, StoryFlowHandles::In_Boolean, Node->Data.Value.GetBool(false));
 		NodeState.CachedOutput.SetBool(!Input);
 		NodeState.bHasCachedOutput = true;
 		break;
@@ -1086,14 +1087,14 @@ void FStoryFlowEvaluator::ProcessBooleanChain(FStoryFlowNode* Node)
 	case EStoryFlowNodeType::EqualBool:
 	{
 		// Process both inputs recursively
-		if (const FStoryFlowConnection* Edge1 = Context->FindInputEdge(Node->Id, TEXT("boolean-1")))
+		if (const FStoryFlowConnection* Edge1 = Context->FindInputEdge(Node->Id, StoryFlowHandles::In_Boolean1))
 		{
 			if (FStoryFlowNode* Source1 = Context->GetNode(Edge1->Source))
 			{
 				ProcessBooleanChain(Source1);
 			}
 		}
-		if (const FStoryFlowConnection* Edge2 = Context->FindInputEdge(Node->Id, TEXT("boolean-2")))
+		if (const FStoryFlowConnection* Edge2 = Context->FindInputEdge(Node->Id, StoryFlowHandles::In_Boolean2))
 		{
 			if (FStoryFlowNode* Source2 = Context->GetNode(Edge2->Source))
 			{
@@ -1106,7 +1107,7 @@ void FStoryFlowEvaluator::ProcessBooleanChain(FStoryFlowNode* Node)
 	case EStoryFlowNodeType::Branch:
 	{
 		// Process condition input
-		if (const FStoryFlowConnection* CondEdge = Context->FindInputEdge(Node->Id, TEXT("boolean-condition")))
+		if (const FStoryFlowConnection* CondEdge = Context->FindInputEdge(Node->Id, StoryFlowHandles::In_BooleanCondition))
 		{
 			if (FStoryFlowNode* CondNode = Context->GetNode(CondEdge->Source))
 			{

@@ -15,6 +15,12 @@ inline FString NormalizeScriptPath(const FString& Path)
 	return Result;
 }
 
+/** Normalize a character path for consistent map lookups (lowercase, forward slashes to backslashes) */
+inline FString NormalizeCharacterPath(const FString& Path)
+{
+	return Path.ToLower().Replace(TEXT("/"), TEXT("\\"));
+}
+
 class FStoryFlowRuntimeModule : public IModuleInterface
 {
 public:

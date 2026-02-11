@@ -129,7 +129,7 @@ FStoryFlowCharacterDef* FStoryFlowExecutionContext::FindCharacter(const FString&
 	}
 
 	// Normalize path for lookup
-	FString NormalizedPath = CharacterPath.ToLower().Replace(TEXT("/"), TEXT("\\"));
+	FString NormalizedPath = NormalizeCharacterPath(CharacterPath);
 
 	// Use external characters (from subsystem - mutable runtime copies)
 	if (ExternalCharacters)
@@ -461,7 +461,7 @@ FString FStoryFlowExecutionContext::InterpolateVariables(const FString& Text) co
 				if (!CharacterPath.IsEmpty())
 				{
 					// Normalize path for lookup
-					FString NormalizedPath = CharacterPath.ToLower().Replace(TEXT("/"), TEXT("\\"));
+					FString NormalizedPath = NormalizeCharacterPath(CharacterPath);
 
 					// Find character definition from runtime characters
 					const FStoryFlowCharacterDef* CharDef = nullptr;

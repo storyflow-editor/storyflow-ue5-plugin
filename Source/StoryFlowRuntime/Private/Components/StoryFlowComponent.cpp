@@ -5,6 +5,7 @@
 #include "Data/StoryFlowProjectAsset.h"
 #include "Data/StoryFlowScriptAsset.h"
 #include "Data/StoryFlowCharacterAsset.h"
+#include "Data/StoryFlowHandles.h"
 #include "Evaluation/StoryFlowEvaluator.h"
 #include "Subsystems/StoryFlowSubsystem.h"
 #include "Engine/GameInstance.h"
@@ -215,8 +216,7 @@ void UStoryFlowComponent::SelectOption(const FString& OptionId)
 	}
 
 	// Continue from the selected option
-	FString SourceHandle = FString::Printf(TEXT("source-%s-%s"), *ExecutionContext.CurrentDialogueState.NodeId, *OptionId);
-	ProcessNextNode(SourceHandle);
+	ProcessNextNode(StoryFlowHandles::Source(ExecutionContext.CurrentDialogueState.NodeId, OptionId));
 
 	// If no edge was found (dead end) and we're still executing but not waiting for input,
 	// return to the current dialogue to re-render (hides once-only options, updates text, etc.)
@@ -255,7 +255,7 @@ void UStoryFlowComponent::AdvanceDialogue()
 		return;
 	}
 
-	const FString HeaderHandle = FString::Printf(TEXT("source-%s-"), *ExecutionContext.CurrentDialogueState.NodeId);
+	const FString HeaderHandle = StoryFlowHandles::Source(ExecutionContext.CurrentDialogueState.NodeId);
 
 	if (!ExecutionContext.FindEdgeBySourceHandle(HeaderHandle))
 	{
@@ -545,7 +545,7 @@ void UStoryFlowComponent::ProcessNode(FStoryFlowNode* Node)
 	else
 	{
 		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Unhandled node type: %s (%d)"), *Node->TypeString, static_cast<int32>(Node->Type));
-		ProcessNextNode(FString::Printf(TEXT("source-%s-"), *Node->Id));
+		ProcessNextNode(StoryFlowHandles::Source(Node->Id));
 	}
 
 	--ExecutionContext.ProcessingDepth;
@@ -762,8 +762,8 @@ void UStoryFlowComponent::ProcessNextNode(const FString& SourceHandle)
 
 void UStoryFlowComponent::HandleStart(FStoryFlowNode* Node)
 {
-	// Start node just continues to next - handle format is "source-{nodeId}-" (empty suffix)
-	FString Handle = FString::Printf(TEXT("source-%s-"), *Node->Id);
+	// Start node just continues to next
+	FString Handle = StoryFlowHandles::Source(Node->Id);
 	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: HandleStart - Continuing to next via handle '%s'"), *Handle);
 	ProcessNextNode(Handle);
 }
@@ -803,7 +803,7 @@ void UStoryFlowComponent::HandleEnd(FStoryFlowNode* Node)
 			}
 
 			// Continue from runScript node's output
-			ProcessNextNode(FString::Printf(TEXT("source-%s-output"), *Frame.ReturnNodeId));
+			ProcessNextNode(StoryFlowHandles::Source(Frame.ReturnNodeId, StoryFlowHandles::Out_Output));
 		}
 	}
 	else
@@ -825,13 +825,11 @@ void UStoryFlowComponent::HandleBranch(FStoryFlowNode* Node)
 	bool Condition = false;
 	if (Evaluator)
 	{
-		Condition = Evaluator->EvaluateBooleanInput(Node, TEXT("boolean-condition"), Node->Data.Value.GetBool(false));
+		Condition = Evaluator->EvaluateBooleanInput(Node, StoryFlowHandles::In_BooleanCondition, Node->Data.Value.GetBool(false));
 	}
 
 	// Continue based on condition
-	FString Handle = Condition
-		? FString::Printf(TEXT("source-%s-true"), *Node->Id)
-		: FString::Printf(TEXT("source-%s-false"), *Node->Id);
+	FString Handle = StoryFlowHandles::Source(Node->Id, Condition ? StoryFlowHandles::Out_True : StoryFlowHandles::Out_False);
 
 	// Check if the edge exists
 	const FStoryFlowConnection* Edge = ExecutionContext.FindEdgeBySourceHandle(Handle);
@@ -1023,13 +1021,13 @@ void UStoryFlowComponent::HandleRunFlow(FStoryFlowNode* Node)
 void UStoryFlowComponent::HandleEntryFlow(FStoryFlowNode* Node)
 {
 	// Just continue to next node
-	ProcessNextNode(FString::Printf(TEXT("source-%s-"), *Node->Id));
+	ProcessNextNode(StoryFlowHandles::Source(Node->Id));
 }
 
 void UStoryFlowComponent::HandleGetBool(FStoryFlowNode* Node)
 {
 	// Data node - just continue
-	ProcessNextNode(FString::Printf(TEXT("source-%s-boolean-"), *Node->Id));
+	ProcessNextNode(StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Boolean));
 }
 
 void UStoryFlowComponent::HandleSetBool(FStoryFlowNode* Node)
@@ -1045,12 +1043,12 @@ void UStoryFlowComponent::HandleSetBool(FStoryFlowNode* Node)
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 	NotifyVariableChanged(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 
-	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
+	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 }
 
 void UStoryFlowComponent::HandleGetInt(FStoryFlowNode* Node)
 {
-	ProcessNextNode(FString::Printf(TEXT("source-%s-integer-"), *Node->Id));
+	ProcessNextNode(StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Integer));
 }
 
 void UStoryFlowComponent::HandleSetInt(FStoryFlowNode* Node)
@@ -1066,12 +1064,12 @@ void UStoryFlowComponent::HandleSetInt(FStoryFlowNode* Node)
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 	NotifyVariableChanged(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 
-	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
+	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 }
 
 void UStoryFlowComponent::HandleGetFloat(FStoryFlowNode* Node)
 {
-	ProcessNextNode(FString::Printf(TEXT("source-%s-float-"), *Node->Id));
+	ProcessNextNode(StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Float));
 }
 
 void UStoryFlowComponent::HandleSetFloat(FStoryFlowNode* Node)
@@ -1087,12 +1085,12 @@ void UStoryFlowComponent::HandleSetFloat(FStoryFlowNode* Node)
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 	NotifyVariableChanged(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 
-	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
+	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 }
 
 void UStoryFlowComponent::HandleGetString(FStoryFlowNode* Node)
 {
-	ProcessNextNode(FString::Printf(TEXT("source-%s-string-"), *Node->Id));
+	ProcessNextNode(StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_String));
 }
 
 void UStoryFlowComponent::HandleSetString(FStoryFlowNode* Node)
@@ -1109,12 +1107,12 @@ void UStoryFlowComponent::HandleSetString(FStoryFlowNode* Node)
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 	NotifyVariableChanged(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 
-	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
+	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 }
 
 void UStoryFlowComponent::HandleGetEnum(FStoryFlowNode* Node)
 {
-	ProcessNextNode(FString::Printf(TEXT("source-%s-enum-"), *Node->Id));
+	ProcessNextNode(StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Enum));
 }
 
 void UStoryFlowComponent::HandleSetEnum(FStoryFlowNode* Node)
@@ -1130,14 +1128,14 @@ void UStoryFlowComponent::HandleSetEnum(FStoryFlowNode* Node)
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 	NotifyVariableChanged(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 
-	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
+	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 }
 
 void UStoryFlowComponent::HandleLogicNode(FStoryFlowNode* Node)
 {
 	// Logic/data nodes just continue - their values are evaluated when needed
 	// Find and use the first flow output
-	ProcessNextNode(FString::Printf(TEXT("source-%s-"), *Node->Id));
+	ProcessNextNode(StoryFlowHandles::Source(Node->Id));
 }
 
 void UStoryFlowComponent::HandleArraySet(FStoryFlowNode* Node)
@@ -1147,7 +1145,7 @@ void UStoryFlowComponent::HandleArraySet(FStoryFlowNode* Node)
 	if (!Var)
 	{
 		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: HandleArraySet - variable '%s' not found"), *Node->Data.Variable);
-		HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
+		HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 		return;
 	}
 
@@ -1182,7 +1180,7 @@ void UStoryFlowComponent::HandleArraySet(FStoryFlowNode* Node)
 				Arr[Index].SetBool(Evaluator->EvaluateBooleanInput(Node, TEXT("boolean"), Node->Data.Value.GetBool(false)));
 				break;
 			case EStoryFlowNodeType::SetIntArrayElement:
-				Arr[Index].SetInt(Evaluator->EvaluateIntegerInput(Node, TEXT("integer-value"), Node->Data.Value.GetInt(0)));
+				Arr[Index].SetInt(Evaluator->EvaluateIntegerInput(Node, StoryFlowHandles::In_IntegerValue, Node->Data.Value.GetInt(0)));
 				break;
 			case EStoryFlowNodeType::SetFloatArrayElement:
 				Arr[Index].SetFloat(Evaluator->EvaluateFloatInput(Node, TEXT("float"), Node->Data.Value.GetFloat(0.0f)));
@@ -1233,7 +1231,7 @@ void UStoryFlowComponent::HandleArraySet(FStoryFlowNode* Node)
 	}
 
 	NotifyVariableChanged(Node->Data.Variable, Var->Value, Node->Data.bIsGlobal);
-	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
+	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 }
 
 void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
@@ -1243,7 +1241,7 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 	if (!Var)
 	{
 		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: HandleArrayModify - variable '%s' not found"), *Node->Data.Variable);
-		HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
+		HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 		return;
 	}
 
@@ -1325,7 +1323,7 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 	}
 
 	NotifyVariableChanged(Node->Data.Variable, Var->Value, Node->Data.bIsGlobal);
-	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
+	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 }
 
 void UStoryFlowComponent::HandleForEachLoop(FStoryFlowNode* Node)
@@ -1386,7 +1384,7 @@ void UStoryFlowComponent::HandleForEachLoop(FStoryFlowNode* Node)
 		NodeState.bHasCachedOutput = true;
 
 		// Execute loop body
-		ProcessNextNode(FString::Printf(TEXT("source-%s-loopBody"), *Node->Id));
+		ProcessNextNode(StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_LoopBody));
 	}
 	else
 	{
@@ -1402,7 +1400,7 @@ void UStoryFlowComponent::HandleForEachLoop(FStoryFlowNode* Node)
 		}
 
 		// Continue after loop
-		ProcessNextNode(FString::Printf(TEXT("source-%s-completed"), *Node->Id));
+		ProcessNextNode(StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_LoopCompleted));
 	}
 }
 
@@ -1424,7 +1422,7 @@ void UStoryFlowComponent::HandleSetImage(FStoryFlowNode* Node)
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 	NotifyVariableChanged(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 
-	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
+	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 }
 
 void UStoryFlowComponent::HandleSetAudio(FStoryFlowNode* Node)
@@ -1445,7 +1443,7 @@ void UStoryFlowComponent::HandleSetAudio(FStoryFlowNode* Node)
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 	NotifyVariableChanged(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 
-	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
+	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 }
 
 void UStoryFlowComponent::HandleSetCharacter(FStoryFlowNode* Node)
@@ -1466,7 +1464,7 @@ void UStoryFlowComponent::HandleSetCharacter(FStoryFlowNode* Node)
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 	NotifyVariableChanged(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 
-	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
+	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 }
 
 void UStoryFlowComponent::HandleSwitchOnEnum(FStoryFlowNode* Node)
@@ -1480,7 +1478,7 @@ void UStoryFlowComponent::HandleSwitchOnEnum(FStoryFlowNode* Node)
 	}
 
 	// Construct output handle matching the enum value
-	FString SourceHandle = FString::Printf(TEXT("source-%s-%s"), *Node->Id, *EnumValue);
+	FString SourceHandle = StoryFlowHandles::Source(Node->Id, EnumValue);
 	const FStoryFlowConnection* Edge = ExecutionContext.FindEdgeBySourceHandle(SourceHandle);
 
 	if (Edge)
@@ -1500,7 +1498,7 @@ void UStoryFlowComponent::HandleSetBackgroundImage(FStoryFlowNode* Node)
 
 	if (Evaluator)
 	{
-		const FStoryFlowConnection* Edge = ExecutionContext.FindInputEdge(Node->Id, TEXT("image-image-input"));
+		const FStoryFlowConnection* Edge = ExecutionContext.FindInputEdge(Node->Id, StoryFlowHandles::In_ImageInput);
 		if (Edge)
 		{
 			FStoryFlowNode* SourceNode = ExecutionContext.GetNode(Edge->Source);
@@ -1514,7 +1512,7 @@ void UStoryFlowComponent::HandleSetBackgroundImage(FStoryFlowNode* Node)
 	// Broadcast the background image change
 	OnBackgroundImageChanged.Broadcast(ImagePath);
 
-	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-output"), *Node->Id));
+	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Output));
 }
 
 void UStoryFlowComponent::HandlePlayAudio(FStoryFlowNode* Node)
@@ -1524,7 +1522,7 @@ void UStoryFlowComponent::HandlePlayAudio(FStoryFlowNode* Node)
 
 	if (Evaluator)
 	{
-		const FStoryFlowConnection* Edge = ExecutionContext.FindInputEdge(Node->Id, TEXT("audio-audio-input"));
+		const FStoryFlowConnection* Edge = ExecutionContext.FindInputEdge(Node->Id, StoryFlowHandles::In_AudioInput);
 		if (Edge)
 		{
 			FStoryFlowNode* SourceNode = ExecutionContext.GetNode(Edge->Source);
@@ -1540,7 +1538,7 @@ void UStoryFlowComponent::HandlePlayAudio(FStoryFlowNode* Node)
 	// Broadcast audio play request
 	OnAudioPlayRequested.Broadcast(AudioPath, bLoop);
 
-	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-output"), *Node->Id));
+	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Output));
 }
 
 void UStoryFlowComponent::HandleGetCharacterVar(FStoryFlowNode* Node)
@@ -1563,7 +1561,7 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 		*CharacterPath, *VariableName, *VariableType, *Node->Data.Value.ToString());
 
 	// First check if there's a connected character input
-	FString CharacterInputHandle = FString::Printf(TEXT("target-%s-character-character-input"), *Node->Id);
+	FString CharacterInputHandle = StoryFlowHandles::Target(Node->Id, StoryFlowHandles::In_CharacterInput);
 	const FStoryFlowConnection* CharEdge = nullptr;
 	if (UStoryFlowScriptAsset* CurrentScript = ExecutionContext.CurrentScript.Get())
 	{
@@ -1590,7 +1588,7 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 	if (CharacterPath.IsEmpty())
 	{
 		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: SetCharacterVar has no character path"));
-		HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
+		HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 		return;
 	}
 
@@ -1653,7 +1651,7 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 	ExecutionContext.SetCharacterVariable(CharacterPath, VariableName, NewValue);
 
 	// Continue execution
-	HandleSetNodeEnd(Node, FString::Printf(TEXT("source-%s-1"), *Node->Id));
+	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 }
 
 // ============================================================================
@@ -1683,7 +1681,7 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 			if (!CharDef->Image.IsEmpty())
 			{
 				// Normalize path to match the key used in Project->Characters
-				FString NormalizedCharPath = DialogueNode->Data.Character.ToLower().Replace(TEXT("/"), TEXT("\\"));
+				FString NormalizedCharPath = NormalizeCharacterPath(DialogueNode->Data.Character);
 				UStoryFlowProjectAsset* Project = ExecutionContext.Project.Get();
 				if (Project)
 				{
@@ -1797,7 +1795,7 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 	// Can advance: node defines ZERO options AND header output handle has an edge
 	if (DialogueNode->Data.Options.Num() == 0)
 	{
-		const FString HeaderHandle = FString::Printf(TEXT("source-%s-"), *DialogueNode->Id);
+		const FString HeaderHandle = StoryFlowHandles::Source(DialogueNode->Id);
 		State.bCanAdvance = (ExecutionContext.FindEdgeBySourceHandle(HeaderHandle) != nullptr);
 	}
 

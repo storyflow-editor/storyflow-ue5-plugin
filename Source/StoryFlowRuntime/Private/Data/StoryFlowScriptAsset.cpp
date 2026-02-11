@@ -1,6 +1,7 @@
 // Copyright 2026 StoryFlow. All Rights Reserved.
 
 #include "Data/StoryFlowScriptAsset.h"
+#include "Data/StoryFlowHandles.h"
 
 void UStoryFlowScriptAsset::PostLoad()
 {
@@ -97,7 +98,7 @@ const FStoryFlowConnection* UStoryFlowScriptAsset::FindEdgeBySource(const FStrin
 
 const FStoryFlowConnection* UStoryFlowScriptAsset::FindInputEdge(const FString& NodeId, const FString& HandleSuffix) const
 {
-	const FString Pattern = FString::Printf(TEXT("target-%s-%s"), *NodeId, *HandleSuffix);
+	const FString Pattern = StoryFlowHandles::Target(NodeId, HandleSuffix);
 
 	if (const TArray<int32>* Indices = TargetNodeIndex.Find(NodeId))
 	{

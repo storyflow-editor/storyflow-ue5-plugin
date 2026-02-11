@@ -52,12 +52,21 @@ bool StoryFlowAudio::ConvertMp3ToWav(const FString& Mp3Path, FString& OutWavPath
 	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Decoded MP3: %llu samples, %d channels, %d Hz"),
 		static_cast<uint64>(FileInfo.samples), FileInfo.channels, FileInfo.hz);
 
+	// Reject files too large for 32-bit WAV (>= ~6.7 hours stereo 44kHz)
+	if (FileInfo.samples > static_cast<size_t>(MAX_int32))
+	{
+		UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: MP3 too large to convert (%llu samples): %s"),
+			static_cast<uint64>(FileInfo.samples), *Mp3Path);
+		free(FileInfo.buffer);
+		return false;
+	}
+
 	// Build WAV file in memory
 	const int32 NumChannels = FileInfo.channels;
 	const int32 SampleRate = FileInfo.hz;
 	const int32 BitsPerSample = 16;
 	const int32 BytesPerSample = BitsPerSample / 8;
-	const int32 NumSamples = static_cast<int32>(FileInfo.samples); // total samples (channels included)
+	const int32 NumSamples = static_cast<int32>(FileInfo.samples);
 	const int32 DataSize = NumSamples * BytesPerSample;
 	const int32 WavFileSize = 44 + DataSize;
 
