@@ -92,6 +92,55 @@ public:
 	void ResetRuntimeCharacters();
 
 	// ========================================================================
+	// Once-Only Options (persists across dialogues)
+	// ========================================================================
+
+	/**
+	 * Get the used once-only options set
+	 */
+	TSet<FString>& GetUsedOnceOnlyOptions() { return UsedOnceOnlyOptions; }
+	const TSet<FString>& GetUsedOnceOnlyOptions() const { return UsedOnceOnlyOptions; }
+
+	// ========================================================================
+	// Save / Load
+	// ========================================================================
+
+	/**
+	 * Save current global state (variables, characters, once-only options) to a save slot.
+	 * Only saves between-dialogue state — not mid-dialogue execution state.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Save")
+	bool SaveToSlot(const FString& SlotName, int32 UserIndex = 0);
+
+	/**
+	 * Load global state from a save slot, replacing current variables, characters, and once-only tracking.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Save")
+	bool LoadFromSlot(const FString& SlotName, int32 UserIndex = 0);
+
+	/**
+	 * Check if a save exists in the given slot.
+	 */
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Save")
+	static bool DoesSaveExist(const FString& SlotName, int32 UserIndex = 0);
+
+	/**
+	 * Delete a save from the given slot.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Save")
+	static bool DeleteSave(const FString& SlotName, int32 UserIndex = 0);
+
+	// ========================================================================
+	// Reset All State (for "New Game")
+	// ========================================================================
+
+	/**
+	 * Reset all runtime state to defaults: global variables, runtime characters, and once-only options.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	void ResetAllState();
+
+	// ========================================================================
 	// Configuration
 	// ========================================================================
 
@@ -116,4 +165,8 @@ private:
 	/** Runtime copy of characters (mutable, for character variable modifications) */
 	UPROPERTY()
 	TMap<FString, FStoryFlowCharacterDef> RuntimeCharacters;
+
+	/** Tracks which once-only dialogue options have been used (NodeId-OptionId keys) */
+	UPROPERTY()
+	TSet<FString> UsedOnceOnlyOptions;
 };

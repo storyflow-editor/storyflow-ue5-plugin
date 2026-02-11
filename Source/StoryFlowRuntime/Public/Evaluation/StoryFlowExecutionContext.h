@@ -53,8 +53,8 @@ public:
 	/** Initialize the context (legacy - uses project's own global variables) */
 	void Initialize(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript);
 
-	/** Initialize the context with external global variables and characters (from subsystem) */
-	void InitializeWithSubsystem(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript, TMap<FString, FStoryFlowVariable>* InGlobalVariables, TMap<FString, FStoryFlowCharacterDef>* InCharacters = nullptr);
+	/** Initialize the context with external global variables, characters, and once-only options (from subsystem) */
+	void InitializeWithSubsystem(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript, TMap<FString, FStoryFlowVariable>* InGlobalVariables, TMap<FString, FStoryFlowCharacterDef>* InCharacters = nullptr, TSet<FString>* InUsedOnceOnlyOptions = nullptr);
 
 	/** Reset the context to initial state */
 	void Reset();
@@ -127,9 +127,13 @@ public:
 
 	// === Once-Only Tracking ===
 
-	/** Set of once-only option keys (NodeId-OptionId) that have been used */
-	UPROPERTY()
-	TSet<FString> UsedOnceOnlyOptions;
+	/**
+	 * Non-owning pointer to external once-only option set (owned by UStoryFlowSubsystem).
+	 * Tracks which once-only dialogue options have been used (NodeId-OptionId keys).
+	 * Persists across dialogues so once-only options stay hidden.
+	 * Lifetime: valid as long as the subsystem exists (GameInstance scope).
+	 */
+	TSet<FString>* ExternalUsedOnceOnlyOptions = nullptr;
 
 	// === Current Dialogue State ===
 

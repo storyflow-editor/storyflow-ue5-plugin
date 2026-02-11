@@ -23,7 +23,7 @@ void FStoryFlowExecutionContext::Initialize(UStoryFlowProjectAsset* InProject, U
 	}
 }
 
-void FStoryFlowExecutionContext::InitializeWithSubsystem(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript, TMap<FString, FStoryFlowVariable>* InGlobalVariables, TMap<FString, FStoryFlowCharacterDef>* InCharacters)
+void FStoryFlowExecutionContext::InitializeWithSubsystem(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript, TMap<FString, FStoryFlowVariable>* InGlobalVariables, TMap<FString, FStoryFlowCharacterDef>* InCharacters, TSet<FString>* InUsedOnceOnlyOptions)
 {
 	Reset();
 
@@ -31,6 +31,7 @@ void FStoryFlowExecutionContext::InitializeWithSubsystem(UStoryFlowProjectAsset*
 	CurrentScript = InScript;
 	ExternalGlobalVariables = InGlobalVariables;
 	ExternalCharacters = InCharacters;
+	ExternalUsedOnceOnlyOptions = InUsedOnceOnlyOptions;
 
 	if (InScript)
 	{
@@ -53,7 +54,7 @@ void FStoryFlowExecutionContext::Reset()
 	FlowCallStack.Empty();
 	LoopStack.Empty();
 	LocalVariables.Empty();
-	UsedOnceOnlyOptions.Empty();
+	ExternalUsedOnceOnlyOptions = nullptr;
 	CurrentDialogueState = FStoryFlowDialogueState();
 	PersistentBackgroundImage = nullptr;
 	EvaluationDepth = 0;

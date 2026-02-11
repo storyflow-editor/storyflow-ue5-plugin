@@ -100,8 +100,8 @@ void UStoryFlowComponent::StartDialogueWithScript(const FString& ScriptPath)
 		*ScriptAsset->GetName(), ScriptAsset->Nodes.Num(), *ScriptAsset->StartNode);
 
 	// Initialize execution context with project and script
-	// Pass the subsystem's global variables and runtime characters so they're shared across all components
-	ExecutionContext.InitializeWithSubsystem(Project, ScriptAsset, &Subsystem->GetGlobalVariables(), &Subsystem->GetRuntimeCharacters());
+	// Pass the subsystem's global variables, runtime characters, and once-only options so they're shared across all components
+	ExecutionContext.InitializeWithSubsystem(Project, ScriptAsset, &Subsystem->GetGlobalVariables(), &Subsystem->GetRuntimeCharacters(), &Subsystem->GetUsedOnceOnlyOptions());
 	ExecutionContext.bIsExecuting = true;
 	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: ExecutionContext initialized, CurrentNodeId='%s'"), *ExecutionContext.CurrentNodeId);
 
@@ -195,10 +195,10 @@ void UStoryFlowComponent::SelectOption(const FString& OptionId)
 			{
 				for (const FStoryFlowChoice& Choice : CurrentNode->Data.Options)
 				{
-					if (Choice.Id == OptionId && Choice.bOnceOnly)
+					if (Choice.Id == OptionId && Choice.bOnceOnly && ExecutionContext.ExternalUsedOnceOnlyOptions)
 					{
 						const FString OptionKey = ExecutionContext.CurrentDialogueState.NodeId + TEXT("-") + OptionId;
-						ExecutionContext.UsedOnceOnlyOptions.Add(OptionKey);
+						ExecutionContext.ExternalUsedOnceOnlyOptions->Add(OptionKey);
 						break;
 					}
 				}
@@ -1781,7 +1781,7 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 	{
 		// Check once-only (use composite key NodeId-OptionId to handle copied nodes)
 		const FString OnceOnlyKey = DialogueNode->Id + TEXT("-") + Choice.Id;
-		if (Choice.bOnceOnly && ExecutionContext.UsedOnceOnlyOptions.Contains(OnceOnlyKey))
+		if (Choice.bOnceOnly && ExecutionContext.ExternalUsedOnceOnlyOptions && ExecutionContext.ExternalUsedOnceOnlyOptions->Contains(OnceOnlyKey))
 		{
 			continue;
 		}
