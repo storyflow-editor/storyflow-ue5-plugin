@@ -26,7 +26,7 @@
 		{
 			"Name": "StoryFlowRuntime",
 			"Type": "Runtime",
-			"LoadingPhase": "Default",
+			"LoadingPhase": "PreDefault",
 			"PlatformAllowList": [
 				"Win64",
 				"Mac",

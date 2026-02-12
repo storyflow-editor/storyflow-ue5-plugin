@@ -141,8 +141,25 @@ public:
 	void ResetAllState();
 
 	// ========================================================================
-	// Configuration
+	// Active Dialogue Tracking
 	// ========================================================================
+
+	/**
+	 * Notify the subsystem that a dialogue has started (called by StoryFlowComponent).
+	 * Used to guard against loading mid-dialogue.
+	 */
+	void NotifyDialogueStarted() { ++ActiveDialogueCount; }
+
+	/**
+	 * Notify the subsystem that a dialogue has ended (called by StoryFlowComponent).
+	 */
+	void NotifyDialogueEnded() { ActiveDialogueCount = FMath::Max(0, ActiveDialogueCount - 1); }
+
+	/**
+	 * Check if any dialogue is currently active across all components.
+	 */
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Save")
+	bool IsDialogueActive() const { return ActiveDialogueCount > 0; }
 
 	/** Default content path for auto-loading project */
 	static const FString DefaultProjectPath;
@@ -169,4 +186,7 @@ private:
 	/** Tracks which once-only dialogue options have been used (NodeId-OptionId keys) */
 	UPROPERTY()
 	TSet<FString> UsedOnceOnlyOptions;
+
+	/** Number of currently active dialogues across all components */
+	int32 ActiveDialogueCount = 0;
 };

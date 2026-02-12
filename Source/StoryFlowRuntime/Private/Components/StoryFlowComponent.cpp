@@ -99,6 +99,7 @@ void UStoryFlowComponent::StartDialogueWithScript(const FString& ScriptPath)
 	// Pass the subsystem's global variables, runtime characters, and once-only options so they're shared across all components
 	ExecutionContext.InitializeWithSubsystem(Project, ScriptAsset, &Subsystem->GetGlobalVariables(), &Subsystem->GetRuntimeCharacters(), &Subsystem->GetUsedOnceOnlyOptions());
 	ExecutionContext.bIsExecuting = true;
+	Subsystem->NotifyDialogueStarted();
 	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: ExecutionContext initialized, CurrentNodeId='%s'"), *ExecutionContext.CurrentNodeId);
 
 	// Create evaluator
@@ -289,6 +290,11 @@ void UStoryFlowComponent::StopDialogue()
 	FString CurrentScriptPath = ExecutionContext.CurrentScript.IsValid() ? ExecutionContext.CurrentScript->ScriptPath : TEXT("");
 
 	ExecutionContext.Reset();
+
+	if (UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem())
+	{
+		Subsystem->NotifyDialogueEnded();
+	}
 	Evaluator.Reset();
 
 	OnScriptEnded.Broadcast(CurrentScriptPath);

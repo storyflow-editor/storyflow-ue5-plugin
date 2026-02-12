@@ -195,6 +195,12 @@ bool UStoryFlowSubsystem::SaveToSlot(const FString& SlotName, int32 UserIndex)
 
 bool UStoryFlowSubsystem::LoadFromSlot(const FString& SlotName, int32 UserIndex)
 {
+	if (ActiveDialogueCount > 0)
+	{
+		UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Cannot load while a dialogue is active. Stop all dialogues before loading."));
+		return false;
+	}
+
 	USaveGame* LoadedSave = UGameplayStatics::LoadGameFromSlot(SlotName, UserIndex);
 	if (!LoadedSave)
 	{
