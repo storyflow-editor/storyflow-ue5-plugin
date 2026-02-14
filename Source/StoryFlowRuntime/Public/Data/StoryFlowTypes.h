@@ -85,6 +85,7 @@ enum class EStoryFlowNodeType : uint8
 	SetEnum,
 	EqualEnum,
 	SwitchOnEnum,
+	RandomBranch,
 
 	// Type Conversion
 	IntToBoolean,
@@ -514,6 +515,27 @@ struct STORYFLOWRUNTIME_API FStoryFlowChoice
 };
 
 // ============================================================================
+// Weighted Option (for Random Branch nodes)
+// ============================================================================
+
+/**
+ * A weighted output option for random branch nodes
+ */
+USTRUCT(BlueprintType)
+struct STORYFLOWRUNTIME_API FStoryFlowWeightedOption
+{
+	GENERATED_BODY()
+
+	/** Unique option ID (matches source handle suffix) */
+	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	FString Id;
+
+	/** Relative weight (higher = more likely) */
+	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	int32 Weight = 1;
+};
+
+// ============================================================================
 // Node Data
 // ============================================================================
 
@@ -628,6 +650,12 @@ struct STORYFLOWRUNTIME_API FStoryFlowNodeData
 	/** Variable type for character variable nodes */
 	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
 	FString VariableType;
+
+	// === Random Branch Fields ===
+
+	/** Weighted output options (for randomBranch nodes) */
+	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	TArray<FStoryFlowWeightedOption> RandomBranchOptions;
 
 };
 

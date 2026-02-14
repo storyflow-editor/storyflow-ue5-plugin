@@ -70,6 +70,7 @@ EStoryFlowNodeType ParseNodeType(const FString& TypeString)
 		{ TEXT("setEnum"), EStoryFlowNodeType::SetEnum },
 		{ TEXT("equalEnum"), EStoryFlowNodeType::EqualEnum },
 		{ TEXT("switchOnEnum"), EStoryFlowNodeType::SwitchOnEnum },
+		{ TEXT("randomBranch"), EStoryFlowNodeType::RandomBranch },
 
 		// Type Conversion
 		{ TEXT("intToBoolean"), EStoryFlowNodeType::IntToBoolean },

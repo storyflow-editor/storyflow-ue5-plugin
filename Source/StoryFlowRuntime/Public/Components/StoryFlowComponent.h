@@ -318,6 +318,7 @@ protected:
 
 	// Enum Handlers
 	void HandleSwitchOnEnum(FStoryFlowNode* Node);
+	void HandleRandomBranch(FStoryFlowNode* Node);
 
 	// Media Handlers
 	void HandleSetImage(FStoryFlowNode* Node);

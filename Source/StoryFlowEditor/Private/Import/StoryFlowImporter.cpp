@@ -464,6 +464,29 @@ FStoryFlowNodeData UStoryFlowImporter::ParseNodeData(const TSharedPtr<FJsonObjec
 		Data.EnumVariable = NodeObject->GetStringField(TEXT("enumVariable"));
 	}
 
+	// Random Branch options
+	if (NodeObject->HasField(TEXT("options")))
+	{
+		const TArray<TSharedPtr<FJsonValue>>& OptionsArray = NodeObject->GetArrayField(TEXT("options"));
+		for (const TSharedPtr<FJsonValue>& OptionValue : OptionsArray)
+		{
+			TSharedPtr<FJsonObject> OptionObject = OptionValue->AsObject();
+			if (OptionObject.IsValid())
+			{
+				FStoryFlowWeightedOption Option;
+				if (OptionObject->HasField(TEXT("id")))
+				{
+					Option.Id = OptionObject->GetStringField(TEXT("id"));
+				}
+				if (OptionObject->HasField(TEXT("weight")))
+				{
+					Option.Weight = FMath::Max(1, static_cast<int32>(OptionObject->GetNumberField(TEXT("weight"))));
+				}
+				Data.RandomBranchOptions.Add(Option);
+			}
+		}
+	}
+
 	// Character Variable fields (for getCharacterVar/setCharacterVar nodes)
 	// Export reuses the "variable" JSON field for the character variable name,
 	// so only populate VariableName when characterPath is present (i.e., this is a character variable node)

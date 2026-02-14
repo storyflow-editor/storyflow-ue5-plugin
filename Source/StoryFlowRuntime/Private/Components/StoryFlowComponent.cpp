@@ -584,6 +584,7 @@ const TMap<EStoryFlowNodeType, UStoryFlowComponent::FNodeHandler>& UStoryFlowCom
 		T.Add(EStoryFlowNodeType::GetEnum,    &UStoryFlowComponent::HandleGetEnum);
 		T.Add(EStoryFlowNodeType::SetEnum,    &UStoryFlowComponent::HandleSetEnum);
 		T.Add(EStoryFlowNodeType::SwitchOnEnum, &UStoryFlowComponent::HandleSwitchOnEnum);
+		T.Add(EStoryFlowNodeType::RandomBranch, &UStoryFlowComponent::HandleRandomBranch);
 
 		// Logic nodes (no-op, evaluated lazily)
 		const FNodeHandler LogicHandler = &UStoryFlowComponent::HandleLogicNode;
@@ -1494,6 +1495,55 @@ void UStoryFlowComponent::HandleSwitchOnEnum(FStoryFlowNode* Node)
 	else
 	{
 		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: switchOnEnum - No output handle found for enum value '%s'"), *EnumValue);
+	}
+}
+
+void UStoryFlowComponent::HandleRandomBranch(FStoryFlowNode* Node)
+{
+	const TArray<FStoryFlowWeightedOption>& Options = Node->Data.RandomBranchOptions;
+	if (Options.Num() == 0)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: randomBranch '%s' has no options defined"), *Node->Id);
+		return;
+	}
+
+	// Calculate total weight
+	int32 TotalWeight = 0;
+	for (const FStoryFlowWeightedOption& Option : Options)
+	{
+		TotalWeight += FMath::Max(1, Option.Weight);
+	}
+
+	// Pick a random value in [0, TotalWeight)
+	const int32 Roll = FMath::RandRange(0, TotalWeight - 1);
+
+	// Find selected option using cumulative weight
+	int32 Cumulative = 0;
+	const FStoryFlowWeightedOption* SelectedOption = &Options[0];
+	for (const FStoryFlowWeightedOption& Option : Options)
+	{
+		Cumulative += FMath::Max(1, Option.Weight);
+		if (Roll < Cumulative)
+		{
+			SelectedOption = &Option;
+			break;
+		}
+	}
+
+	// Construct output handle: "source-{nodeId}-{optionId}"
+	FString SourceHandle = StoryFlowHandles::Source(Node->Id, SelectedOption->Id);
+	const FStoryFlowConnection* Edge = ExecutionContext.FindEdgeBySourceHandle(SourceHandle);
+
+	if (Edge)
+	{
+		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: randomBranch '%s' selected option '%s' (weight %d/%d)"),
+			*Node->Id, *SelectedOption->Id, SelectedOption->Weight, TotalWeight);
+		ProcessNextNode(SourceHandle);
+	}
+	else
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: randomBranch '%s' - no edge connected to selected output '%s'"),
+			*Node->Id, *SelectedOption->Id);
 	}
 }
 
