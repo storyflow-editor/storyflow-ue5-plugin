@@ -1507,11 +1507,36 @@ void UStoryFlowComponent::HandleRandomBranch(FStoryFlowNode* Node)
 		return;
 	}
 
-	// Calculate total weight
+	// Calculate total weight (resolve connected integer handles per option)
+	TArray<int32> ResolvedWeights;
+	ResolvedWeights.Reserve(Options.Num());
 	int32 TotalWeight = 0;
 	for (const FStoryFlowWeightedOption& Option : Options)
 	{
-		TotalWeight += FMath::Max(1, Option.Weight);
+		int32 W = Evaluator->EvaluateIntegerInput(Node, TEXT("integer-") + Option.Id, Option.Weight);
+		W = FMath::Max(0, W);
+		ResolvedWeights.Add(W);
+		TotalWeight += W;
+	}
+
+	// If all weights are zero, fall back to first option
+	if (TotalWeight <= 0)
+	{
+		const FStoryFlowWeightedOption& FirstOption = Options[0];
+		FString SourceHandle = StoryFlowHandles::Source(Node->Id, FirstOption.Id);
+		const FStoryFlowConnection* Edge = ExecutionContext.FindEdgeBySourceHandle(SourceHandle);
+		if (Edge)
+		{
+			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: randomBranch '%s' all weights zero, falling back to first option '%s'"),
+				*Node->Id, *FirstOption.Id);
+			ProcessNextNode(SourceHandle);
+		}
+		else
+		{
+			UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: randomBranch '%s' - no edge connected to fallback output '%s'"),
+				*Node->Id, *FirstOption.Id);
+		}
+		return;
 	}
 
 	// Pick a random value in [0, TotalWeight)
@@ -1519,31 +1544,32 @@ void UStoryFlowComponent::HandleRandomBranch(FStoryFlowNode* Node)
 
 	// Find selected option using cumulative weight
 	int32 Cumulative = 0;
-	const FStoryFlowWeightedOption* SelectedOption = &Options[0];
-	for (const FStoryFlowWeightedOption& Option : Options)
+	int32 SelectedIndex = 0;
+	for (int32 i = 0; i < Options.Num(); ++i)
 	{
-		Cumulative += FMath::Max(1, Option.Weight);
+		Cumulative += ResolvedWeights[i];
 		if (Roll < Cumulative)
 		{
-			SelectedOption = &Option;
+			SelectedIndex = i;
 			break;
 		}
 	}
+	const FStoryFlowWeightedOption& SelectedOption = Options[SelectedIndex];
 
 	// Construct output handle: "source-{nodeId}-{optionId}"
-	FString SourceHandle = StoryFlowHandles::Source(Node->Id, SelectedOption->Id);
+	FString SourceHandle = StoryFlowHandles::Source(Node->Id, SelectedOption.Id);
 	const FStoryFlowConnection* Edge = ExecutionContext.FindEdgeBySourceHandle(SourceHandle);
 
 	if (Edge)
 	{
 		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: randomBranch '%s' selected option '%s' (weight %d/%d)"),
-			*Node->Id, *SelectedOption->Id, SelectedOption->Weight, TotalWeight);
+			*Node->Id, *SelectedOption.Id, ResolvedWeights[SelectedIndex], TotalWeight);
 		ProcessNextNode(SourceHandle);
 	}
 	else
 	{
 		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: randomBranch '%s' - no edge connected to selected output '%s'"),
-			*Node->Id, *SelectedOption->Id);
+			*Node->Id, *SelectedOption.Id);
 	}
 }
 
