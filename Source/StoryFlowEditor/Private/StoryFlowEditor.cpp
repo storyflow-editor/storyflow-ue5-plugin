@@ -122,18 +122,30 @@ static UStoryFlowEditorSubsystem* GetEditorSubsystem()
 
 void FStoryFlowEditorModule::RegisterToolbarExtension()
 {
-	UToolMenu* ToolbarMenu = UToolMenus::Get()->ExtendMenu("LevelEditor.LevelEditorToolBar.PlayToolBar");
+	RegisterOnToolbar("LevelEditor.LevelEditorToolBar.PlayToolBar");
+	RegisterOnToolbar("AssetEditor.BlueprintEditor.ToolBar");
+	RegisterOnToolbar("AssetEditor.WidgetBlueprintEditor.ToolBar");
+	RegisterOnToolbar("AssetEditor.AnimationBlueprintEditor.ToolBar");
+	RegisterOnToolbar("AssetEditor.BehaviorTreeEditor.ToolBar");
+
+	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Toolbar extensions registered"));
+}
+
+void FStoryFlowEditorModule::RegisterOnToolbar(const FName& MenuName)
+{
+	UToolMenu* ToolbarMenu = UToolMenus::Get()->ExtendMenu(MenuName);
 	if (!ToolbarMenu)
 	{
-		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Could not find LevelEditor toolbar to extend"));
 		return;
 	}
 
 	FToolMenuSection& Section = ToolbarMenu->FindOrAddSection("StoryFlow");
+	Section.AddEntry(FToolMenuEntry::InitWidget("StoryFlowMenu", CreateToolbarWidget(), FText::GetEmpty()));
+}
 
-	Section.AddEntry(FToolMenuEntry::InitWidget(
-		"StoryFlowMenu",
-		SNew(SHorizontalBox)
+TSharedRef<SWidget> FStoryFlowEditorModule::CreateToolbarWidget()
+{
+	return SNew(SHorizontalBox)
 		// Main button (Connect when disconnected, Sync when connected)
 		+ SHorizontalBox::Slot()
 		.AutoWidth()
@@ -211,11 +223,7 @@ void FStoryFlowEditorModule::RegisterToolbarExtension()
 			.ContentPadding(FMargin(1.0f, 0.0f))
 			.ToolTipText(LOCTEXT("StoryFlowSettings_Tooltip", "StoryFlow settings"))
 			.OnGetMenuContent(FOnGetContent::CreateRaw(this, &FStoryFlowEditorModule::GenerateToolbarMenu))
-		],
-		FText::GetEmpty()
-	));
-
-	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Toolbar extension registered"));
+		];
 }
 
 void FStoryFlowEditorModule::UnregisterToolbarExtension()

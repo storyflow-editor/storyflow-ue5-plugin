@@ -25,6 +25,12 @@ private:
 	/** Creates the StoryFlow dropdown menu content */
 	TSharedRef<SWidget> GenerateToolbarMenu();
 
+	/** Creates the toolbar widget (sync button + dropdown) */
+	TSharedRef<SWidget> CreateToolbarWidget();
+
+	/** Registers the StoryFlow section on a single toolbar */
+	void RegisterOnToolbar(const FName& MenuName);
+
 	/** Style set for StoryFlow icons */
 	TSharedPtr<FSlateStyleSet> StyleSet;
 };
