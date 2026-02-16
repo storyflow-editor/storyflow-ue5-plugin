@@ -27,7 +27,8 @@
 
 #define STORYFLOW_STYLE_NAME "StoryFlowEditorStyle"
 #define STORYFLOW_VERSION "1.0.0"
-#define STORYFLOW_URL_DOCS "https://storyflow-editor.com/docs"
+#define STORYFLOW_URL_EDITOR_DOCS "https://storyflow-editor.com/docs"
+#define STORYFLOW_URL_PLUGIN_DOCS "https://storyflow-editor.com/integrations/unreal-engine/docs"
 #define STORYFLOW_URL_CHANGELOG "https://storyflow-editor.com/changelog"
 #define STORYFLOW_URL_DISCORD "https://discord.com/invite/3mp5vyKRtN"
 
@@ -418,7 +419,7 @@ TSharedRef<SWidget> FStoryFlowEditorModule::GenerateToolbarMenu()
 			SNew(SSeparator)
 		]
 
-		// Documentation button
+		// Editor Documentation button
 		+ SVerticalBox::Slot()
 		.AutoHeight()
 		.Padding(ButtonPadding)
@@ -428,12 +429,31 @@ TSharedRef<SWidget> FStoryFlowEditorModule::GenerateToolbarMenu()
 			.ContentPadding(ContentPadding)
 			.OnClicked_Lambda([]()
 			{
-				FPlatformProcess::LaunchURL(TEXT(STORYFLOW_URL_DOCS), nullptr, nullptr);
+				FPlatformProcess::LaunchURL(TEXT(STORYFLOW_URL_EDITOR_DOCS), nullptr, nullptr);
 				return FReply::Handled();
 			})
 			[
 				SNew(STextBlock)
-				.Text(LOCTEXT("StoryFlowMenu_Docs", "Documentation"))
+				.Text(LOCTEXT("StoryFlowMenu_EditorDocs", "Editor Documentation"))
+			]
+		]
+
+		// Plugin Documentation button
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(ButtonPadding)
+		[
+			SNew(SButton)
+			.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+			.ContentPadding(ContentPadding)
+			.OnClicked_Lambda([]()
+			{
+				FPlatformProcess::LaunchURL(TEXT(STORYFLOW_URL_PLUGIN_DOCS), nullptr, nullptr);
+				return FReply::Handled();
+			})
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("StoryFlowMenu_PluginDocs", "Plugin Documentation"))
 			]
 		]
 
