@@ -20,6 +20,7 @@
 #include "Brushes/SlateRoundedBoxBrush.h"
 #include "Interfaces/IPluginManager.h"
 #include "HAL/PlatformProcess.h"
+#include "DesktopPlatformModule.h"
 #include "Editor.h"
 
 #define LOCTEXT_NAMESPACE "FStoryFlowEditorModule"
@@ -366,6 +367,46 @@ TSharedRef<SWidget> FStoryFlowEditorModule::GenerateToolbarMenu()
 						? LOCTEXT("StoryFlowMenu_Disconnect", "Disconnect")
 						: LOCTEXT("StoryFlowMenu_Connect", "Connect to Editor");
 				})
+			]
+		]
+
+		// Import from Folder button
+		+ SVerticalBox::Slot()
+		.AutoHeight()
+		.Padding(ButtonPadding)
+		[
+			SNew(SButton)
+			.ButtonStyle(FAppStyle::Get(), "SimpleButton")
+			.ContentPadding(ContentPadding)
+			.OnClicked_Lambda([]()
+			{
+				IDesktopPlatform* DesktopPlatform = FDesktopPlatformModule::Get();
+				if (DesktopPlatform)
+				{
+					const void* ParentHandle = FSlateApplication::Get().FindBestParentWindowHandleForDialogs(nullptr);
+
+					FString SelectedPath;
+					bool bOpened = DesktopPlatform->OpenDirectoryDialog(
+						ParentHandle,
+						TEXT("Select StoryFlow Build Folder"),
+						FPaths::ProjectDir(),
+						SelectedPath
+					);
+
+					if (bOpened && !SelectedPath.IsEmpty())
+					{
+						UStoryFlowEditorSubsystem* Subsystem = GetEditorSubsystem();
+						if (Subsystem)
+						{
+							Subsystem->ImportProject(SelectedPath);
+						}
+					}
+				}
+				return FReply::Handled();
+			})
+			[
+				SNew(STextBlock)
+				.Text(LOCTEXT("StoryFlowMenu_ImportFolder", "Import from Folder..."))
 			]
 		]
 

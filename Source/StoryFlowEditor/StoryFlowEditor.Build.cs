@@ -34,7 +34,8 @@ public class StoryFlowEditor : ModuleRules
 				"SlateCore",
 				"EditorScriptingUtilities",
 				"ToolMenus",
-				"Projects"
+				"Projects",
+				"DesktopPlatform"
 			}
 		);
 	}
