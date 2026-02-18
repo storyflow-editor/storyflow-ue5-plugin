@@ -39,6 +39,10 @@ struct FNodeRuntimeState
 	int32 LoopIndex = -1;
 	TArray<FStoryFlowVariant> LoopArray;
 	bool bLoopInitialized = false;
+
+	/** Output values from a completed RunScript call (keyed by variable ID) */
+	TMap<FString, FStoryFlowVariant> OutputValues;
+	bool bHasOutputValues = false;
 };
 
 /**

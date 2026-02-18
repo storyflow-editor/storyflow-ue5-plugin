@@ -44,6 +44,10 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TMap<FString, TSoftObjectPtr<UObject>> ResolvedAssets;
 
+	/** Flow definitions (for exit route detection) */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	TArray<FStoryFlowFlowDef> Flows;
+
 	/** Original script path (relative to project) */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString ScriptPath;

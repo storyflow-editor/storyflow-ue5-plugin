@@ -254,6 +254,36 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 		break;
 	}
 
+	case EStoryFlowNodeType::RunScript:
+	{
+		if (NodeState.bHasOutputValues && !SourceHandle.IsEmpty())
+		{
+			int32 OutIdx = SourceHandle.Find(TEXT("-out-"));
+			if (OutIdx != INDEX_NONE)
+			{
+				FString VarId = SourceHandle.Mid(OutIdx + 5); // UUID from handle
+				// Map UUID to variable Name via ScriptOutputs (OutputValues is keyed by Name)
+				FString VarName;
+				for (const auto& Output : Node->Data.ScriptOutputs)
+				{
+					if (Output.Id == VarId)
+					{
+						VarName = Output.Name;
+						break;
+					}
+				}
+				if (!VarName.IsEmpty())
+				{
+					if (const FStoryFlowVariant* Val = NodeState.OutputValues.Find(VarName))
+					{
+						Result = Val->GetBool();
+					}
+				}
+			}
+		}
+		break;
+	}
+
 	default:
 		Result = false;
 		break;
@@ -572,6 +602,36 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 		break;
 	}
 
+	case EStoryFlowNodeType::RunScript:
+	{
+		FNodeRuntimeState& RSState = Context->GetNodeState(Node->Id);
+		if (RSState.bHasOutputValues && !SourceHandle.IsEmpty())
+		{
+			int32 OutIdx = SourceHandle.Find(TEXT("-out-"));
+			if (OutIdx != INDEX_NONE)
+			{
+				FString VarId = SourceHandle.Mid(OutIdx + 5);
+				FString VarName;
+				for (const auto& Output : Node->Data.ScriptOutputs)
+				{
+					if (Output.Id == VarId)
+					{
+						VarName = Output.Name;
+						break;
+					}
+				}
+				if (!VarName.IsEmpty())
+				{
+					if (const FStoryFlowVariant* Val = RSState.OutputValues.Find(VarName))
+					{
+						Result = Val->GetInt();
+					}
+				}
+			}
+		}
+		break;
+	}
+
 	default:
 		Result = 0;
 		break;
@@ -724,6 +784,36 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 		if (LoopState.bHasCachedOutput)
 		{
 			Result = LoopState.CachedOutput.GetFloat();
+		}
+		break;
+	}
+
+	case EStoryFlowNodeType::RunScript:
+	{
+		FNodeRuntimeState& RSState = Context->GetNodeState(Node->Id);
+		if (RSState.bHasOutputValues && !SourceHandle.IsEmpty())
+		{
+			int32 OutIdx = SourceHandle.Find(TEXT("-out-"));
+			if (OutIdx != INDEX_NONE)
+			{
+				FString VarId = SourceHandle.Mid(OutIdx + 5);
+				FString VarName;
+				for (const auto& Output : Node->Data.ScriptOutputs)
+				{
+					if (Output.Id == VarId)
+					{
+						VarName = Output.Name;
+						break;
+					}
+				}
+				if (!VarName.IsEmpty())
+				{
+					if (const FStoryFlowVariant* Val = RSState.OutputValues.Find(VarName))
+					{
+						Result = Val->GetFloat();
+					}
+				}
+			}
 		}
 		break;
 	}
@@ -953,6 +1043,36 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 		if (LoopState.bHasCachedOutput)
 		{
 			Result = LoopState.CachedOutput.GetString();
+		}
+		break;
+	}
+
+	case EStoryFlowNodeType::RunScript:
+	{
+		FNodeRuntimeState& RSState = Context->GetNodeState(Node->Id);
+		if (RSState.bHasOutputValues && !SourceHandle.IsEmpty())
+		{
+			int32 OutIdx = SourceHandle.Find(TEXT("-out-"));
+			if (OutIdx != INDEX_NONE)
+			{
+				FString VarId = SourceHandle.Mid(OutIdx + 5);
+				FString VarName;
+				for (const auto& Output : Node->Data.ScriptOutputs)
+				{
+					if (Output.Id == VarId)
+					{
+						VarName = Output.Name;
+						break;
+					}
+				}
+				if (!VarName.IsEmpty())
+				{
+					if (const FStoryFlowVariant* Val = RSState.OutputValues.Find(VarName))
+					{
+						Result = Val->GetString();
+					}
+				}
+			}
 		}
 		break;
 	}

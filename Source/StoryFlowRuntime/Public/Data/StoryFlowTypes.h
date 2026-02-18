@@ -466,6 +466,14 @@ struct STORYFLOWRUNTIME_API FStoryFlowVariable
 	/** Enum values (for enum type) */
 	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
 	TArray<FString> EnumValues;
+
+	/** When true, this variable is exposed as an input on Run Script nodes calling this script */
+	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	bool bIsInput = false;
+
+	/** When true, this variable is an output value returned from the script */
+	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	bool bIsOutput = false;
 };
 
 // ============================================================================
@@ -533,6 +541,73 @@ struct STORYFLOWRUNTIME_API FStoryFlowWeightedOption
 	/** Relative weight (higher = more likely) */
 	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
 	int32 Weight = 1;
+};
+
+// ============================================================================
+// Flow Definition
+// ============================================================================
+
+/**
+ * Flow definition (in-script subflow metadata)
+ */
+USTRUCT(BlueprintType)
+struct STORYFLOWRUNTIME_API FStoryFlowFlowDef
+{
+	GENERATED_BODY()
+
+	/** Flow ID */
+	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	FString Id;
+
+	/** Flow name */
+	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	FString Name;
+
+	/** When true, this flow is an exit route (script termination signal) */
+	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	bool bIsExit = false;
+};
+
+// ============================================================================
+// Script Interface (for RunScript nodes)
+// ============================================================================
+
+/**
+ * Parameter/output definition in a script interface
+ */
+USTRUCT(BlueprintType)
+struct STORYFLOWRUNTIME_API FStoryFlowScriptInterfaceParam
+{
+	GENERATED_BODY()
+
+	/** Variable ID in the target script */
+	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	FString Id;
+
+	/** Display name */
+	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	FString Name;
+
+	/** Variable type (boolean, integer, float, string, enum, image, character, audio) */
+	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	FString Type;
+};
+
+/**
+ * Exit route definition in a script interface
+ */
+USTRUCT(BlueprintType)
+struct STORYFLOWRUNTIME_API FStoryFlowScriptInterfaceExit
+{
+	GENERATED_BODY()
+
+	/** Flow ID in the target script */
+	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	FString Id;
+
+	/** Display name */
+	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	FString Name;
 };
 
 // ============================================================================
@@ -657,6 +732,19 @@ struct STORYFLOWRUNTIME_API FStoryFlowNodeData
 	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
 	TArray<FStoryFlowWeightedOption> RandomBranchOptions;
 
+	// === Script Interface Fields (for runScript nodes) ===
+
+	/** Input parameters from the called script's interface */
+	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	TArray<FStoryFlowScriptInterfaceParam> ScriptParameters;
+
+	/** Output variables from the called script's interface */
+	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	TArray<FStoryFlowScriptInterfaceParam> ScriptOutputs;
+
+	/** Exit routes from the called script's interface */
+	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	TArray<FStoryFlowScriptInterfaceExit> ScriptExits;
 };
 
 // ============================================================================

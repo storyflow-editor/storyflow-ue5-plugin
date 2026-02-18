@@ -777,11 +777,29 @@ void UStoryFlowComponent::HandleStart(FStoryFlowNode* Node)
 
 void UStoryFlowComponent::HandleEnd(FStoryFlowNode* Node)
 {
-	// Pop flow call stack for depth tracking (flows don't return, they just end)
-	// This must happen first because flows are in-script and don't affect script stack
+	FString ExitFlowId;
+
+	// Pop flow call stack and check if it's an exit flow
 	if (ExecutionContext.FlowCallStack.Num() > 0)
 	{
-		ExecutionContext.FlowCallStack.Pop();
+		FStoryFlowFlowFrame FlowFrame = ExecutionContext.FlowCallStack.Pop();
+
+		// If we're in a nested script, check if this flow is an exit route
+		if (ExecutionContext.CallStack.Num() > 0 && !FlowFrame.FlowId.IsEmpty())
+		{
+			UStoryFlowScriptAsset* CurrentScriptAsset = ExecutionContext.CurrentScript.Get();
+			if (CurrentScriptAsset)
+			{
+				for (const FStoryFlowFlowDef& FlowDef : CurrentScriptAsset->Flows)
+				{
+					if (FlowDef.Id == FlowFrame.FlowId && FlowDef.bIsExit)
+					{
+						ExitFlowId = FlowFrame.FlowId;
+						break;
+					}
+				}
+			}
+		}
 	}
 
 	// Clean up any active loop state for the ending script
@@ -790,11 +808,36 @@ void UStoryFlowComponent::HandleEnd(FStoryFlowNode* Node)
 	// Check if we're in a nested script (runScript call)
 	if (ExecutionContext.CallStack.Num() > 0)
 	{
-		// Pop and return to the runScript node's output
+		// If exit flow, check if exit handle is connected in calling script BEFORE popping
+		if (!ExitFlowId.IsEmpty())
+		{
+			const FStoryFlowCallFrame& TopFrame = ExecutionContext.CallStack.Last();
+			if (TopFrame.ScriptAsset.IsValid())
+			{
+				FString ExitHandle = FString::Printf(TEXT("source-%s-exit-%s"), *TopFrame.ReturnNodeId, *ExitFlowId);
+				if (!TopFrame.ScriptAsset->FindEdgeBySourceHandle(ExitHandle))
+				{
+					// Exit handle not connected — don't exit, stay in called script
+					return;
+				}
+			}
+		}
+
+		// Gather output variable values BEFORE popping (still in called script)
+		// Key by variable Name so evaluators can match via ScriptOutputs name lookup
+		TMap<FString, FStoryFlowVariant> OutputValues;
+		for (const auto& VarPair : ExecutionContext.LocalVariables)
+		{
+			if (VarPair.Value.bIsOutput)
+			{
+				OutputValues.Add(VarPair.Value.Name, VarPair.Value.Value);
+			}
+		}
+
+		// Pop call stack and restore calling script state
 		FStoryFlowCallFrame Frame = ExecutionContext.CallStack.Pop();
 		OnScriptEnded.Broadcast(ExecutionContext.CurrentScript.IsValid() ? ExecutionContext.CurrentScript->ScriptPath : TEXT(""));
 
-		// Restore state
 		if (Frame.ScriptAsset.IsValid())
 		{
 			ExecutionContext.CurrentScript = Frame.ScriptAsset;
@@ -809,8 +852,30 @@ void UStoryFlowComponent::HandleEnd(FStoryFlowNode* Node)
 				ExecutionContext.FlowCallStack.Push(FlowFrame);
 			}
 
-			// Continue from runScript node's output
-			ProcessNextNode(StoryFlowHandles::Source(Frame.ReturnNodeId, StoryFlowHandles::Out_Output));
+			// Store output values on the RunScript node's runtime state
+			if (OutputValues.Num() > 0)
+			{
+				FNodeRuntimeState& RSState = ExecutionContext.GetNodeState(Frame.ReturnNodeId);
+				RSState.OutputValues = MoveTemp(OutputValues);
+				RSState.bHasOutputValues = true;
+			}
+
+			// Route: exit handle if exit flow, otherwise default output
+			FString Handle;
+			if (!ExitFlowId.IsEmpty())
+			{
+				Handle = FString::Printf(TEXT("source-%s-exit-%s"), *Frame.ReturnNodeId, *ExitFlowId);
+			}
+			else
+			{
+				Handle = StoryFlowHandles::Source(Frame.ReturnNodeId, StoryFlowHandles::Out_Output);
+			}
+
+			const FStoryFlowConnection* Edge = ExecutionContext.FindEdgeBySourceHandle(Handle);
+			if (Edge)
+			{
+				ProcessNextNode(Handle);
+			}
 		}
 	}
 	else
@@ -944,10 +1009,69 @@ void UStoryFlowComponent::HandleRunScript(FStoryFlowNode* Node)
 		return;
 	}
 
+	// Evaluate parameter values BEFORE pushing (while still in calling script context)
+	// NOTE: ParamValues is keyed by variable NAME (not Id), because the scriptInterface
+	// stores editor UUIDs as IDs, but the exported JSON variable map uses hash-based IDs.
+	// Matching by Name ensures correct lookup regardless of ID format.
+	TMap<FString, FStoryFlowVariant> ParamValues;
+	if (Evaluator && Node->Data.ScriptParameters.Num() > 0)
+	{
+		for (const FStoryFlowScriptInterfaceParam& Param : Node->Data.ScriptParameters)
+		{
+			FString HandleSuffix = Param.Type + TEXT("-param-") + Param.Id;
+			if (Param.Type == TEXT("boolean"))
+			{
+				if (ExecutionContext.FindInputEdge(Node->Id, HandleSuffix))
+				{
+					bool Val = Evaluator->EvaluateBooleanInput(Node, HandleSuffix, false);
+					ParamValues.Add(Param.Name, FStoryFlowVariant::FromBool(Val));
+				}
+			}
+			else if (Param.Type == TEXT("integer"))
+			{
+				if (ExecutionContext.FindInputEdge(Node->Id, HandleSuffix))
+				{
+					int32 Val = Evaluator->EvaluateIntegerInput(Node, HandleSuffix, 0);
+					ParamValues.Add(Param.Name, FStoryFlowVariant::FromInt(Val));
+				}
+			}
+			else if (Param.Type == TEXT("float"))
+			{
+				if (ExecutionContext.FindInputEdge(Node->Id, HandleSuffix))
+				{
+					float Val = Evaluator->EvaluateFloatInput(Node, HandleSuffix, 0.0f);
+					ParamValues.Add(Param.Name, FStoryFlowVariant::FromFloat(Val));
+				}
+			}
+			else // string, enum, image, character, audio - all string-valued
+			{
+				if (ExecutionContext.FindInputEdge(Node->Id, HandleSuffix))
+				{
+					FString Val = Evaluator->EvaluateStringInput(Node, HandleSuffix, TEXT(""));
+					ParamValues.Add(Param.Name, FStoryFlowVariant::FromString(Val));
+				}
+			}
+		}
+	}
+
 	// Push current state and switch to new script
 	if (ExecutionContext.PushScript(ScriptPath, Node->Id))
 	{
 		OnScriptStarted.Broadcast(ScriptPath);
+
+		// Apply parameter values to the called script's local variables
+		// Match by variable Name since map keys (hash IDs) differ from scriptInterface IDs (UUIDs)
+		for (const auto& ParamPair : ParamValues)
+		{
+			for (auto& VarPair : ExecutionContext.LocalVariables)
+			{
+				if (VarPair.Value.Name == ParamPair.Key)
+				{
+					VarPair.Value.Value = ParamPair.Value;
+					break;
+				}
+			}
+		}
 
 		// Start from node 0 in new script
 		FStoryFlowNode* StartNode = ExecutionContext.GetNode(TEXT("0"));
@@ -987,6 +1111,21 @@ void UStoryFlowComponent::HandleRunFlow(FStoryFlowNode* Node)
 	if (!CurrentScriptAsset)
 	{
 		return;
+	}
+
+	// Check if this is an exit flow (no entryFlow node - it's a termination signal)
+	for (const FStoryFlowFlowDef& FlowDef : CurrentScriptAsset->Flows)
+	{
+		if (FlowDef.Id == FlowId && FlowDef.bIsExit)
+		{
+			// Exit flow: push onto flowCallStack so the end handler detects it,
+			// then trigger end logic directly
+			FStoryFlowFlowFrame FlowFrame;
+			FlowFrame.FlowId = FlowId;
+			ExecutionContext.FlowCallStack.Push(FlowFrame);
+			HandleEnd(Node);
+			return;
+		}
 	}
 
 	// Special case: calling the main "Start" flow

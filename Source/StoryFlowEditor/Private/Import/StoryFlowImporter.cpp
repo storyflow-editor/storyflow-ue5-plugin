@@ -308,6 +308,33 @@ UStoryFlowScriptAsset* UStoryFlowImporter::ImportScriptFromJson(const TSharedPtr
 		ParseAssets(JsonObject->GetObjectField(TEXT("assets")), ScriptAsset->Assets);
 	}
 
+	// Parse flows (for exit route detection)
+	if (JsonObject->HasField(TEXT("flows")))
+	{
+		const TArray<TSharedPtr<FJsonValue>>& FlowsArray = JsonObject->GetArrayField(TEXT("flows"));
+		for (const TSharedPtr<FJsonValue>& FlowValue : FlowsArray)
+		{
+			TSharedPtr<FJsonObject> FlowObject = FlowValue->AsObject();
+			if (FlowObject.IsValid())
+			{
+				FStoryFlowFlowDef FlowDef;
+				if (FlowObject->HasField(TEXT("id")))
+				{
+					FlowDef.Id = FlowObject->GetStringField(TEXT("id"));
+				}
+				if (FlowObject->HasField(TEXT("name")))
+				{
+					FlowDef.Name = FlowObject->GetStringField(TEXT("name"));
+				}
+				if (FlowObject->HasField(TEXT("isExit")))
+				{
+					FlowDef.bIsExit = FlowObject->GetBoolField(TEXT("isExit"));
+				}
+				ScriptAsset->Flows.Add(FlowDef);
+			}
+		}
+	}
+
 	// Build connection index maps for O(1) lookups at runtime
 	ScriptAsset->BuildConnectionIndices();
 
@@ -456,6 +483,59 @@ FStoryFlowNodeData UStoryFlowImporter::ParseNodeData(const TSharedPtr<FJsonObjec
 	if (NodeObject->HasField(TEXT("flowId")))
 	{
 		Data.FlowId = NodeObject->GetStringField(TEXT("flowId"));
+	}
+
+	// Script interface (for runScript nodes - parameters, outputs, exit routes)
+	if (NodeObject->HasField(TEXT("scriptInterface")))
+	{
+		TSharedPtr<FJsonObject> InterfaceObject = NodeObject->GetObjectField(TEXT("scriptInterface"));
+		if (InterfaceObject.IsValid())
+		{
+			if (InterfaceObject->HasField(TEXT("parameters")))
+			{
+				for (const TSharedPtr<FJsonValue>& ParamValue : InterfaceObject->GetArrayField(TEXT("parameters")))
+				{
+					TSharedPtr<FJsonObject> ParamObject = ParamValue->AsObject();
+					if (ParamObject.IsValid())
+					{
+						FStoryFlowScriptInterfaceParam Param;
+						if (ParamObject->HasField(TEXT("id"))) Param.Id = ParamObject->GetStringField(TEXT("id"));
+						if (ParamObject->HasField(TEXT("name"))) Param.Name = ParamObject->GetStringField(TEXT("name"));
+						if (ParamObject->HasField(TEXT("type"))) Param.Type = ParamObject->GetStringField(TEXT("type"));
+						Data.ScriptParameters.Add(Param);
+					}
+				}
+			}
+			if (InterfaceObject->HasField(TEXT("outputs")))
+			{
+				for (const TSharedPtr<FJsonValue>& OutValue : InterfaceObject->GetArrayField(TEXT("outputs")))
+				{
+					TSharedPtr<FJsonObject> OutObject = OutValue->AsObject();
+					if (OutObject.IsValid())
+					{
+						FStoryFlowScriptInterfaceParam Output;
+						if (OutObject->HasField(TEXT("id"))) Output.Id = OutObject->GetStringField(TEXT("id"));
+						if (OutObject->HasField(TEXT("name"))) Output.Name = OutObject->GetStringField(TEXT("name"));
+						if (OutObject->HasField(TEXT("type"))) Output.Type = OutObject->GetStringField(TEXT("type"));
+						Data.ScriptOutputs.Add(Output);
+					}
+				}
+			}
+			if (InterfaceObject->HasField(TEXT("exits")))
+			{
+				for (const TSharedPtr<FJsonValue>& ExitValue : InterfaceObject->GetArrayField(TEXT("exits")))
+				{
+					TSharedPtr<FJsonObject> ExitObject = ExitValue->AsObject();
+					if (ExitObject.IsValid())
+					{
+						FStoryFlowScriptInterfaceExit Exit;
+						if (ExitObject->HasField(TEXT("id"))) Exit.Id = ExitObject->GetStringField(TEXT("id"));
+						if (ExitObject->HasField(TEXT("name"))) Exit.Name = ExitObject->GetStringField(TEXT("name"));
+						Data.ScriptExits.Add(Exit);
+					}
+				}
+			}
+		}
 	}
 
 	// Enum
@@ -619,6 +699,16 @@ FStoryFlowVariable UStoryFlowImporter::ParseVariable(const FString& VariableId, 
 		{
 			Variable.EnumValues.Add(EnumValue->AsString());
 		}
+	}
+
+	// Parse parameter/output flags (for script interface)
+	if (VariableObject->HasField(TEXT("isInput")))
+	{
+		Variable.bIsInput = VariableObject->GetBoolField(TEXT("isInput"));
+	}
+	if (VariableObject->HasField(TEXT("isOutput")))
+	{
+		Variable.bIsOutput = VariableObject->GetBoolField(TEXT("isOutput"));
 	}
 
 	return Variable;
