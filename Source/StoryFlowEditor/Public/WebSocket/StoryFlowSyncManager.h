@@ -73,6 +73,12 @@ private:
 	/** Delegate handle for message received */
 	FDelegateHandle MessageReceivedHandle;
 
+	/** Execute the actual import */
+	void ExecuteImport(const FString& BuildDir, const FString& ImportContentPath);
+
+	/** Called when PIE ends, to execute any pending sync */
+	void OnEndPIE(bool bIsSimulating);
+
 	/** Content path for imported assets */
 	FString ContentPath = TEXT("/Game/StoryFlow");
 
@@ -81,4 +87,10 @@ private:
 
 	/** Currently loaded project asset (prevents GC collection in non-UObject class) */
 	TStrongObjectPtr<UStoryFlowProjectAsset> ProjectAsset;
+
+	/** Pending sync data deferred until PIE ends */
+	TOptional<TPair<FString, FString>> PendingSync;
+
+	/** Delegate handle for EndPIE */
+	FDelegateHandle EndPIEHandle;
 };

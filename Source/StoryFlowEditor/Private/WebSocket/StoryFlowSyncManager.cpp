@@ -35,6 +35,12 @@ void FStoryFlowSyncManager::Shutdown()
 		MessageReceivedHandle.Reset();
 	}
 
+	if (EndPIEHandle.IsValid())
+	{
+		FEditorDelegates::EndPIE.Remove(EndPIEHandle);
+		EndPIEHandle.Reset();
+	}
+
 	Client.Reset();
 }
 
@@ -93,22 +99,51 @@ void FStoryFlowSyncManager::HandleProjectUpdated(const TSharedPtr<FJsonObject>& 
 
 		if (GEditor && GEditor->IsPlaySessionInProgress())
 		{
-			UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Cannot sync while Play-In-Editor is active. Stop playing to sync."));
+			UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Deferring sync until Play-In-Editor ends."));
+			Self->PendingSync = MakeTuple(CapturedBuildDir, CapturedContentPath);
+
+			if (!Self->EndPIEHandle.IsValid())
+			{
+				Self->EndPIEHandle = FEditorDelegates::EndPIE.AddSP(Self.ToSharedRef(), &FStoryFlowSyncManager::OnEndPIE);
+			}
 			return;
 		}
 
-		UStoryFlowProjectAsset* ImportedAsset = UStoryFlowImporter::ImportProject(CapturedBuildDir, CapturedContentPath);
-		Self->ProjectAsset.Reset(ImportedAsset);
-
-		if (ImportedAsset)
-		{
-			UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Project synced successfully"));
-			Self->OnSyncComplete.Broadcast(ImportedAsset);
-		}
-		else
-		{
-			UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Failed to import project"));
-		}
+		Self->ExecuteImport(CapturedBuildDir, CapturedContentPath);
 	});
+}
+
+void FStoryFlowSyncManager::ExecuteImport(const FString& BuildDir, const FString& ImportContentPath)
+{
+	UStoryFlowProjectAsset* ImportedAsset = UStoryFlowImporter::ImportProject(BuildDir, ImportContentPath);
+	ProjectAsset.Reset(ImportedAsset);
+
+	if (ImportedAsset)
+	{
+		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Project synced successfully"));
+		OnSyncComplete.Broadcast(ImportedAsset);
+	}
+	else
+	{
+		UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Failed to import project"));
+	}
+}
+
+void FStoryFlowSyncManager::OnEndPIE(bool bIsSimulating)
+{
+	FEditorDelegates::EndPIE.Remove(EndPIEHandle);
+	EndPIEHandle.Reset();
+
+	if (PendingSync.IsSet())
+	{
+		FString BuildDir = PendingSync->Key;
+		FString ImportContentPath = PendingSync->Value;
+		PendingSync.Reset();
+
+		// Force GC to clean up PIE objects before importing
+		CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+
+		ExecuteImport(BuildDir, ImportContentPath);
+	}
 }
 
