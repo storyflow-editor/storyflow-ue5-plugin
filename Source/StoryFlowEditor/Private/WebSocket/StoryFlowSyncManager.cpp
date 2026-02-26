@@ -6,6 +6,7 @@
 #include "Import/StoryFlowImporter.h"
 #include "Data/StoryFlowProjectAsset.h"
 #include "Async/Async.h"
+#include "Editor.h"
 
 FStoryFlowSyncManager::FStoryFlowSyncManager()
 {
@@ -87,6 +88,12 @@ void FStoryFlowSyncManager::HandleProjectUpdated(const TSharedPtr<FJsonObject>& 
 		TSharedPtr<FStoryFlowSyncManager> Self = WeakSelf.Pin();
 		if (!Self.IsValid())
 		{
+			return;
+		}
+
+		if (GEditor && GEditor->IsPlaySessionInProgress())
+		{
+			UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Cannot sync while Play-In-Editor is active. Stop playing to sync."));
 			return;
 		}
 
