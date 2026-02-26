@@ -7,6 +7,7 @@
 #include "Data/StoryFlowProjectAsset.h"
 #include "Async/Async.h"
 #include "Editor.h"
+#include "TimerManager.h"
 
 FStoryFlowSyncManager::FStoryFlowSyncManager()
 {
@@ -140,10 +141,17 @@ void FStoryFlowSyncManager::OnEndPIE(bool bIsSimulating)
 		FString ImportContentPath = PendingSync->Value;
 		PendingSync.Reset();
 
-		// Force GC to clean up PIE objects before importing
-		CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
-
-		ExecuteImport(BuildDir, ImportContentPath);
+		// Defer import to next frame — EndPIE fires before PIE objects are fully torn down
+		TWeakPtr<FStoryFlowSyncManager> WeakSelf = AsShared();
+		GEditor->GetTimerManager()->SetTimerForNextTick([WeakSelf, BuildDir, ImportContentPath]()
+		{
+			TSharedPtr<FStoryFlowSyncManager> Self = WeakSelf.Pin();
+			if (Self.IsValid())
+			{
+				CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
+				Self->ExecuteImport(BuildDir, ImportContentPath);
+			}
+		});
 	}
 }
 
