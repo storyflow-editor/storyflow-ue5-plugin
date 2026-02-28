@@ -69,12 +69,19 @@ UStoryFlowScriptAsset* UStoryFlowImporter::ImportScript(const FString& JsonPath,
 
 UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedPtr<FJsonObject>& JsonObject, const FString& BuildDirectory, const FString& ContentPath)
 {
-	// Create project asset
+	// Create or reuse project asset
 	UStoryFlowProjectAsset* ProjectAsset = CreateProjectAsset(ContentPath, TEXT("SF_Project"));
 	if (!ProjectAsset)
 	{
 		return nullptr;
 	}
+
+	// Clear all containers for in-place update (keeps the same UObject pointer)
+	ProjectAsset->Scripts.Empty();
+	ProjectAsset->Characters.Empty();
+	ProjectAsset->GlobalVariables.Empty();
+	ProjectAsset->GlobalStrings.Empty();
+	ProjectAsset->ResolvedAssets.Empty();
 
 	// Parse basic fields
 	if (JsonObject->HasField(TEXT("version")))
@@ -170,6 +177,10 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 						continue;
 					}
 
+					// Clear containers for in-place update
+					CharAsset->Variables.Empty();
+					CharAsset->ResolvedAssets.Empty();
+
 					CharAsset->CharacterPath = NormalizedPath;
 
 					if (CharObject->HasField(TEXT("name")))
@@ -250,9 +261,6 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 
 	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Successfully imported project with %d scripts"), ProjectAsset->Scripts.Num());
 
-	// Single GC pass after all assets are imported (instead of per-asset)
-	CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
-
 	return ProjectAsset;
 }
 
@@ -269,6 +277,15 @@ UStoryFlowScriptAsset* UStoryFlowImporter::ImportScriptFromJson(const TSharedPtr
 	{
 		return nullptr;
 	}
+
+	// Clear all containers for in-place update
+	ScriptAsset->Nodes.Empty();
+	ScriptAsset->Connections.Empty();
+	ScriptAsset->Variables.Empty();
+	ScriptAsset->Strings.Empty();
+	ScriptAsset->Assets.Empty();
+	ScriptAsset->ResolvedAssets.Empty();
+	ScriptAsset->Flows.Empty();
 
 	ScriptAsset->ScriptPath = ScriptPath;
 
@@ -925,11 +942,16 @@ static T* CreateAssetInternal(const FString& ContentPath, const FString& AssetNa
 {
 	FString PackagePath = FPaths::Combine(ContentPath, AssetName);
 
-	// Check if asset already exists and delete it first to avoid "partially loaded" errors
+	// Try to reuse existing asset to avoid refcount crashes during live sync
 	if (UEditorAssetLibrary::DoesAssetExist(PackagePath))
 	{
-		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Deleting existing asset at %s for re-import"), *PackagePath);
-		UEditorAssetLibrary::DeleteAsset(PackagePath);
+		UObject* ExistingAsset = UEditorAssetLibrary::LoadAsset(PackagePath);
+		if (T* TypedAsset = Cast<T>(ExistingAsset))
+		{
+			UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Reusing existing asset at %s for re-import"), *PackagePath);
+			TypedAsset->MarkPackageDirty();
+			return TypedAsset;
+		}
 	}
 
 	UPackage* Package = CreatePackage(*PackagePath);

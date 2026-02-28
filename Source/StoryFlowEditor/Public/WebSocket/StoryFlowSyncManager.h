@@ -81,4 +81,7 @@ private:
 
 	/** Currently loaded project asset (prevents GC collection in non-UObject class) */
 	TStrongObjectPtr<UStoryFlowProjectAsset> ProjectAsset;
+
+	/** Guard to prevent concurrent imports from rapid WebSocket messages */
+	bool bImporting = false;
 };

@@ -91,14 +91,24 @@ void FStoryFlowSyncManager::HandleProjectUpdated(const TSharedPtr<FJsonObject>& 
 			return;
 		}
 
+		if (Self->bImporting)
+		{
+			UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Import already in progress, skipping sync request"));
+			return;
+		}
+
 		if (GEditor && GEditor->IsPlaySessionInProgress())
 		{
 			UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Cannot sync while Play-In-Editor is active. Stop playing to sync."));
 			return;
 		}
 
+		Self->bImporting = true;
+
 		UStoryFlowProjectAsset* ImportedAsset = UStoryFlowImporter::ImportProject(CapturedBuildDir, CapturedContentPath);
 		Self->ProjectAsset.Reset(ImportedAsset);
+
+		Self->bImporting = false;
 
 		if (ImportedAsset)
 		{
