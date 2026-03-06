@@ -80,9 +80,9 @@ void UStoryFlowDialogueWidget::HandleDialogueEnded()
 	OnDialogueEnded();
 }
 
-void UStoryFlowDialogueWidget::HandleVariableChanged(const FString& VariableId, const FStoryFlowVariant& NewValue, bool bIsGlobal)
+void UStoryFlowDialogueWidget::HandleVariableChanged(const FStoryFlowVariable& Variable, bool bIsGlobal)
 {
-	OnVariableChanged(VariableId, NewValue, bIsGlobal);
+	OnVariableChanged(Variable, bIsGlobal);
 }
 
 // ============================================================================
@@ -107,7 +107,7 @@ void UStoryFlowDialogueWidget::OnDialogueEnded_Implementation()
 	// Override in Blueprint to hide UI
 }
 
-void UStoryFlowDialogueWidget::OnVariableChanged_Implementation(const FString& VariableId, const FStoryFlowVariant& NewValue, bool bIsGlobal)
+void UStoryFlowDialogueWidget::OnVariableChanged_Implementation(const FStoryFlowVariable& Variable, bool bIsGlobal)
 {
 	// Default implementation does nothing
 	// Override in Blueprint to react to variable changes

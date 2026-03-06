@@ -24,7 +24,7 @@ class USoundConcurrency;
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnDialogueStarted);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnDialogueUpdated, const FStoryFlowDialogueState&, DialogueState);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnDialogueEnded);
-DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnVariableChanged, const FString&, VariableId, const FStoryFlowVariant&, NewValue, bool, bIsGlobal);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnVariableChanged, const FStoryFlowVariable&, Variable, bool, bIsGlobal);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnScriptStarted, const FString&, ScriptPath);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnScriptEnded, const FString&, ScriptPath);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnError, const FString&, ErrorMessage);
@@ -337,7 +337,7 @@ protected:
 	FStoryFlowDialogueState BuildDialogueState(FStoryFlowNode* DialogueNode);
 
 	/** Notify variable change */
-	void NotifyVariableChanged(const FString& VariableId, const FStoryFlowVariant& Value, bool bIsGlobal);
+	void NotifyVariableChanged(const FStoryFlowVariable& Variable, bool bIsGlobal);
 
 	/** Report an error */
 	void ReportError(const FString& ErrorMessage);

@@ -415,7 +415,10 @@ void UStoryFlowComponent::SetBoolVariable(const FString& VariableId, bool bValue
 	FStoryFlowVariant NewValue;
 	NewValue.SetBool(bValue);
 	ExecutionContext.SetVariable(VariableId, NewValue, bGlobal);
-	NotifyVariableChanged(VariableId, NewValue, bGlobal);
+	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(VariableId, bGlobal))
+	{
+		NotifyVariableChanged(*Var, bGlobal);
+	}
 }
 
 int32 UStoryFlowComponent::GetIntVariable(const FString& VariableId, bool bGlobal)
@@ -429,7 +432,10 @@ void UStoryFlowComponent::SetIntVariable(const FString& VariableId, int32 Value,
 	FStoryFlowVariant NewValue;
 	NewValue.SetInt(Value);
 	ExecutionContext.SetVariable(VariableId, NewValue, bGlobal);
-	NotifyVariableChanged(VariableId, NewValue, bGlobal);
+	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(VariableId, bGlobal))
+	{
+		NotifyVariableChanged(*Var, bGlobal);
+	}
 }
 
 float UStoryFlowComponent::GetFloatVariable(const FString& VariableId, bool bGlobal)
@@ -443,7 +449,10 @@ void UStoryFlowComponent::SetFloatVariable(const FString& VariableId, float Valu
 	FStoryFlowVariant NewValue;
 	NewValue.SetFloat(Value);
 	ExecutionContext.SetVariable(VariableId, NewValue, bGlobal);
-	NotifyVariableChanged(VariableId, NewValue, bGlobal);
+	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(VariableId, bGlobal))
+	{
+		NotifyVariableChanged(*Var, bGlobal);
+	}
 }
 
 FString UStoryFlowComponent::GetStringVariable(const FString& VariableId, bool bGlobal)
@@ -457,7 +466,10 @@ void UStoryFlowComponent::SetStringVariable(const FString& VariableId, const FSt
 	FStoryFlowVariant NewValue;
 	NewValue.SetString(Value);
 	ExecutionContext.SetVariable(VariableId, NewValue, bGlobal);
-	NotifyVariableChanged(VariableId, NewValue, bGlobal);
+	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(VariableId, bGlobal))
+	{
+		NotifyVariableChanged(*Var, bGlobal);
+	}
 }
 
 FString UStoryFlowComponent::GetEnumVariable(const FString& VariableId, bool bGlobal)
@@ -470,7 +482,10 @@ void UStoryFlowComponent::SetEnumVariable(const FString& VariableId, const FStri
 	FStoryFlowVariant NewValue;
 	NewValue.SetEnum(Value);
 	ExecutionContext.SetVariable(VariableId, NewValue, bGlobal);
-	NotifyVariableChanged(VariableId, NewValue, bGlobal);
+	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(VariableId, bGlobal))
+	{
+		NotifyVariableChanged(*Var, bGlobal);
+	}
 }
 
 FStoryFlowVariant UStoryFlowComponent::GetCharacterVariable(const FString& CharacterPath, const FString& VariableName)
@@ -481,7 +496,6 @@ FStoryFlowVariant UStoryFlowComponent::GetCharacterVariable(const FString& Chara
 void UStoryFlowComponent::SetCharacterVariable(const FString& CharacterPath, const FString& VariableName, const FStoryFlowVariant& Value)
 {
 	ExecutionContext.SetCharacterVariable(CharacterPath, VariableName, Value);
-	NotifyVariableChanged(CharacterPath + TEXT(".") + VariableName, Value, false);
 }
 
 // ============================================================================
@@ -1187,7 +1201,10 @@ void UStoryFlowComponent::HandleSetBool(FStoryFlowNode* Node)
 	FStoryFlowVariant Value;
 	Value.SetBool(NewValue);
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
-	NotifyVariableChanged(Node->Data.Variable, Value, Node->Data.bIsGlobal);
+	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
+	{
+		NotifyVariableChanged(*Var, Node->Data.bIsGlobal);
+	}
 
 	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 }
@@ -1208,7 +1225,10 @@ void UStoryFlowComponent::HandleSetInt(FStoryFlowNode* Node)
 	FStoryFlowVariant Value;
 	Value.SetInt(NewValue);
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
-	NotifyVariableChanged(Node->Data.Variable, Value, Node->Data.bIsGlobal);
+	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
+	{
+		NotifyVariableChanged(*Var, Node->Data.bIsGlobal);
+	}
 
 	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 }
@@ -1229,7 +1249,10 @@ void UStoryFlowComponent::HandleSetFloat(FStoryFlowNode* Node)
 	FStoryFlowVariant Value;
 	Value.SetFloat(NewValue);
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
-	NotifyVariableChanged(Node->Data.Variable, Value, Node->Data.bIsGlobal);
+	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
+	{
+		NotifyVariableChanged(*Var, Node->Data.bIsGlobal);
+	}
 
 	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 }
@@ -1251,7 +1274,10 @@ void UStoryFlowComponent::HandleSetString(FStoryFlowNode* Node)
 	FStoryFlowVariant Value;
 	Value.SetString(NewValue);
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
-	NotifyVariableChanged(Node->Data.Variable, Value, Node->Data.bIsGlobal);
+	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
+	{
+		NotifyVariableChanged(*Var, Node->Data.bIsGlobal);
+	}
 
 	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 }
@@ -1272,7 +1298,10 @@ void UStoryFlowComponent::HandleSetEnum(FStoryFlowNode* Node)
 	FStoryFlowVariant Value;
 	Value.SetEnum(NewValue);
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
-	NotifyVariableChanged(Node->Data.Variable, Value, Node->Data.bIsGlobal);
+	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
+	{
+		NotifyVariableChanged(*Var, Node->Data.bIsGlobal);
+	}
 
 	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 }
@@ -1376,7 +1405,7 @@ void UStoryFlowComponent::HandleArraySet(FStoryFlowNode* Node)
 		Var->Value.SetArray(NewArray);
 	}
 
-	NotifyVariableChanged(Node->Data.Variable, Var->Value, Node->Data.bIsGlobal);
+	NotifyVariableChanged(*Var, Node->Data.bIsGlobal);
 	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 }
 
@@ -1468,7 +1497,7 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 		break;
 	}
 
-	NotifyVariableChanged(Node->Data.Variable, Var->Value, Node->Data.bIsGlobal);
+	NotifyVariableChanged(*Var, Node->Data.bIsGlobal);
 	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 }
 
@@ -1566,7 +1595,10 @@ void UStoryFlowComponent::HandleSetImage(FStoryFlowNode* Node)
 	FStoryFlowVariant Value;
 	Value.SetString(NewValue);
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
-	NotifyVariableChanged(Node->Data.Variable, Value, Node->Data.bIsGlobal);
+	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
+	{
+		NotifyVariableChanged(*Var, Node->Data.bIsGlobal);
+	}
 
 	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 }
@@ -1587,7 +1619,10 @@ void UStoryFlowComponent::HandleSetAudio(FStoryFlowNode* Node)
 	FStoryFlowVariant Value;
 	Value.SetString(NewValue);
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
-	NotifyVariableChanged(Node->Data.Variable, Value, Node->Data.bIsGlobal);
+	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
+	{
+		NotifyVariableChanged(*Var, Node->Data.bIsGlobal);
+	}
 
 	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 }
@@ -1608,7 +1643,10 @@ void UStoryFlowComponent::HandleSetCharacter(FStoryFlowNode* Node)
 	FStoryFlowVariant Value;
 	Value.SetString(NewValue);
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
-	NotifyVariableChanged(Node->Data.Variable, Value, Node->Data.bIsGlobal);
+	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
+	{
+		NotifyVariableChanged(*Var, Node->Data.bIsGlobal);
+	}
 
 	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 }
@@ -2023,9 +2061,9 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 	return State;
 }
 
-void UStoryFlowComponent::NotifyVariableChanged(const FString& VariableId, const FStoryFlowVariant& Value, bool bIsGlobal)
+void UStoryFlowComponent::NotifyVariableChanged(const FStoryFlowVariable& Variable, bool bIsGlobal)
 {
-	OnVariableChanged.Broadcast(VariableId, Value, bIsGlobal);
+	OnVariableChanged.Broadcast(Variable, bIsGlobal);
 
 	// Live variable interpolation: If dialogue is active, re-interpolate text and update UI
 	if (ExecutionContext.bIsWaitingForInput && ExecutionContext.CurrentDialogueState.bIsValid)
@@ -2034,7 +2072,7 @@ void UStoryFlowComponent::NotifyVariableChanged(const FString& VariableId, const
 		FStoryFlowNode* CurrentNode = ExecutionContext.GetNode(ExecutionContext.CurrentDialogueState.NodeId);
 		if (CurrentNode && CurrentNode->Type == EStoryFlowNodeType::Dialogue)
 		{
-			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Variable '%s' changed, re-interpolating dialogue text"), *VariableId);
+			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Variable '%s' changed, re-interpolating dialogue text"), *Variable.Id);
 
 			// Rebuild dialogue state with updated variable values
 			ExecutionContext.CurrentDialogueState = BuildDialogueState(CurrentNode);

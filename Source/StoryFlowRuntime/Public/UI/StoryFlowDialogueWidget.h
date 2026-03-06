@@ -69,7 +69,7 @@ protected:
 	 * Override this in Blueprint to react to variable changes
 	 */
 	UFUNCTION(BlueprintNativeEvent, Category = "StoryFlow")
-	void OnVariableChanged(const FString& VariableId, const FStoryFlowVariant& NewValue, bool bIsGlobal);
+	void OnVariableChanged(const FStoryFlowVariable& Variable, bool bIsGlobal);
 
 public:
 	// ========================================================================
@@ -132,5 +132,5 @@ private:
 	void HandleDialogueEnded();
 
 	UFUNCTION()
-	void HandleVariableChanged(const FString& VariableId, const FStoryFlowVariant& NewValue, bool bIsGlobal);
+	void HandleVariableChanged(const FStoryFlowVariable& Variable, bool bIsGlobal);
 };

@@ -293,6 +293,8 @@ private:
 public:
 	// Type checking
 	bool IsValid() const { return Type != EStoryFlowVariableType::None; }
+	// Note: In Blueprint, use FStoryFlowVariable.Type instead (BlueprintReadOnly).
+	// GetType() is C++ only — not a UFUNCTION, and FStoryFlowVariant's members are private.
 	EStoryFlowVariableType GetType() const { return Type; }
 
 	// Setters
