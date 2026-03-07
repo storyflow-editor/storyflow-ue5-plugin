@@ -133,7 +133,4 @@ function main() {
 
 rl.on('close', () => process.exit(0))
 
-main().catch((error) => {
-	console.error('Unexpected error:', error)
-	process.exit(1)
-})
+main()
