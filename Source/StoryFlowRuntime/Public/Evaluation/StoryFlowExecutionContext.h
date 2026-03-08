@@ -121,6 +121,14 @@ public:
 	 */
 	TMap<FString, FStoryFlowVariable>* ExternalGlobalVariables = nullptr;
 
+	// === Variable Name Index (Name -> ID for O(1) lookup by name) ===
+
+	/** Name-to-ID index for local variables. Rebuilt when local vars change. */
+	TMap<FString, FString> LocalVariableNameIndex;
+
+	/** Name-to-ID index for global variables. Rebuilt when global vars change. */
+	TMap<FString, FString> GlobalVariableNameIndex;
+
 	/**
 	 * Non-owning pointer to external runtime characters (owned by UStoryFlowSubsystem).
 	 * Character data assets (UStoryFlowCharacterAsset) are copied into this mutable map at startup.
@@ -175,14 +183,23 @@ public:
 
 	// === Variable Accessors ===
 
-	/** Find variable by ID */
+	/** Find variable by ID (internal use — node handlers and evaluators) */
 	FStoryFlowVariable* FindVariable(const FString& VariableId, bool bIsGlobal);
 
-	/** Set variable value */
+	/** Find variable by display name (for public Blueprint API). Uses name-to-ID index with lazy fallback. */
+	FStoryFlowVariable* FindVariableByName(const FString& VariableName, bool bIsGlobal);
+
+	/** Set variable value by ID (internal use) */
 	void SetVariable(const FString& VariableId, const FStoryFlowVariant& Value, bool bIsGlobal);
 
-	/** Get variable value */
+	/** Get variable value by ID (internal use) */
 	FStoryFlowVariant GetVariableValue(const FString& VariableId, bool bIsGlobal);
+
+	/** Build name-to-ID index for local variables */
+	void RebuildLocalNameIndex();
+
+	/** Build name-to-ID index for global variables */
+	void RebuildGlobalNameIndex();
 
 	// === Character Accessors ===
 

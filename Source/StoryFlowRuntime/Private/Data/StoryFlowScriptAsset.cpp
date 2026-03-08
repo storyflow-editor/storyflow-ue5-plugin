@@ -66,11 +66,14 @@ FString UStoryFlowScriptAsset::GetString(const FString& Key, const FString& Lang
 	return Key;
 }
 
-FStoryFlowVariable UStoryFlowScriptAsset::GetVariable(const FString& VariableId) const
+FStoryFlowVariable UStoryFlowScriptAsset::GetVariable(const FString& VariableName) const
 {
-	if (const FStoryFlowVariable* Variable = Variables.Find(VariableId))
+	for (const auto& Pair : Variables)
 	{
-		return *Variable;
+		if (Pair.Value.Name == VariableName)
+		{
+			return Pair.Value;
+		}
 	}
 	return FStoryFlowVariable();
 }

@@ -198,48 +198,48 @@ public:
 	UStoryFlowProjectAsset* GetProject() const;
 
 	// ========================================================================
-	// Variable Access
+	// Variable Access (by display name)
 	// ========================================================================
 
-	/** Get a boolean variable value */
+	/** Get a boolean variable value by name */
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
-	bool GetBoolVariable(const FString& VariableId, bool bGlobal = false);
+	bool GetBoolVariable(const FString& VariableName, bool bGlobal = false);
 
-	/** Set a boolean variable value */
+	/** Set a boolean variable value by name */
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
-	void SetBoolVariable(const FString& VariableId, bool bValue, bool bGlobal = false);
+	void SetBoolVariable(const FString& VariableName, bool bValue, bool bGlobal = false);
 
-	/** Get an integer variable value */
+	/** Get an integer variable value by name */
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
-	int32 GetIntVariable(const FString& VariableId, bool bGlobal = false);
+	int32 GetIntVariable(const FString& VariableName, bool bGlobal = false);
 
-	/** Set an integer variable value */
+	/** Set an integer variable value by name */
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
-	void SetIntVariable(const FString& VariableId, int32 Value, bool bGlobal = false);
+	void SetIntVariable(const FString& VariableName, int32 Value, bool bGlobal = false);
 
-	/** Get a float variable value */
+	/** Get a float variable value by name */
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
-	float GetFloatVariable(const FString& VariableId, bool bGlobal = false);
+	float GetFloatVariable(const FString& VariableName, bool bGlobal = false);
 
-	/** Set a float variable value */
+	/** Set a float variable value by name */
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
-	void SetFloatVariable(const FString& VariableId, float Value, bool bGlobal = false);
+	void SetFloatVariable(const FString& VariableName, float Value, bool bGlobal = false);
 
-	/** Get a string variable value */
+	/** Get a string variable value by name */
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
-	FString GetStringVariable(const FString& VariableId, bool bGlobal = false);
+	FString GetStringVariable(const FString& VariableName, bool bGlobal = false);
 
-	/** Set a string variable value */
+	/** Set a string variable value by name */
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
-	void SetStringVariable(const FString& VariableId, const FString& Value, bool bGlobal = false);
+	void SetStringVariable(const FString& VariableName, const FString& Value, bool bGlobal = false);
 
-	/** Get an enum variable value (as string) */
+	/** Get an enum variable value by name (as string) */
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
-	FString GetEnumVariable(const FString& VariableId, bool bGlobal = false);
+	FString GetEnumVariable(const FString& VariableName, bool bGlobal = false);
 
-	/** Set an enum variable value (as string) */
+	/** Set an enum variable value by name (as string) */
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
-	void SetEnumVariable(const FString& VariableId, const FString& Value, bool bGlobal = false);
+	void SetEnumVariable(const FString& VariableName, const FString& Value, bool bGlobal = false);
 
 	// ========================================================================
 	// Character Variable Access

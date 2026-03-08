@@ -26,18 +26,28 @@ UStoryFlowScriptAsset* UStoryFlowProjectAsset::GetScriptByPath(const FString& Sc
 	return nullptr;
 }
 
-FStoryFlowVariable UStoryFlowProjectAsset::GetGlobalVariable(const FString& VariableId) const
+FStoryFlowVariable UStoryFlowProjectAsset::GetGlobalVariable(const FString& VariableName) const
 {
-	if (const FStoryFlowVariable* Variable = GlobalVariables.Find(VariableId))
+	for (const auto& Pair : GlobalVariables)
 	{
-		return *Variable;
+		if (Pair.Value.Name == VariableName)
+		{
+			return Pair.Value;
+		}
 	}
 	return FStoryFlowVariable();
 }
 
-bool UStoryFlowProjectAsset::HasGlobalVariable(const FString& VariableId) const
+bool UStoryFlowProjectAsset::HasGlobalVariable(const FString& VariableName) const
 {
-	return GlobalVariables.Contains(VariableId);
+	for (const auto& Pair : GlobalVariables)
+	{
+		if (Pair.Value.Name == VariableName)
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 UStoryFlowCharacterAsset* UStoryFlowProjectAsset::GetCharacterAsset(const FString& CharacterPath) const

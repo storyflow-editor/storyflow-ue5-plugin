@@ -64,13 +64,13 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")
 	UStoryFlowScriptAsset* GetScriptByPath(const FString& ScriptPath) const;
 
-	/** Get a global variable by ID */
+	/** Get a global variable by name */
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")
-	FStoryFlowVariable GetGlobalVariable(const FString& VariableId) const;
+	FStoryFlowVariable GetGlobalVariable(const FString& VariableName) const;
 
-	/** Check if a global variable exists */
+	/** Check if a global variable exists by name */
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")
-	bool HasGlobalVariable(const FString& VariableId) const;
+	bool HasGlobalVariable(const FString& VariableName) const;
 
 	/** Get a character asset by path */
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")

@@ -82,9 +82,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")
 	FString GetString(const FString& Key, const FString& LanguageCode = TEXT("en")) const;
 
-	/** Get a variable by ID */
+	/** Get a variable by name */
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")
-	FStoryFlowVariable GetVariable(const FString& VariableId) const;
+	FStoryFlowVariable GetVariable(const FString& VariableName) const;
 
 	/** Find edge by source handle */
 	const FStoryFlowConnection* FindEdgeBySourceHandle(const FString& SourceHandle) const;

@@ -404,86 +404,86 @@ TArray<FString> UStoryFlowComponent::GetAvailableScripts() const
 // Variable Access
 // ============================================================================
 
-bool UStoryFlowComponent::GetBoolVariable(const FString& VariableId, bool bGlobal)
+bool UStoryFlowComponent::GetBoolVariable(const FString& VariableName, bool bGlobal)
 {
-	FStoryFlowVariable* Var = ExecutionContext.FindVariable(VariableId, bGlobal);
+	FStoryFlowVariable* Var = ExecutionContext.FindVariableByName(VariableName, bGlobal);
 	return Var ? Var->Value.GetBool() : false;
 }
 
-void UStoryFlowComponent::SetBoolVariable(const FString& VariableId, bool bValue, bool bGlobal)
+void UStoryFlowComponent::SetBoolVariable(const FString& VariableName, bool bValue, bool bGlobal)
 {
-	FStoryFlowVariant NewValue;
-	NewValue.SetBool(bValue);
-	ExecutionContext.SetVariable(VariableId, NewValue, bGlobal);
-	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(VariableId, bGlobal))
+	if (FStoryFlowVariable* Var = ExecutionContext.FindVariableByName(VariableName, bGlobal))
 	{
+		FStoryFlowVariant NewValue;
+		NewValue.SetBool(bValue);
+		Var->Value = NewValue;
 		NotifyVariableChanged(*Var, bGlobal);
 	}
 }
 
-int32 UStoryFlowComponent::GetIntVariable(const FString& VariableId, bool bGlobal)
+int32 UStoryFlowComponent::GetIntVariable(const FString& VariableName, bool bGlobal)
 {
-	FStoryFlowVariable* Var = ExecutionContext.FindVariable(VariableId, bGlobal);
+	FStoryFlowVariable* Var = ExecutionContext.FindVariableByName(VariableName, bGlobal);
 	return Var ? Var->Value.GetInt() : 0;
 }
 
-void UStoryFlowComponent::SetIntVariable(const FString& VariableId, int32 Value, bool bGlobal)
+void UStoryFlowComponent::SetIntVariable(const FString& VariableName, int32 Value, bool bGlobal)
 {
-	FStoryFlowVariant NewValue;
-	NewValue.SetInt(Value);
-	ExecutionContext.SetVariable(VariableId, NewValue, bGlobal);
-	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(VariableId, bGlobal))
+	if (FStoryFlowVariable* Var = ExecutionContext.FindVariableByName(VariableName, bGlobal))
 	{
+		FStoryFlowVariant NewValue;
+		NewValue.SetInt(Value);
+		Var->Value = NewValue;
 		NotifyVariableChanged(*Var, bGlobal);
 	}
 }
 
-float UStoryFlowComponent::GetFloatVariable(const FString& VariableId, bool bGlobal)
+float UStoryFlowComponent::GetFloatVariable(const FString& VariableName, bool bGlobal)
 {
-	FStoryFlowVariable* Var = ExecutionContext.FindVariable(VariableId, bGlobal);
+	FStoryFlowVariable* Var = ExecutionContext.FindVariableByName(VariableName, bGlobal);
 	return Var ? Var->Value.GetFloat() : 0.0f;
 }
 
-void UStoryFlowComponent::SetFloatVariable(const FString& VariableId, float Value, bool bGlobal)
+void UStoryFlowComponent::SetFloatVariable(const FString& VariableName, float Value, bool bGlobal)
 {
-	FStoryFlowVariant NewValue;
-	NewValue.SetFloat(Value);
-	ExecutionContext.SetVariable(VariableId, NewValue, bGlobal);
-	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(VariableId, bGlobal))
+	if (FStoryFlowVariable* Var = ExecutionContext.FindVariableByName(VariableName, bGlobal))
 	{
+		FStoryFlowVariant NewValue;
+		NewValue.SetFloat(Value);
+		Var->Value = NewValue;
 		NotifyVariableChanged(*Var, bGlobal);
 	}
 }
 
-FString UStoryFlowComponent::GetStringVariable(const FString& VariableId, bool bGlobal)
+FString UStoryFlowComponent::GetStringVariable(const FString& VariableName, bool bGlobal)
 {
-	FStoryFlowVariable* Var = ExecutionContext.FindVariable(VariableId, bGlobal);
+	FStoryFlowVariable* Var = ExecutionContext.FindVariableByName(VariableName, bGlobal);
 	return Var ? Var->Value.GetString() : TEXT("");
 }
 
-void UStoryFlowComponent::SetStringVariable(const FString& VariableId, const FString& Value, bool bGlobal)
+void UStoryFlowComponent::SetStringVariable(const FString& VariableName, const FString& Value, bool bGlobal)
 {
-	FStoryFlowVariant NewValue;
-	NewValue.SetString(Value);
-	ExecutionContext.SetVariable(VariableId, NewValue, bGlobal);
-	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(VariableId, bGlobal))
+	if (FStoryFlowVariable* Var = ExecutionContext.FindVariableByName(VariableName, bGlobal))
 	{
+		FStoryFlowVariant NewValue;
+		NewValue.SetString(Value);
+		Var->Value = NewValue;
 		NotifyVariableChanged(*Var, bGlobal);
 	}
 }
 
-FString UStoryFlowComponent::GetEnumVariable(const FString& VariableId, bool bGlobal)
+FString UStoryFlowComponent::GetEnumVariable(const FString& VariableName, bool bGlobal)
 {
-	return GetStringVariable(VariableId, bGlobal);
+	return GetStringVariable(VariableName, bGlobal);
 }
 
-void UStoryFlowComponent::SetEnumVariable(const FString& VariableId, const FString& Value, bool bGlobal)
+void UStoryFlowComponent::SetEnumVariable(const FString& VariableName, const FString& Value, bool bGlobal)
 {
-	FStoryFlowVariant NewValue;
-	NewValue.SetEnum(Value);
-	ExecutionContext.SetVariable(VariableId, NewValue, bGlobal);
-	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(VariableId, bGlobal))
+	if (FStoryFlowVariable* Var = ExecutionContext.FindVariableByName(VariableName, bGlobal))
 	{
+		FStoryFlowVariant NewValue;
+		NewValue.SetEnum(Value);
+		Var->Value = NewValue;
 		NotifyVariableChanged(*Var, bGlobal);
 	}
 }
@@ -508,6 +508,7 @@ void UStoryFlowComponent::ResetVariables()
 	if (UStoryFlowScriptAsset* CurrentScriptAsset = ExecutionContext.CurrentScript.Get())
 	{
 		ExecutionContext.LocalVariables = CurrentScriptAsset->Variables;
+		ExecutionContext.RebuildLocalNameIndex();
 	}
 
 	// Note: Global variables would need to be reset from the original project data
@@ -856,6 +857,7 @@ void UStoryFlowComponent::HandleEnd(FStoryFlowNode* Node)
 		{
 			ExecutionContext.CurrentScript = Frame.ScriptAsset;
 			ExecutionContext.LocalVariables = Frame.SavedVariables;
+			ExecutionContext.RebuildLocalNameIndex();
 
 			// Restore flow call stack (flows are script-local)
 			ExecutionContext.FlowCallStack.Reset();

@@ -21,6 +21,9 @@ void FStoryFlowExecutionContext::Initialize(UStoryFlowProjectAsset* InProject, U
 		ResolveStringVariableValues(LocalVariables);
 		CurrentNodeId = InScript->StartNode;
 	}
+
+	RebuildLocalNameIndex();
+	RebuildGlobalNameIndex();
 }
 
 void FStoryFlowExecutionContext::InitializeWithSubsystem(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript, TMap<FString, FStoryFlowVariable>* InGlobalVariables, TMap<FString, FStoryFlowCharacterDef>* InCharacters, TSet<FString>* InUsedOnceOnlyOptions)
@@ -40,6 +43,9 @@ void FStoryFlowExecutionContext::InitializeWithSubsystem(UStoryFlowProjectAsset*
 		ResolveStringVariableValues(LocalVariables);
 		CurrentNodeId = InScript->StartNode;
 	}
+
+	RebuildLocalNameIndex();
+	RebuildGlobalNameIndex();
 }
 
 void FStoryFlowExecutionContext::Reset()
@@ -54,6 +60,8 @@ void FStoryFlowExecutionContext::Reset()
 	FlowCallStack.Empty();
 	LoopStack.Empty();
 	LocalVariables.Empty();
+	LocalVariableNameIndex.Empty();
+	GlobalVariableNameIndex.Empty();
 	ExternalUsedOnceOnlyOptions = nullptr;
 	CurrentDialogueState = FStoryFlowDialogueState();
 	PersistentBackgroundImage = nullptr;
@@ -303,6 +311,7 @@ bool FStoryFlowExecutionContext::PushScript(const FString& ScriptPath, const FSt
 	LocalVariables = NewScript->Variables;
 	ResolveStringVariableValues(LocalVariables);
 	CurrentNodeId = NewScript->StartNode;
+	RebuildLocalNameIndex();
 
 	return true;
 }
@@ -322,6 +331,7 @@ bool FStoryFlowExecutionContext::PopScript()
 		CurrentScript = Frame.ScriptAsset;
 		LocalVariables = Frame.SavedVariables;
 		CurrentNodeId = Frame.ReturnNodeId;
+		RebuildLocalNameIndex();
 
 		// Restore flow call stack (flows are script-local)
 		FlowCallStack.Reset();
@@ -544,6 +554,90 @@ void FStoryFlowExecutionContext::ResolveStringVariableValues(TMap<FString, FStor
 			}
 		}
 	}
+}
+
+void FStoryFlowExecutionContext::RebuildLocalNameIndex()
+{
+	LocalVariableNameIndex.Empty(LocalVariables.Num());
+	for (const auto& Pair : LocalVariables)
+	{
+		if (!Pair.Value.Name.IsEmpty())
+		{
+			LocalVariableNameIndex.Add(Pair.Value.Name, Pair.Key);
+		}
+	}
+}
+
+void FStoryFlowExecutionContext::RebuildGlobalNameIndex()
+{
+	const TMap<FString, FStoryFlowVariable>* GlobalVars = ExternalGlobalVariables;
+	if (!GlobalVars && Project.IsValid())
+	{
+		GlobalVars = &Project->GlobalVariables;
+	}
+
+	if (GlobalVars)
+	{
+		GlobalVariableNameIndex.Empty(GlobalVars->Num());
+		for (const auto& Pair : *GlobalVars)
+		{
+			if (!Pair.Value.Name.IsEmpty())
+			{
+				GlobalVariableNameIndex.Add(Pair.Value.Name, Pair.Key);
+			}
+		}
+	}
+	else
+	{
+		GlobalVariableNameIndex.Empty();
+	}
+}
+
+FStoryFlowVariable* FStoryFlowExecutionContext::FindVariableByName(const FString& VariableName, bool bIsGlobal)
+{
+	TMap<FString, FString>& Index = bIsGlobal ? GlobalVariableNameIndex : LocalVariableNameIndex;
+
+	// Fast path: O(1) index lookup
+	if (const FString* FoundId = Index.Find(VariableName))
+	{
+		if (FStoryFlowVariable* Var = FindVariable(*FoundId, bIsGlobal))
+		{
+			return Var;
+		}
+		// ID in index but not in map — index is stale, fall through to scan
+	}
+
+	// Slow path: linear scan + index repair (handles stale index after global reset/load)
+	TMap<FString, FStoryFlowVariable>* VarMap = nullptr;
+	if (bIsGlobal)
+	{
+		VarMap = ExternalGlobalVariables;
+		if (!VarMap && Project.IsValid())
+		{
+			VarMap = &Project->GlobalVariables;
+		}
+	}
+	else
+	{
+		VarMap = &LocalVariables;
+	}
+
+	if (VarMap)
+	{
+		for (auto& Pair : *VarMap)
+		{
+			if (Pair.Value.Name == VariableName)
+			{
+				// Repair index entry
+				Index.Add(VariableName, Pair.Key);
+				return &Pair.Value;
+			}
+		}
+	}
+
+	UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Variable '%s' not found by name (bIsGlobal=%s)"),
+		*VariableName, bIsGlobal ? TEXT("true") : TEXT("false"));
+	return nullptr;
 }
 
 void FStoryFlowExecutionContext::ClearEvaluationCache()
