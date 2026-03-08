@@ -23,7 +23,7 @@ for %%V in (5.3 5.4 5.5 5.6 5.7) do (
         rmdir /s /q "%OUTPUT%\StoryFlowPlugin_%%V"
     )
 
-    "%ENGINES%\UE_%%V\Engine\Build\BatchFiles\RunUAT.bat" BuildPlugin ^
+    call "%ENGINES%\UE_%%V\Engine\Build\BatchFiles\RunUAT.bat" BuildPlugin ^
         -Plugin="%PLUGIN%" ^
         -Package="%OUTPUT%\StoryFlowPlugin_%%V" ^
         -TargetPlatforms=Win64 ^
