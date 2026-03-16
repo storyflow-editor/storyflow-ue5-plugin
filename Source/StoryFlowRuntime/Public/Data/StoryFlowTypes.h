@@ -449,7 +449,7 @@ struct STORYFLOWRUNTIME_API FStoryFlowVariable
 	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
 	FString Id;
 
-	/** String table key for display name */
+	/** Human-readable display name (used for lookup in Get/Set functions) */
 	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
 	FString Name;
 
