@@ -389,6 +389,12 @@ private:
 	UPROPERTY()
 	TObjectPtr<UAudioComponent> CurrentDialogueAudio;
 
+	/** True when waiting for audio to finish before auto-advancing */
+	bool bWaitingForAudioAdvance = false;
+
+	/** True when the player is allowed to skip audio during advance-on-end */
+	bool bAudioAdvanceAllowSkip = false;
+
 	/** Active dialogue widget instance */
 	UPROPERTY()
 	TObjectPtr<UStoryFlowDialogueWidget> ActiveDialogueWidget;

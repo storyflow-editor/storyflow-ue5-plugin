@@ -676,6 +676,14 @@ struct STORYFLOWRUNTIME_API FStoryFlowNodeData
 	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
 	bool bAudioReset = false;
 
+	/** Whether to auto-advance when audio finishes playing (non-looped, no interactive options) */
+	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	bool bAudioAdvanceOnEnd = false;
+
+	/** Whether to allow the player to skip audio and advance early (only when bAudioAdvanceOnEnd is true) */
+	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	bool bAudioAllowSkip = false;
+
 	/** Character key */
 	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
 	FString Character;
@@ -1062,6 +1070,14 @@ struct STORYFLOWRUNTIME_API FStoryFlowDialogueState
 	/** True when dialogue can be advanced without options (narrative-only with connected output) */
 	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
 	bool bCanAdvance = false;
+
+	/** True when dialogue will auto-advance after audio finishes playing */
+	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	bool bAudioAdvanceOnEnd = false;
+
+	/** True when player can click to skip audio and advance early (only when bAudioAdvanceOnEnd is true) */
+	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	bool bAudioAllowSkip = false;
 };
 
 // ============================================================================

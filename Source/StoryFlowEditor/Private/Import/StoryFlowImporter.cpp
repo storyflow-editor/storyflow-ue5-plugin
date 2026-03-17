@@ -459,6 +459,14 @@ FStoryFlowNodeData UStoryFlowImporter::ParseNodeData(const TSharedPtr<FJsonObjec
 	{
 		Data.bAudioReset = NodeObject->GetBoolField(TEXT("audioReset"));
 	}
+	if (NodeObject->HasField(TEXT("audioAdvanceOnEnd")))
+	{
+		Data.bAudioAdvanceOnEnd = NodeObject->GetBoolField(TEXT("audioAdvanceOnEnd"));
+	}
+	if (NodeObject->HasField(TEXT("audioAllowSkip")))
+	{
+		Data.bAudioAllowSkip = NodeObject->GetBoolField(TEXT("audioAllowSkip"));
+	}
 	if (NodeObject->HasField(TEXT("character")))
 	{
 		Data.Character = NodeObject->GetStringField(TEXT("character"));

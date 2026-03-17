@@ -257,6 +257,22 @@ void UStoryFlowComponent::AdvanceDialogue()
 		return;
 	}
 
+	// Audio advance-on-end: block manual advance if skip is not allowed
+	if (bWaitingForAudioAdvance && !bAudioAdvanceAllowSkip)
+	{
+		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: AdvanceDialogue blocked - waiting for audio to finish (allowSkip=false)"));
+		return;
+	}
+
+	// Audio advance-on-end with skip: stop audio and proceed
+	if (bWaitingForAudioAdvance && bAudioAdvanceAllowSkip)
+	{
+		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: AdvanceDialogue - skipping audio (allowSkip=true)"));
+		StopDialogueAudio();
+		bWaitingForAudioAdvance = false;
+		bAudioAdvanceAllowSkip = false;
+	}
+
 	const FString HeaderHandle = StoryFlowHandles::Source(ExecutionContext.CurrentDialogueState.NodeId);
 
 	if (!ExecutionContext.FindEdgeBySourceHandle(HeaderHandle))
@@ -1004,6 +1020,18 @@ void UStoryFlowComponent::HandleDialogue(FStoryFlowNode* Node)
 			StopDialogueAudio();
 		}
 		// If no audio and audioReset=false, previous audio continues playing
+
+		// Set advance-on-end state (only on fresh entry — don't clear on Set* node return)
+		bWaitingForAudioAdvance = Node->Data.bAudioAdvanceOnEnd && !Node->Data.bAudioLoop && ExecutionContext.CurrentDialogueState.Audio != nullptr;
+		bAudioAdvanceAllowSkip = bWaitingForAudioAdvance && Node->Data.bAudioAllowSkip;
+
+		// If audio advance was expected but audio failed to play, clear flags so bCanAdvance kicks in
+		if (bWaitingForAudioAdvance && !CurrentDialogueAudio)
+		{
+			UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Audio advance-on-end expected but audio failed to play, falling back to manual advance"));
+			bWaitingForAudioAdvance = false;
+			bAudioAdvanceAllowSkip = false;
+		}
 	}
 
 	// Broadcast update
@@ -2061,6 +2089,10 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 		State.bCanAdvance = (ExecutionContext.FindEdgeBySourceHandle(HeaderHandle) != nullptr);
 	}
 
+	// Pass audio advance-on-end flags to state so widgets can adjust UI
+	State.bAudioAdvanceOnEnd = DialogueNode->Data.bAudioAdvanceOnEnd && !DialogueNode->Data.bAudioLoop;
+	State.bAudioAllowSkip = State.bAudioAdvanceOnEnd && DialogueNode->Data.bAudioAllowSkip;
+
 	return State;
 }
 
@@ -2223,10 +2255,11 @@ void UStoryFlowComponent::PlayDialogueAudio_Implementation(USoundBase* Sound, bo
 		// Play the audio
 		CurrentDialogueAudio->Play();
 
-		// For looping, we bind to OnAudioFinished to restart playback
+		// Always bind OnAudioFinished for looping and/or advance-on-end
+		CurrentDialogueAudio->OnAudioFinished.AddDynamic(this, &UStoryFlowComponent::OnDialogueAudioFinished);
+
 		if (bLoop)
 		{
-			CurrentDialogueAudio->OnAudioFinished.AddDynamic(this, &UStoryFlowComponent::OnDialogueAudioFinished);
 			// Store loop flag for the callback
 			CurrentDialogueAudio->ComponentTags.Add(FName("StoryFlowLoop"));
 		}
@@ -2241,7 +2274,7 @@ void UStoryFlowComponent::StopDialogueAudio_Implementation()
 {
 	if (CurrentDialogueAudio)
 	{
-		// Remove callback to prevent restart
+		// Remove callback to prevent restart or advance
 		CurrentDialogueAudio->OnAudioFinished.RemoveAll(this);
 
 		if (CurrentDialogueAudio->IsPlaying())
@@ -2253,6 +2286,10 @@ void UStoryFlowComponent::StopDialogueAudio_Implementation()
 		CurrentDialogueAudio->DestroyComponent();
 	}
 	CurrentDialogueAudio = nullptr;
+
+	// Clear advance-on-end state
+	bWaitingForAudioAdvance = false;
+	bAudioAdvanceAllowSkip = false;
 }
 
 void UStoryFlowComponent::OnDialogueAudioFinished()
@@ -2263,5 +2300,13 @@ void UStoryFlowComponent::OnDialogueAudioFinished()
 		// Restart the audio for looping
 		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Looping dialogue audio"));
 		CurrentDialogueAudio->Play();
+	}
+	else if (bWaitingForAudioAdvance)
+	{
+		// Audio finished playing — auto-advance the dialogue
+		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Audio finished, auto-advancing dialogue"));
+		bWaitingForAudioAdvance = false;
+		bAudioAdvanceAllowSkip = false;
+		AdvanceDialogue();
 	}
 }
