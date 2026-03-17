@@ -16,6 +16,7 @@ class UStoryFlowDialogueWidget;
 class UAudioComponent;
 class USoundClass;
 class USoundConcurrency;
+class USoundAttenuation;
 
 // ============================================================================
 // Delegates
@@ -77,6 +78,10 @@ public:
 	// Audio Settings
 	// ========================================================================
 
+	/** Play audio as 3D sound attached to the owning actor (false = 2D non-spatialized) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Audio")
+	bool bUse3DAudio = false;
+
 	/** Stop any playing dialogue audio when dialogue ends */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Audio")
 	bool bStopAudioOnDialogueEnd = true;
@@ -92,6 +97,10 @@ public:
 	/** Concurrency settings for dialogue audio (controls overlap behavior) */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Audio")
 	TObjectPtr<USoundConcurrency> DialogueConcurrency;
+
+	/** Attenuation settings for 3D dialogue audio (controls distance falloff, spatialization, etc.) */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Audio", meta=(EditCondition="bUse3DAudio"))
+	TObjectPtr<USoundAttenuation> DialogueAttenuation;
 
 	// ========================================================================
 	// Events (Blueprint Assignable)
@@ -347,10 +356,12 @@ protected:
 
 	// === Audio Helpers ===
 
-	/** Play dialogue audio with optional looping */
+	/** Play dialogue audio with optional looping (override in Blueprint for custom audio systems) */
+	UFUNCTION(BlueprintNativeEvent, Category = "StoryFlow|Audio")
 	void PlayDialogueAudio(USoundBase* Sound, bool bLoop);
 
-	/** Stop currently playing dialogue audio */
+	/** Stop currently playing dialogue audio (override in Blueprint for custom audio systems) */
+	UFUNCTION(BlueprintNativeEvent, Category = "StoryFlow|Audio")
 	void StopDialogueAudio();
 
 	/** Callback when dialogue audio finishes (for looping) */

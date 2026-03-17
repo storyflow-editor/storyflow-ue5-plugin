@@ -11,6 +11,7 @@
 #include "Engine/GameInstance.h"
 #include "Kismet/GameplayStatics.h"
 #include "Components/AudioComponent.h"
+#include "Sound/SoundAttenuation.h"
 #include "UI/StoryFlowDialogueWidget.h"
 #include "Blueprint/UserWidget.h"
 
@@ -2173,7 +2174,7 @@ void UStoryFlowComponent::HandleSetNodeEnd(FStoryFlowNode* Node, const FString& 
 // Audio Helpers
 // ============================================================================
 
-void UStoryFlowComponent::PlayDialogueAudio(USoundBase* Sound, bool bLoop)
+void UStoryFlowComponent::PlayDialogueAudio_Implementation(USoundBase* Sound, bool bLoop)
 {
 	if (!Sound)
 	{
@@ -2183,9 +2184,19 @@ void UStoryFlowComponent::PlayDialogueAudio(USoundBase* Sound, bool bLoop)
 	// Stop any currently playing dialogue audio
 	StopDialogueAudio();
 
-	// Spawn a new audio component for this dialogue
-	// bAutoDestroy=false so we can track and stop it later
-	CurrentDialogueAudio = UGameplayStatics::SpawnSound2D(this, Sound, DialogueVolumeMultiplier, 1.0f, 0.0f, DialogueConcurrency.Get(), false, false);
+	// Spawn audio component — 3D attached to owner or 2D non-spatialized
+	if (bUse3DAudio && GetOwner())
+	{
+		CurrentDialogueAudio = UGameplayStatics::SpawnSoundAttached(
+			Sound, GetOwner()->GetRootComponent(),
+			NAME_None, FVector::ZeroVector, EAttachLocation::KeepRelativeOffset,
+			false, DialogueVolumeMultiplier, 1.0f, 0.0f,
+			DialogueAttenuation.Get(), DialogueConcurrency.Get(), false);
+	}
+	else
+	{
+		CurrentDialogueAudio = UGameplayStatics::SpawnSound2D(this, Sound, DialogueVolumeMultiplier, 1.0f, 0.0f, DialogueConcurrency.Get(), false, false);
+	}
 
 	if (CurrentDialogueAudio)
 	{
@@ -2199,7 +2210,10 @@ void UStoryFlowComponent::PlayDialogueAudio(USoundBase* Sound, bool bLoop)
 		if (bLoop)
 		{
 			CurrentDialogueAudio->SetSound(Sound);
-			CurrentDialogueAudio->bIsUISound = true;
+			if (!bUse3DAudio)
+			{
+				CurrentDialogueAudio->bIsUISound = true;
+			}
 
 			// Stop the auto-started playback, configure loop, then restart
 			CurrentDialogueAudio->Stop();
@@ -2217,11 +2231,13 @@ void UStoryFlowComponent::PlayDialogueAudio(USoundBase* Sound, bool bLoop)
 			CurrentDialogueAudio->ComponentTags.Add(FName("StoryFlowLoop"));
 		}
 
-		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Audio started (loop=%s)"), bLoop ? TEXT("true") : TEXT("false"));
+		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Audio started (3D=%s, loop=%s)"),
+			bUse3DAudio ? TEXT("true") : TEXT("false"),
+			bLoop ? TEXT("true") : TEXT("false"));
 	}
 }
 
-void UStoryFlowComponent::StopDialogueAudio()
+void UStoryFlowComponent::StopDialogueAudio_Implementation()
 {
 	if (CurrentDialogueAudio)
 	{
