@@ -284,6 +284,21 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 		break;
 	}
 
+	case EStoryFlowNodeType::GetCharacterVar:
+	{
+		FString CharPath = Node->Data.CharacterPath;
+		if (const FStoryFlowConnection* CharEdge = Context->FindInputEdge(Node->Id, StoryFlowHandles::In_CharacterInput))
+		{
+			if (FStoryFlowNode* CharNode = Context->GetNode(CharEdge->Source))
+			{
+				CharPath = EvaluateStringFromNode(CharNode, Node->Id, CharEdge->SourceHandle);
+			}
+		}
+		FStoryFlowVariant CharVal = Context->GetCharacterVariableValue(CharPath, Node->Data.VariableName);
+		Result = CharVal.GetBool();
+		break;
+	}
+
 	default:
 		Result = false;
 		break;
@@ -632,6 +647,24 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 		break;
 	}
 
+	case EStoryFlowNodeType::GetCharacterVar:
+	{
+		FString CharPath = Node->Data.CharacterPath;
+		if (UStoryFlowScriptAsset* Script = Context->CurrentScript.Get())
+		{
+			if (const FStoryFlowConnection* CharEdge = Script->FindInputEdge(Node->Id, StoryFlowHandles::In_CharacterInput))
+			{
+				if (FStoryFlowNode* CharNode = Context->GetNode(CharEdge->Source))
+				{
+					CharPath = EvaluateStringFromNode(CharNode, Node->Id, CharEdge->SourceHandle);
+				}
+			}
+		}
+		FStoryFlowVariant CharVal = Context->GetCharacterVariableValue(CharPath, Node->Data.VariableName);
+		Result = CharVal.GetInt();
+		break;
+	}
+
 	default:
 		Result = 0;
 		break;
@@ -815,6 +848,24 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 				}
 			}
 		}
+		break;
+	}
+
+	case EStoryFlowNodeType::GetCharacterVar:
+	{
+		FString CharPath = Node->Data.CharacterPath;
+		if (UStoryFlowScriptAsset* Script = Context->CurrentScript.Get())
+		{
+			if (const FStoryFlowConnection* CharEdge = Script->FindInputEdge(Node->Id, StoryFlowHandles::In_CharacterInput))
+			{
+				if (FStoryFlowNode* CharNode = Context->GetNode(CharEdge->Source))
+				{
+					CharPath = EvaluateStringFromNode(CharNode, Node->Id, CharEdge->SourceHandle);
+				}
+			}
+		}
+		FStoryFlowVariant CharVal = Context->GetCharacterVariableValue(CharPath, Node->Data.VariableName);
+		Result = CharVal.GetFloat();
 		break;
 	}
 
@@ -1074,6 +1125,24 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 				}
 			}
 		}
+		break;
+	}
+
+	case EStoryFlowNodeType::GetCharacterVar:
+	{
+		FString CharPath = Node->Data.CharacterPath;
+		if (UStoryFlowScriptAsset* Script = Context->CurrentScript.Get())
+		{
+			if (const FStoryFlowConnection* CharEdge = Script->FindInputEdge(Node->Id, StoryFlowHandles::In_CharacterInput))
+			{
+				if (FStoryFlowNode* CharNode = Context->GetNode(CharEdge->Source))
+				{
+					CharPath = EvaluateStringFromNode(CharNode, Node->Id, CharEdge->SourceHandle);
+				}
+			}
+		}
+		FStoryFlowVariant CharVal = Context->GetCharacterVariableValue(CharPath, Node->Data.VariableName);
+		Result = CharVal.GetString();
 		break;
 	}
 
