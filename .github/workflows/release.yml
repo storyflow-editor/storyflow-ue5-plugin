@@ -5,31 +5,51 @@ on:
     types: [published]
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  build:
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 
       - name: Get version from tag
         id: version
+        shell: bash
         run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
-      - name: Zip plugin source
+      - name: Build plugin for all UE versions
+        shell: cmd
         run: |
-          # Create a StoryFlowPlugin/ root folder so users can drop it directly into Plugins/
-          mkdir -p _pkg/StoryFlowPlugin
-          cp -r Config Content Resources Source StoryFlowPlugin.uplugin README.md LICENSE _pkg/StoryFlowPlugin/ 2>/dev/null || true
-          cd _pkg
-          zip -r ../StoryFlow-Plugin-Source.zip StoryFlowPlugin/
+          set PLUGIN=%GITHUB_WORKSPACE%\StoryFlowPlugin.uplugin
+          set OUTPUT=%GITHUB_WORKSPACE%\BuildOutput
+          set ENGINES=C:\Program Files\Epic Games
 
-      - name: Create per-UE-version zips
+          for %%V in (5.3 5.4 5.5 5.6 5.7) do (
+            echo Building for UE %%V...
+            if exist "%OUTPUT%\StoryFlowPlugin_%%V" rmdir /s /q "%OUTPUT%\StoryFlowPlugin_%%V"
+            call "%ENGINES%\UE_%%V\Engine\Build\BatchFiles\RunUAT.bat" BuildPlugin -Plugin="%PLUGIN%" -Package="%OUTPUT%\StoryFlowPlugin_%%V" -TargetPlatforms=Win64 -Rocket
+            if errorlevel 1 (
+              echo [FAILED] UE %%V build failed!
+              exit /b 1
+            )
+            echo [OK] UE %%V build succeeded.
+          )
+
+      - name: Zip builds
+        shell: pwsh
         run: |
-          VERSION=${{ steps.version.outputs.version }}
-          for UE in 5.3 5.4 5.5 5.6 5.7; do
-            cp StoryFlow-Plugin-Source.zip "StoryFlow-Plugin-v${VERSION}-UE${UE}.zip"
-          done
+          $version = "${{ steps.version.outputs.version }}"
+          foreach ($ue in @("5.3", "5.4", "5.5", "5.6", "5.7")) {
+            $src = "BuildOutput\StoryFlowPlugin_$ue\StoryFlowPlugin"
+            $zip = "StoryFlow-Plugin-v$version-UE$ue.zip"
+            if (Test-Path $src) {
+              Compress-Archive -Path $src -DestinationPath $zip -Force
+              Write-Host "Created $zip"
+            } else {
+              Write-Host "WARNING: $src not found, skipping"
+            }
+          }
 
       - name: Upload to R2
+        shell: bash
         run: |
           VERSION=${{ steps.version.outputs.version }}
           for UE in 5.3 5.4 5.5 5.6 5.7; do
@@ -43,6 +63,7 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
 
       - name: Attach to GitHub Release
+        shell: bash
         run: |
           VERSION=${{ steps.version.outputs.version }}
           for UE in 5.3 5.4 5.5 5.6 5.7; do
@@ -50,6 +71,16 @@ jobs:
           done
         env:
           GH_TOKEN: ${{ github.token }}
+
+  changelog:
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
       - name: Open changelog PR on storyflow-web
         run: |
@@ -88,7 +119,7 @@ jobs:
 
   bump-version:
     runs-on: ubuntu-latest
-    needs: release
+    needs: build
     steps:
       - uses: actions/checkout@v4
         with:
