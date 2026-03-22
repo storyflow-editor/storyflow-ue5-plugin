@@ -105,10 +105,24 @@ const FStoryFlowConnection* UStoryFlowScriptAsset::FindInputEdge(const FString& 
 
 	if (const TArray<int32>* Indices = TargetNodeIndex.Find(NodeId))
 	{
+		// Try exact match first
 		for (int32 Idx : *Indices)
 		{
 			const FStoryFlowConnection& Conn = Connections[Idx];
 			if (Conn.TargetHandle == Pattern)
+			{
+				return &Conn;
+			}
+		}
+
+		// Fallback: prefix match for handles with trailing option ID.
+		// The editor appends a numbered suffix to handles (e.g., "string-2", "string-array-1")
+		// while the runtime constants omit it (e.g., "string", "string-array").
+		const FString Prefix = Pattern + TEXT("-");
+		for (int32 Idx : *Indices)
+		{
+			const FStoryFlowConnection& Conn = Connections[Idx];
+			if (Conn.TargetHandle.StartsWith(Prefix))
 			{
 				return &Conn;
 			}
