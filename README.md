@@ -22,7 +22,7 @@ Runtime plugin for [StoryFlow Editor](https://storyflow-editor.com) - a visual n
 
 ## Installation
 
-1. Download the plugin for your UE version from [Releases](https://github.com/StoryFlowEditor/storyflow-unreal/releases)
+1. Download the plugin for your UE version from [Releases](https://github.com/storyflow-editor/storyflow-ue5-plugin/releases)
 2. Copy the `StoryFlowPlugin` folder into your project's `Plugins/` directory
 3. Enable the plugin in **Edit > Plugins** and restart the editor
 
@@ -94,7 +94,7 @@ Contributions are welcome! Please read the guidelines below before submitting.
 4. Open a Pull Request targeting the `dev` branch
 5. We'll review and merge when ready
 
-Please open an [issue](https://github.com/StoryFlowEditor/storyflow-unreal/issues) first for large changes so we can discuss the approach.
+Please open an [issue](https://github.com/storyflow-editor/storyflow-ue5-plugin/issues) first for large changes so we can discuss the approach.
 
 ### Building from Source
 
