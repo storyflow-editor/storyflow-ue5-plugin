@@ -35,7 +35,7 @@ jobs:
           for UE in 5.3 5.4 5.5 5.6 5.7; do
             aws s3 cp \
               "StoryFlow-Plugin-v${VERSION}-UE${UE}.zip" \
-              "s3://${{ secrets.R2_BUCKET_NAME }}/StoryFlow-Plugin-v${VERSION}-UE${UE}.zip" \
+              "s3://${{ secrets.R2_BUCKET_NAME }}/ue5/StoryFlow-Plugin-v${VERSION}-UE${UE}.zip" \
               --endpoint-url https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com
           done
         env:
