@@ -184,7 +184,7 @@ void FStoryFlowWebSocketClient::SendHandshake()
 	TSharedPtr<FJsonObject> Payload = MakeShared<FJsonObject>();
 	Payload->SetStringField(TEXT("engine"), TEXT("unreal"));
 	Payload->SetStringField(TEXT("version"), FEngineVersion::Current().ToString());
-	Payload->SetStringField(TEXT("pluginVersion"), TEXT("1.0.5"));
+	Payload->SetStringField(TEXT("pluginVersion"), TEXT("1.0.6"));
 
 	SendMessage(TEXT("connect"), Payload);
 }
