@@ -40,13 +40,19 @@ jobs:
         run: |
           $version = "${{ steps.version.outputs.version }}"
           foreach ($ue in @("5.3", "5.4", "5.5", "5.6", "5.7")) {
-            $src = "BuildOutput\StoryFlowPlugin_$ue\StoryFlowPlugin"
+            $src = "BuildOutput\StoryFlowPlugin_$ue"
             $zip = "StoryFlow-Plugin-v$version-UE$ue.zip"
             if (Test-Path $src) {
-              Compress-Archive -Path $src -DestinationPath $zip -Force
+              # Rename folder to StoryFlowPlugin so users get a clean folder on extract
+              $pkg = "BuildOutput\StoryFlowPlugin"
+              if (Test-Path $pkg) { Remove-Item $pkg -Recurse -Force }
+              Rename-Item $src "StoryFlowPlugin"
+              Compress-Archive -Path $pkg -DestinationPath $zip -Force
+              Rename-Item $pkg "StoryFlowPlugin_$ue"
               Write-Host "Created $zip"
             } else {
               Write-Host "WARNING: $src not found, skipping"
+              exit 1
             }
           }
 
