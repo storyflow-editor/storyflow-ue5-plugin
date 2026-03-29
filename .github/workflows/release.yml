@@ -17,6 +17,18 @@ jobs:
           $version = "${{ github.ref_name }}" -replace '^v', ''
           echo "version=$version" >> $env:GITHUB_OUTPUT
 
+      - name: Clean stale AutomationTool script modules
+        shell: powershell
+        run: |
+          $engines = "C:\Program Files\Epic Games"
+          foreach ($ue in @("5.3", "5.4", "5.5", "5.6", "5.7")) {
+            $dir = "$engines\UE_$ue\Engine\Intermediate\ScriptModules"
+            if (Test-Path $dir) {
+              Remove-Item $dir -Recurse -Force
+              Write-Host "Cleaned ScriptModules for UE $ue"
+            }
+          }
+
       - name: Build plugin for all UE versions
         shell: cmd
         run: |
