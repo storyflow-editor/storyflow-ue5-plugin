@@ -17,15 +17,32 @@ jobs:
           $version = "${{ github.ref_name }}" -replace '^v', ''
           echo "version=$version" >> $env:GITHUB_OUTPUT
 
-      - name: Clean stale AutomationTool script modules
+      - name: Remove stale AutomationTool script module records
         shell: powershell
         run: |
+          # AutomationTool loads ALL ScriptModule JSON records from Engine/Intermediate/ScriptModules
+          # before any command runs. For Installed Builds, it sets NoCompile + ErrorOnMissingTarget,
+          # meaning a missing DLL (e.g. Android.Automation.dll when Android support isn't installed)
+          # causes a fatal exception. The JSON records ship for ALL platforms regardless of what was
+          # installed. Fix: remove any JSON record whose TargetPath DLL doesn't exist on disk.
+          # See: CompileScriptModules.cs Build() method, lines ~317-356 in UE source.
           $engines = "C:\Program Files\Epic Games"
           foreach ($ue in @("5.3", "5.4", "5.5", "5.6", "5.7")) {
             $dir = "$engines\UE_$ue\Engine\Intermediate\ScriptModules"
-            if (Test-Path $dir) {
-              Remove-Item $dir -Recurse -Force
-              Write-Host "Cleaned ScriptModules for UE $ue"
+            if (!(Test-Path $dir)) { continue }
+            Get-ChildItem "$dir\*.json" | ForEach-Object {
+              try {
+                $data = Get-Content $_.FullName -Raw | ConvertFrom-Json
+                if ($data.TargetPath) {
+                  # TargetPath is relative to the .csproj's directory (ProjectPath is relative to the JSON)
+                  $projectDir = Split-Path (Join-Path $_.DirectoryName $data.ProjectPath) -Parent
+                  $dllPath = Join-Path $projectDir $data.TargetPath | Resolve-Path -ErrorAction SilentlyContinue
+                  if (!$dllPath) {
+                    Remove-Item $_.FullName -Force
+                    Write-Host "Removed stale record: UE $ue / $($_.Name)"
+                  }
+                }
+              } catch {}
             }
           }
 
