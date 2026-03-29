@@ -2049,9 +2049,15 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 		}
 	}
 
-	// Build text blocks (non-interactive, always visible)
+	// Build visible text blocks (non-interactive, filtered by visibility)
 	for (const FStoryFlowTextBlock& Block : DialogueNode->Data.TextBlocks)
 	{
+		// Check visibility condition (same mechanism as options)
+		if (Evaluator && !Evaluator->EvaluateOptionVisibility(DialogueNode, Block.Id))
+		{
+			continue;
+		}
+
 		FStoryFlowDialogueOption TextBlock;
 		TextBlock.Id = Block.Id;
 		TextBlock.Text = ExecutionContext.InterpolateVariables(ExecutionContext.GetString(Block.Text, LanguageCode));
