@@ -1182,7 +1182,30 @@ TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateArrayInputGeneric(FStoryF
 	}
 
 	FStoryFlowNode* SourceNode = Context->GetNode(Edge->Source);
-	if (!SourceNode || SourceNode->Type != ExpectedGetArrayType)
+	if (!SourceNode)
+	{
+		return TArray<FStoryFlowVariant>();
+	}
+
+	// Handle getCharacterVar nodes that can return arrays
+	if (SourceNode->Type == EStoryFlowNodeType::GetCharacterVar)
+	{
+		FString CharPath = SourceNode->Data.CharacterPath;
+		if (UStoryFlowScriptAsset* Script = Context->CurrentScript.Get())
+		{
+			if (const FStoryFlowConnection* CharEdge = Script->FindInputEdge(SourceNode->Id, StoryFlowHandles::In_CharacterInput))
+			{
+				if (FStoryFlowNode* CharNode = Context->GetNode(CharEdge->Source))
+				{
+					CharPath = EvaluateStringFromNode(CharNode, SourceNode->Id, CharEdge->SourceHandle);
+				}
+			}
+		}
+		FStoryFlowVariant CharVal = Context->GetCharacterVariableValue(CharPath, SourceNode->Data.VariableName);
+		return CharVal.GetArray();
+	}
+
+	if (SourceNode->Type != ExpectedGetArrayType)
 	{
 		return TArray<FStoryFlowVariant>();
 	}
@@ -1309,8 +1332,9 @@ void FStoryFlowEvaluator::ProcessBooleanChain(FStoryFlowNode* Node)
 	default:
 	{
 		// For any other type that produces a boolean (comparisons, array contains, type conversions, etc.),
-		// delegate to EvaluateBooleanFromNode which handles all 47+ types.
-		// This fixes the mismatch where ProcessBooleanChain handled ~12 types but IsBooleanProducer listed 30+.
+		// clear cached output first to force fresh evaluation (matches HTML runtime which always overwrites cache).
+		NodeState.bHasCachedOutput = false;
+		NodeState.CachedOutput.Reset();
 		EvaluateBooleanFromNode(Node, TEXT(""), TEXT(""));
 		break;
 	}

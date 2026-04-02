@@ -75,8 +75,8 @@ private:
 	/** Parse connections from JSON array */
 	static void ParseConnections(const TArray<TSharedPtr<FJsonValue>>& ConnectionsArray, TArray<FStoryFlowConnection>& OutConnections);
 
-	/** Parse variables from JSON object */
-	static void ParseVariables(const TSharedPtr<FJsonObject>& VariablesObject, TMap<FString, FStoryFlowVariable>& OutVariables);
+	/** Parse variables from JSON object. When bKeyByName is true, variables are keyed by their display name (for character variables) instead of their ID. */
+	static void ParseVariables(const TSharedPtr<FJsonObject>& VariablesObject, TMap<FString, FStoryFlowVariable>& OutVariables, bool bKeyByName = false);
 
 	/** Parse a single variable from JSON */
 	static FStoryFlowVariable ParseVariable(const FString& VariableId, const TSharedPtr<FJsonObject>& VariableObject);

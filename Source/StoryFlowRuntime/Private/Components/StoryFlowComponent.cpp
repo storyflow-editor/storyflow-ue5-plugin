@@ -1574,20 +1574,34 @@ void UStoryFlowComponent::HandleForEachLoop(FStoryFlowNode* Node)
 		NodeState.LoopArray = Array;
 		NodeState.LoopIndex = 0;
 		NodeState.bLoopInitialized = true;
-
-		// Push loop context
-		FStoryFlowLoopContext LoopContext;
-		LoopContext.NodeId = Node->Id;
-		LoopContext.Type = EStoryFlowLoopType::ForEach;
-		LoopContext.CurrentIndex = 0;
-		ExecutionContext.LoopStack.Push(LoopContext);
 	}
 
 	if (NodeState.LoopIndex < NodeState.LoopArray.Num())
 	{
+		// Clear evaluation caches from previous iteration so boolean chains re-evaluate
+		ExecutionContext.ClearEvaluationCache();
+
+		// Restore cached outputs for all active outer loops (nested forEach support)
+		for (const FStoryFlowLoopContext& Frame : ExecutionContext.LoopStack)
+		{
+			FNodeRuntimeState& OuterState = ExecutionContext.GetNodeState(Frame.NodeId);
+			if (OuterState.bLoopInitialized && OuterState.LoopIndex < OuterState.LoopArray.Num())
+			{
+				OuterState.CachedOutput = OuterState.LoopArray[OuterState.LoopIndex];
+				OuterState.bHasCachedOutput = true;
+			}
+		}
+
 		// Set current element as cached output
 		NodeState.CachedOutput = NodeState.LoopArray[NodeState.LoopIndex];
 		NodeState.bHasCachedOutput = true;
+
+		// Push loop context for this iteration
+		FStoryFlowLoopContext LoopContext;
+		LoopContext.NodeId = Node->Id;
+		LoopContext.Type = EStoryFlowLoopType::ForEach;
+		LoopContext.CurrentIndex = NodeState.LoopIndex;
+		ExecutionContext.LoopStack.Push(LoopContext);
 
 		// Execute loop body
 		ProcessNextNode(StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_LoopBody));
@@ -1600,7 +1614,7 @@ void UStoryFlowComponent::HandleForEachLoop(FStoryFlowNode* Node)
 		NodeState.bHasCachedOutput = false;
 		NodeState.CachedOutput.Reset();
 
-		if (ExecutionContext.LoopStack.Num() > 0)
+		if (ExecutionContext.LoopStack.Num() > 0 && ExecutionContext.LoopStack.Last().NodeId == Node->Id)
 		{
 			ExecutionContext.LoopStack.Pop();
 		}
@@ -2148,7 +2162,7 @@ void UStoryFlowComponent::ContinueForEachLoop(const FString& NodeId)
 	NodeState.LoopIndex++;
 
 	// Pop the loop context that was pushed for this iteration
-	if (ExecutionContext.LoopStack.Num() > 0)
+	if (ExecutionContext.LoopStack.Num() > 0 && ExecutionContext.LoopStack.Last().NodeId == NodeId)
 	{
 		ExecutionContext.LoopStack.Pop();
 	}

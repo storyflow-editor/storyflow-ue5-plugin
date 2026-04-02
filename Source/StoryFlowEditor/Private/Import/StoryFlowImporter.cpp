@@ -193,7 +193,7 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 					}
 					if (CharObject->HasField(TEXT("variables")))
 					{
-						ParseVariables(CharObject->GetObjectField(TEXT("variables")), CharAsset->Variables);
+						ParseVariables(CharObject->GetObjectField(TEXT("variables")), CharAsset->Variables, /*bKeyByName=*/ true);
 					}
 
 					// Import media into shared top-level directories (e.g. /Game/StoryFlow/Textures/)
@@ -643,7 +643,7 @@ void UStoryFlowImporter::ParseConnections(const TArray<TSharedPtr<FJsonValue>>& 
 	}
 }
 
-void UStoryFlowImporter::ParseVariables(const TSharedPtr<FJsonObject>& VariablesObject, TMap<FString, FStoryFlowVariable>& OutVariables)
+void UStoryFlowImporter::ParseVariables(const TSharedPtr<FJsonObject>& VariablesObject, TMap<FString, FStoryFlowVariable>& OutVariables, bool bKeyByName)
 {
 	for (const auto& VarPair : VariablesObject->Values)
 	{
@@ -651,7 +651,9 @@ void UStoryFlowImporter::ParseVariables(const TSharedPtr<FJsonObject>& Variables
 		TSharedPtr<FJsonObject> VarObject = VarPair.Value->AsObject();
 		if (VarObject.IsValid())
 		{
-			OutVariables.Add(VariableId, ParseVariable(VariableId, VarObject));
+			FStoryFlowVariable Variable = ParseVariable(VariableId, VarObject);
+			FString Key = (bKeyByName && !Variable.Name.IsEmpty()) ? Variable.Name : VariableId;
+			OutVariables.Add(Key, MoveTemp(Variable));
 		}
 	}
 }
