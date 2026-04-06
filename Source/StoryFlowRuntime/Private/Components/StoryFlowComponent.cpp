@@ -15,6 +15,13 @@
 #include "UI/StoryFlowDialogueWidget.h"
 #include "Blueprint/UserWidget.h"
 
+// ============================================================================
+// Trace Logging Helpers
+// ============================================================================
+
+#define SF_TRACE(Ctx, Format, ...) \
+	do { if ((Ctx).bTraceEnabled) { UE_LOG(LogStoryFlow, Log, TEXT("[SF-TRACE] " Format), ##__VA_ARGS__); } } while(0)
+
 UStoryFlowComponent::UStoryFlowComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
@@ -100,6 +107,7 @@ void UStoryFlowComponent::StartDialogueWithScript(const FString& ScriptPath)
 	// Pass the subsystem's global variables, runtime characters, and once-only options so they're shared across all components
 	ExecutionContext.InitializeWithSubsystem(Project, ScriptAsset, &Subsystem->GetGlobalVariables(), &Subsystem->GetRuntimeCharacters(), &Subsystem->GetUsedOnceOnlyOptions());
 	ExecutionContext.bIsExecuting = true;
+	ExecutionContext.bTraceEnabled = bTraceEnabled;
 	Subsystem->NotifyDialogueStarted();
 	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: ExecutionContext initialized, CurrentNodeId='%s'"), *ExecutionContext.CurrentNodeId);
 
@@ -892,6 +900,8 @@ void UStoryFlowComponent::ProcessNode(FStoryFlowNode* Node)
 	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: ProcessNode id='%s' type='%s' (%d)"),
 		*Node->Id, *Node->TypeString, static_cast<int32>(Node->Type));
 
+	SF_TRACE(ExecutionContext, "NODE %s %s", *Node->Id, *Node->TypeString);
+
 	ExecutionContext.CurrentNodeId = Node->Id;
 
 	const auto& Table = GetDispatchTable();
@@ -1096,6 +1106,8 @@ void UStoryFlowComponent::ProcessNextNode(const FString& SourceHandle)
 
 	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Found edge: source='%s' -> target='%s'"), *Edge->Source, *Edge->Target);
 
+	SF_TRACE(ExecutionContext, "EDGE %s:%s -> %s", *Edge->Source, *Edge->SourceHandle, *Edge->Target);
+
 	FStoryFlowNode* TargetNode = ExecutionContext.GetNode(Edge->Target);
 	if (!TargetNode)
 	{
@@ -1186,8 +1198,10 @@ void UStoryFlowComponent::HandleEnd(FStoryFlowNode* Node)
 		}
 
 		// Pop call stack and restore calling script state
+		FString ReturnScriptPath = ExecutionContext.CurrentScript.IsValid() ? ExecutionContext.CurrentScript->ScriptPath : TEXT("");
+		SF_TRACE(ExecutionContext, "SCRIPT RETURN \"%s\"", *ReturnScriptPath);
 		FStoryFlowCallFrame Frame = ExecutionContext.CallStack.Pop();
-		OnScriptEnded.Broadcast(ExecutionContext.CurrentScript.IsValid() ? ExecutionContext.CurrentScript->ScriptPath : TEXT(""));
+		OnScriptEnded.Broadcast(ReturnScriptPath);
 
 		if (Frame.ScriptAsset.IsValid())
 		{
@@ -1252,6 +1266,8 @@ void UStoryFlowComponent::HandleBranch(FStoryFlowNode* Node)
 		Condition = Evaluator->EvaluateBooleanInput(Node, StoryFlowHandles::In_BooleanCondition, Node->Data.Value.GetBool(false));
 	}
 
+	SF_TRACE(ExecutionContext, "BRANCH %s condition=%s", *Node->Id, Condition ? TEXT("true") : TEXT("false"));
+
 	// Continue based on condition
 	FString Handle = StoryFlowHandles::Source(Node->Id, Condition ? StoryFlowHandles::Out_True : StoryFlowHandles::Out_False);
 
@@ -1304,6 +1320,21 @@ void UStoryFlowComponent::HandleDialogue(FStoryFlowNode* Node)
 	// Build dialogue state
 	ExecutionContext.CurrentDialogueState = BuildDialogueState(Node);
 	ExecutionContext.bIsWaitingForInput = true;
+
+	// Trace logging for dialogue media
+	if (!Node->Data.Image.IsEmpty())
+	{
+		SF_TRACE(ExecutionContext, "IMAGE \"%s\"", *Node->Data.Image);
+	}
+	if (!Node->Data.Audio.IsEmpty())
+	{
+		SF_TRACE(ExecutionContext, "AUDIO \"%s\"", *Node->Data.Audio);
+	}
+	if (ExecutionContext.CurrentDialogueState.Character.Image)
+	{
+		FString CharImageName = ExecutionContext.CurrentDialogueState.Character.Image->GetPathName();
+		SF_TRACE(ExecutionContext, "CHAR IMAGE \"%s\"", *CharImageName);
+	}
 
 	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: HandleDialogue - State built (FreshEntry=%s):"),
 		bIsFreshEntry ? TEXT("true") : TEXT("false"));
@@ -1382,37 +1413,68 @@ void UStoryFlowComponent::HandleRunScript(FStoryFlowNode* Node)
 	{
 		for (const FStoryFlowScriptInterfaceParam& Param : Node->Data.ScriptParameters)
 		{
-			FString HandleSuffix = Param.Type + TEXT("-param-") + Param.Id;
-			if (Param.Type == TEXT("boolean"))
+			if (Param.bIsArray)
 			{
+				// Array parameters use "{type}-array-param-{id}" handle suffix
+				FString HandleSuffix = Param.Type + TEXT("-array-param-") + Param.Id;
 				if (ExecutionContext.FindInputEdge(Node->Id, HandleSuffix))
 				{
-					bool Val = Evaluator->EvaluateBooleanInput(Node, HandleSuffix, false);
-					ParamValues.Add(Param.Name, FStoryFlowVariant::FromBool(Val));
+					TArray<FStoryFlowVariant> Arr;
+					if (Param.Type == TEXT("boolean"))
+						Arr = Evaluator->EvaluateBoolArrayInput(Node, HandleSuffix);
+					else if (Param.Type == TEXT("integer"))
+						Arr = Evaluator->EvaluateIntArrayInput(Node, HandleSuffix);
+					else if (Param.Type == TEXT("float"))
+						Arr = Evaluator->EvaluateFloatArrayInput(Node, HandleSuffix);
+					else if (Param.Type == TEXT("string"))
+						Arr = Evaluator->EvaluateStringArrayInput(Node, HandleSuffix);
+					else if (Param.Type == TEXT("image"))
+						Arr = Evaluator->EvaluateImageArrayInput(Node, HandleSuffix);
+					else if (Param.Type == TEXT("character"))
+						Arr = Evaluator->EvaluateCharacterArrayInput(Node, HandleSuffix);
+					else if (Param.Type == TEXT("audio"))
+						Arr = Evaluator->EvaluateAudioArrayInput(Node, HandleSuffix);
+
+					FStoryFlowVariant ArrVariant;
+					ArrVariant.SetArray(Arr);
+					ParamValues.Add(Param.Name, MoveTemp(ArrVariant));
 				}
 			}
-			else if (Param.Type == TEXT("integer"))
+			else
 			{
-				if (ExecutionContext.FindInputEdge(Node->Id, HandleSuffix))
+				// Scalar parameters use "{type}-param-{id}" handle suffix
+				FString HandleSuffix = Param.Type + TEXT("-param-") + Param.Id;
+				if (Param.Type == TEXT("boolean"))
 				{
-					int32 Val = Evaluator->EvaluateIntegerInput(Node, HandleSuffix, 0);
-					ParamValues.Add(Param.Name, FStoryFlowVariant::FromInt(Val));
+					if (ExecutionContext.FindInputEdge(Node->Id, HandleSuffix))
+					{
+						bool Val = Evaluator->EvaluateBooleanInput(Node, HandleSuffix, false);
+						ParamValues.Add(Param.Name, FStoryFlowVariant::FromBool(Val));
+					}
 				}
-			}
-			else if (Param.Type == TEXT("float"))
-			{
-				if (ExecutionContext.FindInputEdge(Node->Id, HandleSuffix))
+				else if (Param.Type == TEXT("integer"))
 				{
-					float Val = Evaluator->EvaluateFloatInput(Node, HandleSuffix, 0.0f);
-					ParamValues.Add(Param.Name, FStoryFlowVariant::FromFloat(Val));
+					if (ExecutionContext.FindInputEdge(Node->Id, HandleSuffix))
+					{
+						int32 Val = Evaluator->EvaluateIntegerInput(Node, HandleSuffix, 0);
+						ParamValues.Add(Param.Name, FStoryFlowVariant::FromInt(Val));
+					}
 				}
-			}
-			else // string, enum, image, character, audio - all string-valued
-			{
-				if (ExecutionContext.FindInputEdge(Node->Id, HandleSuffix))
+				else if (Param.Type == TEXT("float"))
 				{
-					FString Val = Evaluator->EvaluateStringInput(Node, HandleSuffix, TEXT(""));
-					ParamValues.Add(Param.Name, FStoryFlowVariant::FromString(Val));
+					if (ExecutionContext.FindInputEdge(Node->Id, HandleSuffix))
+					{
+						float Val = Evaluator->EvaluateFloatInput(Node, HandleSuffix, 0.0f);
+						ParamValues.Add(Param.Name, FStoryFlowVariant::FromFloat(Val));
+					}
+				}
+				else // string, enum, image, character, audio - all string-valued
+				{
+					if (ExecutionContext.FindInputEdge(Node->Id, HandleSuffix))
+					{
+						FString Val = Evaluator->EvaluateStringInput(Node, HandleSuffix, TEXT(""));
+						ParamValues.Add(Param.Name, FStoryFlowVariant::FromString(Val));
+					}
 				}
 			}
 		}
@@ -1421,6 +1483,7 @@ void UStoryFlowComponent::HandleRunScript(FStoryFlowNode* Node)
 	// Push current state and switch to new script
 	if (ExecutionContext.PushScript(ScriptPath, Node->Id))
 	{
+		SF_TRACE(ExecutionContext, "SCRIPT CALL \"%s\"", *ScriptPath);
 		OnScriptStarted.Broadcast(ScriptPath);
 
 		// Apply parameter values to the called script's local variables
@@ -1482,6 +1545,8 @@ void UStoryFlowComponent::HandleRunFlow(FStoryFlowNode* Node)
 	{
 		if (FlowDef.Id == FlowId && FlowDef.bIsExit)
 		{
+			SF_TRACE(ExecutionContext, "SCRIPT CALL \"%s\"", *FlowId);
+
 			// Exit flow: push onto flowCallStack so the end handler detects it,
 			// then trigger end logic directly
 			FStoryFlowFlowFrame FlowFrame;
@@ -1495,6 +1560,8 @@ void UStoryFlowComponent::HandleRunFlow(FStoryFlowNode* Node)
 	// Special case: calling the main "Start" flow
 	if (FlowId.Equals(TEXT("start"), ESearchCase::IgnoreCase))
 	{
+		SF_TRACE(ExecutionContext, "SCRIPT CALL \"%s\"", *FlowId);
+
 		// Push flow frame for depth tracking
 		FStoryFlowFlowFrame FlowFrame;
 		FlowFrame.FlowId = FlowId;
@@ -1514,6 +1581,8 @@ void UStoryFlowComponent::HandleRunFlow(FStoryFlowNode* Node)
 	{
 		if (NodePair.Value.Type == EStoryFlowNodeType::EntryFlow && NodePair.Value.Data.FlowId == FlowId)
 		{
+			SF_TRACE(ExecutionContext, "SCRIPT CALL \"%s\"", *FlowId);
+
 			// Push flow frame for depth tracking (flows don't return, this is just for recursion protection)
 			FStoryFlowFlowFrame FlowFrame;
 			FlowFrame.FlowId = FlowId;
@@ -1536,6 +1605,10 @@ void UStoryFlowComponent::HandleEntryFlow(FStoryFlowNode* Node)
 
 void UStoryFlowComponent::HandleGetBool(FStoryFlowNode* Node)
 {
+	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
+	{
+		SF_TRACE(ExecutionContext, "VAR GET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Var->Value.ToString());
+	}
 	// Data node - just continue
 	ProcessNextNode(StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Boolean));
 }
@@ -1553,6 +1626,7 @@ void UStoryFlowComponent::HandleSetBool(FStoryFlowNode* Node)
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
 	{
+		SF_TRACE(ExecutionContext, "VAR SET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Value.ToString());
 		NotifyVariableChanged(*Var, Node->Data.bIsGlobal);
 	}
 
@@ -1561,6 +1635,10 @@ void UStoryFlowComponent::HandleSetBool(FStoryFlowNode* Node)
 
 void UStoryFlowComponent::HandleGetInt(FStoryFlowNode* Node)
 {
+	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
+	{
+		SF_TRACE(ExecutionContext, "VAR GET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Var->Value.ToString());
+	}
 	ProcessNextNode(StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Integer));
 }
 
@@ -1577,6 +1655,7 @@ void UStoryFlowComponent::HandleSetInt(FStoryFlowNode* Node)
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
 	{
+		SF_TRACE(ExecutionContext, "VAR SET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Value.ToString());
 		NotifyVariableChanged(*Var, Node->Data.bIsGlobal);
 	}
 
@@ -1585,6 +1664,10 @@ void UStoryFlowComponent::HandleSetInt(FStoryFlowNode* Node)
 
 void UStoryFlowComponent::HandleGetFloat(FStoryFlowNode* Node)
 {
+	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
+	{
+		SF_TRACE(ExecutionContext, "VAR GET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Var->Value.ToString());
+	}
 	ProcessNextNode(StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Float));
 }
 
@@ -1601,6 +1684,7 @@ void UStoryFlowComponent::HandleSetFloat(FStoryFlowNode* Node)
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
 	{
+		SF_TRACE(ExecutionContext, "VAR SET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Value.ToString());
 		NotifyVariableChanged(*Var, Node->Data.bIsGlobal);
 	}
 
@@ -1609,6 +1693,10 @@ void UStoryFlowComponent::HandleSetFloat(FStoryFlowNode* Node)
 
 void UStoryFlowComponent::HandleGetString(FStoryFlowNode* Node)
 {
+	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
+	{
+		SF_TRACE(ExecutionContext, "VAR GET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Var->Value.ToString());
+	}
 	ProcessNextNode(StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_String));
 }
 
@@ -1626,6 +1714,7 @@ void UStoryFlowComponent::HandleSetString(FStoryFlowNode* Node)
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
 	{
+		SF_TRACE(ExecutionContext, "VAR SET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Value.ToString());
 		NotifyVariableChanged(*Var, Node->Data.bIsGlobal);
 	}
 
@@ -1634,6 +1723,10 @@ void UStoryFlowComponent::HandleSetString(FStoryFlowNode* Node)
 
 void UStoryFlowComponent::HandleGetEnum(FStoryFlowNode* Node)
 {
+	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
+	{
+		SF_TRACE(ExecutionContext, "VAR GET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Var->Value.ToString());
+	}
 	ProcessNextNode(StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Enum));
 }
 
@@ -1650,6 +1743,7 @@ void UStoryFlowComponent::HandleSetEnum(FStoryFlowNode* Node)
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
 	{
+		SF_TRACE(ExecutionContext, "VAR SET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Value.ToString());
 		NotifyVariableChanged(*Var, Node->Data.bIsGlobal);
 	}
 
@@ -1755,17 +1849,61 @@ void UStoryFlowComponent::HandleArraySet(FStoryFlowNode* Node)
 		Var->Value.SetArray(NewArray);
 	}
 
+	SF_TRACE(ExecutionContext, "VAR SET \"%s\" global=%s value=[array]", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"));
 	NotifyVariableChanged(*Var, Node->Data.bIsGlobal);
 	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 }
 
 void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 {
-	// Array modification operations (add, remove, clear)
-	FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
+	// Determine the array handle suffix based on the node type
+	FString ArrayHandleSuffix;
+	switch (Node->Type)
+	{
+	case EStoryFlowNodeType::AddToBoolArray: case EStoryFlowNodeType::RemoveFromBoolArray: case EStoryFlowNodeType::ClearBoolArray:
+		ArrayHandleSuffix = StoryFlowHandles::In_BoolArray; break;
+	case EStoryFlowNodeType::AddToIntArray: case EStoryFlowNodeType::RemoveFromIntArray: case EStoryFlowNodeType::ClearIntArray:
+		ArrayHandleSuffix = StoryFlowHandles::In_IntArray; break;
+	case EStoryFlowNodeType::AddToFloatArray: case EStoryFlowNodeType::RemoveFromFloatArray: case EStoryFlowNodeType::ClearFloatArray:
+		ArrayHandleSuffix = StoryFlowHandles::In_FloatArray; break;
+	case EStoryFlowNodeType::AddToStringArray: case EStoryFlowNodeType::RemoveFromStringArray: case EStoryFlowNodeType::ClearStringArray:
+		ArrayHandleSuffix = StoryFlowHandles::In_StringArray; break;
+	case EStoryFlowNodeType::AddToImageArray: case EStoryFlowNodeType::RemoveFromImageArray: case EStoryFlowNodeType::ClearImageArray:
+		ArrayHandleSuffix = StoryFlowHandles::In_ImageArray; break;
+	case EStoryFlowNodeType::AddToCharacterArray: case EStoryFlowNodeType::RemoveFromCharacterArray: case EStoryFlowNodeType::ClearCharacterArray:
+		ArrayHandleSuffix = StoryFlowHandles::In_CharacterArray; break;
+	case EStoryFlowNodeType::AddToAudioArray: case EStoryFlowNodeType::RemoveFromAudioArray: case EStoryFlowNodeType::ClearAudioArray:
+		ArrayHandleSuffix = StoryFlowHandles::In_AudioArray; break;
+	default: break;
+	}
+
+	// Try direct variable reference first, then fall back to edge-based discovery.
+	// Array modify nodes in the HTML runtime don't have a variable field — they discover
+	// the target array through the input edge (matching getArrayInput + updateConnectedArrayVariable).
+	FStoryFlowVariable* Var = nullptr;
+	if (!Node->Data.Variable.IsEmpty())
+	{
+		Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
+	}
+
+	// Edge-based fallback: trace the array input edge to find the source variable
+	if (!Var && Evaluator && !ArrayHandleSuffix.IsEmpty())
+	{
+		if (const FStoryFlowConnection* Edge = ExecutionContext.FindInputEdge(Node->Id, ArrayHandleSuffix))
+		{
+			if (FStoryFlowNode* SourceNode = ExecutionContext.GetNode(Edge->Source))
+			{
+				if (!SourceNode->Data.Variable.IsEmpty())
+				{
+					Var = ExecutionContext.FindVariable(SourceNode->Data.Variable, SourceNode->Data.bIsGlobal);
+				}
+			}
+		}
+	}
+
 	if (!Var)
 	{
-		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: HandleArrayModify - variable '%s' not found"), *Node->Data.Variable);
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: HandleArrayModify - variable not found for node '%s'"), *Node->Id);
 		HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 		return;
 	}
@@ -1801,7 +1939,14 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 	{
 		FStoryFlowVariant Elem;
 		FString ResolvedFallback = ExecutionContext.GetString(Node->Data.Value.GetString(), LanguageCode);
-		Elem.SetString(Evaluator ? Evaluator->EvaluateStringInput(Node, TEXT("string"), ResolvedFallback) : ResolvedFallback);
+		FString EvalResult = Evaluator ? Evaluator->EvaluateStringInput(Node, TEXT("string"), ResolvedFallback) : ResolvedFallback;
+		// If evaluator returned empty but we have a resolved default, use the default
+		// (the input edge may evaluate a localization key that the string evaluator can't resolve)
+		if (EvalResult.IsEmpty() && !ResolvedFallback.IsEmpty())
+		{
+			EvalResult = ResolvedFallback;
+		}
+		Elem.SetString(EvalResult);
 		Arr.Add(Elem);
 		break;
 	}
@@ -1847,7 +1992,15 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 		break;
 	}
 
-	NotifyVariableChanged(*Var, Node->Data.bIsGlobal);
+	// Store result array in CachedOutput so downstream nodes connected to this
+	// node's output can read it (matches HTML's setNodeOutputValue pattern)
+	FNodeRuntimeState& ArrayNodeState = ExecutionContext.GetNodeState(Node->Id);
+	ArrayNodeState.CachedOutput.SetArray(Arr);
+	ArrayNodeState.bHasCachedOutput = true;
+
+	bool bVarIsGlobal = !ExecutionContext.LocalVariables.Contains(Var->Id);
+	SF_TRACE(ExecutionContext, "VAR SET \"%s\" global=%s value=[array]", *Var->Name, bVarIsGlobal ? TEXT("true") : TEXT("false"));
+	NotifyVariableChanged(*Var, bVarIsGlobal);
 	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 }
 
@@ -1915,6 +2068,8 @@ void UStoryFlowComponent::HandleForEachLoop(FStoryFlowNode* Node)
 		NodeState.CachedOutput = NodeState.LoopArray[NodeState.LoopIndex];
 		NodeState.bHasCachedOutput = true;
 
+		SF_TRACE(ExecutionContext, "LOOP %s index=%d value=%s", *Node->Id, NodeState.LoopIndex, *NodeState.CachedOutput.ToString());
+
 		// Push loop context for this iteration
 		FStoryFlowLoopContext LoopContext;
 		LoopContext.NodeId = Node->Id;
@@ -1956,11 +2111,14 @@ void UStoryFlowComponent::HandleSetImage(FStoryFlowNode* Node)
 		NewValue = Node->Data.Value.GetString();
 	}
 
+	SF_TRACE(ExecutionContext, "IMAGE \"%s\"", *NewValue);
+
 	FStoryFlowVariant Value;
 	Value.SetString(NewValue);
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
 	{
+		SF_TRACE(ExecutionContext, "VAR SET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Value.ToString());
 		NotifyVariableChanged(*Var, Node->Data.bIsGlobal);
 	}
 
@@ -1980,11 +2138,14 @@ void UStoryFlowComponent::HandleSetAudio(FStoryFlowNode* Node)
 		NewValue = Node->Data.Value.GetString();
 	}
 
+	SF_TRACE(ExecutionContext, "AUDIO \"%s\"", *NewValue);
+
 	FStoryFlowVariant Value;
 	Value.SetString(NewValue);
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
 	{
+		SF_TRACE(ExecutionContext, "VAR SET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Value.ToString());
 		NotifyVariableChanged(*Var, Node->Data.bIsGlobal);
 	}
 
@@ -2009,6 +2170,7 @@ void UStoryFlowComponent::HandleSetCharacter(FStoryFlowNode* Node)
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
 	{
+		SF_TRACE(ExecutionContext, "VAR SET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Value.ToString());
 		NotifyVariableChanged(*Var, Node->Data.bIsGlobal);
 	}
 
@@ -2132,6 +2294,8 @@ void UStoryFlowComponent::HandleSetBackgroundImage(FStoryFlowNode* Node)
 		}
 	}
 
+	SF_TRACE(ExecutionContext, "IMAGE \"%s\"", *ImagePath);
+
 	// Broadcast the background image change
 	OnBackgroundImageChanged.Broadcast(ImagePath);
 
@@ -2157,6 +2321,8 @@ void UStoryFlowComponent::HandlePlayAudio(FStoryFlowNode* Node)
 	}
 
 	bool bLoop = Node->Data.bAudioLoop;
+
+	SF_TRACE(ExecutionContext, "AUDIO \"%s\"", *AudioPath);
 
 	// Broadcast audio play request
 	OnAudioPlayRequested.Broadcast(AudioPath, bLoop);
@@ -2270,6 +2436,8 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: HandleSetCharacterVar - Setting '%s' on character '%s' to '%s'"),
 		*VariableName, *CharacterPath, *NewValue.ToString());
 
+	SF_TRACE(ExecutionContext, "VAR SET \"%s.%s\" global=false value=%s", *CharacterPath, *VariableName, *NewValue.ToString());
+
 	// Set the character variable
 	ExecutionContext.SetCharacterVariable(CharacterPath, VariableName, NewValue);
 
@@ -2300,22 +2468,49 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 			State.Character.Name = ExecutionContext.GetString(CharDef->Name, LanguageCode);
 			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: BuildDialogueState - Resolved Name='%s'"), *State.Character.Name);
 
-			// Load character image from the character's own DataAsset
+			// Load character image from the runtime character data (CharDef->Image).
+			// SetCharacterVar may have updated Image to a path that lives in the character's
+			// own assets, the current script's assets, or the project's global assets.
 			if (!CharDef->Image.IsEmpty())
 			{
-				// Normalize path to match the key used in Project->Characters
-				FString NormalizedCharPath = NormalizeCharacterPath(DialogueNode->Data.Character);
+				UTexture2D* ResolvedImage = nullptr;
 				UStoryFlowProjectAsset* Project = ExecutionContext.Project.Get();
-				if (Project)
+
+				// 1. Try character asset's ResolvedAssets
+				if (!ResolvedImage && Project)
 				{
+					FString NormalizedCharPath = NormalizeCharacterPath(DialogueNode->Data.Character);
 					if (UStoryFlowCharacterAsset* const* CharAsset = Project->Characters.Find(NormalizedCharPath))
 					{
 						if (TSoftObjectPtr<UObject>* CharImagePtr = (*CharAsset)->ResolvedAssets.Find(CharDef->Image))
 						{
-							State.Character.Image = Cast<UTexture2D>(CharImagePtr->LoadSynchronous());
+							ResolvedImage = Cast<UTexture2D>(CharImagePtr->LoadSynchronous());
 						}
 					}
 				}
+
+				// 2. Try current script's ResolvedAssets (SetCharacterVar may set image to a script-level asset)
+				if (!ResolvedImage)
+				{
+					if (UStoryFlowScriptAsset* CurrentScriptAsset = ExecutionContext.CurrentScript.Get())
+					{
+						if (TSoftObjectPtr<UObject>* ScriptImagePtr = CurrentScriptAsset->ResolvedAssets.Find(CharDef->Image))
+						{
+							ResolvedImage = Cast<UTexture2D>(ScriptImagePtr->LoadSynchronous());
+						}
+					}
+				}
+
+				// 3. Try project's global ResolvedAssets
+				if (!ResolvedImage && Project)
+				{
+					if (TSoftObjectPtr<UObject>* ProjectImagePtr = Project->ResolvedAssets.Find(CharDef->Image))
+					{
+						ResolvedImage = Cast<UTexture2D>(ProjectImagePtr->LoadSynchronous());
+					}
+				}
+
+				State.Character.Image = ResolvedImage;
 			}
 
 			// Copy character variables

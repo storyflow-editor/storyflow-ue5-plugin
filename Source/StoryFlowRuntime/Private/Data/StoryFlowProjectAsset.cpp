@@ -59,6 +59,22 @@ UStoryFlowCharacterAsset* UStoryFlowProjectAsset::GetCharacterAsset(const FStrin
 	return nullptr;
 }
 
+void UStoryFlowProjectAsset::PostLoad()
+{
+	Super::PostLoad();
+
+	// Restore array data from serialized blob (ArrayValue is non-UPROPERTY)
+	UnpackVariablesFromSerialization(GlobalVariables);
+}
+
+void UStoryFlowProjectAsset::PreSave(FObjectPreSaveContext SaveContext)
+{
+	Super::PreSave(SaveContext);
+
+	// Persist array data into serialized blob before saving
+	PackVariablesForSerialization(GlobalVariables);
+}
+
 FString UStoryFlowProjectAsset::GetGlobalString(const FString& Key, const FString& LanguageCode) const
 {
 	// Lookup with language prefix

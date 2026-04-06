@@ -85,6 +85,9 @@ public:
 	/** Flag to track if we're entering a dialogue via edge (fresh) or direct call (returning from Set*) */
 	bool bEnteringDialogueViaEdge = false;
 
+	/** Execution trace logging enabled (set from component's bTraceEnabled) */
+	bool bTraceEnabled = false;
+
 	// === Call Stack (for runScript - returns to caller) ===
 
 	/** Call stack for nested scripts */

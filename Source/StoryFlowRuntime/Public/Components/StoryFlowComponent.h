@@ -71,6 +71,10 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow")
 	FString LanguageCode = TEXT("en");
 
+	/** Enable execution trace logging ([SF-TRACE] prefix) for cross-runtime comparison */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Debug")
+	bool bTraceEnabled = true;
+
 	/** Optional dialogue widget class to auto-create when dialogue starts and destroy when it ends */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow")
 	TSubclassOf<UStoryFlowDialogueWidget> DialogueWidgetClass;

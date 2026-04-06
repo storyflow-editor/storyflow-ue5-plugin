@@ -3,10 +3,46 @@
 #include "Data/StoryFlowScriptAsset.h"
 #include "Data/StoryFlowHandles.h"
 
+namespace
+{
+	void PackNodeDataArrays(TMap<FString, FStoryFlowNode>& Nodes)
+	{
+		for (auto& NodePair : Nodes)
+		{
+			NodePair.Value.Data.Value.PackArrayForSerialization();
+			NodePair.Value.Data.Value1.PackArrayForSerialization();
+			NodePair.Value.Data.Value2.PackArrayForSerialization();
+		}
+	}
+
+	void UnpackNodeDataArrays(TMap<FString, FStoryFlowNode>& Nodes)
+	{
+		for (auto& NodePair : Nodes)
+		{
+			NodePair.Value.Data.Value.UnpackArrayFromSerialization();
+			NodePair.Value.Data.Value1.UnpackArrayFromSerialization();
+			NodePair.Value.Data.Value2.UnpackArrayFromSerialization();
+		}
+	}
+}
+
 void UStoryFlowScriptAsset::PostLoad()
 {
 	Super::PostLoad();
 	BuildConnectionIndices();
+
+	// Restore array data from serialized blob (ArrayValue is non-UPROPERTY)
+	UnpackVariablesFromSerialization(Variables);
+	UnpackNodeDataArrays(Nodes);
+}
+
+void UStoryFlowScriptAsset::PreSave(FObjectPreSaveContext SaveContext)
+{
+	Super::PreSave(SaveContext);
+
+	// Persist array data into serialized blob before saving
+	PackVariablesForSerialization(Variables);
+	PackNodeDataArrays(Nodes);
 }
 
 void UStoryFlowScriptAsset::BuildConnectionIndices()

@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
+#include "UObject/ObjectSaveContext.h"
 #include "Data/StoryFlowTypes.h"
 #include "StoryFlowCharacterAsset.generated.h"
 
@@ -35,4 +36,10 @@ public:
 	/** Original character path (normalized, for identification) */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString CharacterPath;
+
+	/** Unpack array variables after loading from disk */
+	virtual void PostLoad() override;
+
+	/** Pack array variables before saving */
+	virtual void PreSave(FObjectPreSaveContext SaveContext) override;
 };

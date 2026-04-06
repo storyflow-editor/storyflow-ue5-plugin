@@ -527,6 +527,7 @@ FStoryFlowNodeData UStoryFlowImporter::ParseNodeData(const TSharedPtr<FJsonObjec
 						if (ParamObject->HasField(TEXT("id"))) Param.Id = ParamObject->GetStringField(TEXT("id"));
 						if (ParamObject->HasField(TEXT("name"))) Param.Name = ParamObject->GetStringField(TEXT("name"));
 						if (ParamObject->HasField(TEXT("type"))) Param.Type = ParamObject->GetStringField(TEXT("type"));
+						if (ParamObject->HasField(TEXT("isArray"))) Param.bIsArray = ParamObject->GetBoolField(TEXT("isArray"));
 						Data.ScriptParameters.Add(Param);
 					}
 				}

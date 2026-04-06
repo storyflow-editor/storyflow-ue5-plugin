@@ -401,6 +401,7 @@ public:
 		FloatValue = 0.0f;
 		StringValue.Empty();
 		ArrayValue.Empty();
+		SerializedArrayData.Empty();
 	}
 
 	// Static factory methods
@@ -431,6 +432,22 @@ public:
 		Variant.SetString(Value);
 		return Variant;
 	}
+
+	/**
+	 * Serialize the non-UPROPERTY ArrayValue into/from SerializedArrayData.
+	 * Must be called before saving (PreSave) and after loading (PostLoad).
+	 */
+	void PackArrayForSerialization();
+	void UnpackArrayFromSerialization();
+
+private:
+	/**
+	 * Flat binary blob that persists the recursive ArrayValue through Unreal's serialization.
+	 * ArrayValue cannot be a UPROPERTY (UHT doesn't support recursive struct arrays),
+	 * so we serialize it into this byte array before saving and restore it after loading.
+	 */
+	UPROPERTY()
+	TArray<uint8> SerializedArrayData;
 };
 
 // ============================================================================
@@ -477,6 +494,14 @@ struct STORYFLOWRUNTIME_API FStoryFlowVariable
 	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
 	bool bIsOutput = false;
 };
+
+/**
+ * Pack/unpack all FStoryFlowVariant array values in a variable map.
+ * Use these helpers in asset PreSave/PostLoad to persist array data
+ * that lives in the non-UPROPERTY FStoryFlowVariant::ArrayValue field.
+ */
+STORYFLOWRUNTIME_API void PackVariablesForSerialization(TMap<FString, FStoryFlowVariable>& Variables);
+STORYFLOWRUNTIME_API void UnpackVariablesFromSerialization(TMap<FString, FStoryFlowVariable>& Variables);
 
 // ============================================================================
 // Text Block
@@ -593,6 +618,10 @@ struct STORYFLOWRUNTIME_API FStoryFlowScriptInterfaceParam
 	/** Variable type (boolean, integer, float, string, enum, image, character, audio) */
 	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
 	FString Type;
+
+	/** Whether this parameter is an array type */
+	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	bool bIsArray = false;
 };
 
 /**

@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
+#include "UObject/ObjectSaveContext.h"
 #include "Data/StoryFlowTypes.h"
 #include "StoryFlowProjectAsset.generated.h"
 
@@ -79,4 +80,10 @@ public:
 	/** Get a global string */
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")
 	FString GetGlobalString(const FString& Key, const FString& LanguageCode = TEXT("en")) const;
+
+	/** Unpack array variables after loading from disk */
+	virtual void PostLoad() override;
+
+	/** Pack array variables before saving */
+	virtual void PreSave(FObjectPreSaveContext SaveContext) override;
 };

@@ -1,6 +1,191 @@
 // Copyright 2026 StoryFlow. All Rights Reserved.
 
 #include "Data/StoryFlowTypes.h"
+#include "Serialization/MemoryWriter.h"
+#include "Serialization/MemoryReader.h"
+
+// ============================================================================
+// FStoryFlowVariant Serialization
+// ============================================================================
+
+namespace
+{
+	/** Recursively write a single FStoryFlowVariant element into a memory writer. */
+	void SerializeVariantElement(FMemoryWriter& Writer, const FStoryFlowVariant& Variant)
+	{
+		int32 TypeInt = static_cast<int32>(Variant.GetType());
+		Writer << TypeInt;
+
+		// Write the scalar value according to type
+		switch (Variant.GetType())
+		{
+		case EStoryFlowVariableType::Boolean:
+		{
+			bool b = Variant.GetBool();
+			Writer << b;
+			break;
+		}
+		case EStoryFlowVariableType::Integer:
+		{
+			int32 i = Variant.GetInt();
+			Writer << i;
+			break;
+		}
+		case EStoryFlowVariableType::Float:
+		{
+			float f = Variant.GetFloat();
+			Writer << f;
+			break;
+		}
+		case EStoryFlowVariableType::String:
+		case EStoryFlowVariableType::Enum:
+		case EStoryFlowVariableType::Image:
+		case EStoryFlowVariableType::Audio:
+		case EStoryFlowVariableType::Character:
+		{
+			FString s = Variant.GetString();
+			Writer << s;
+			break;
+		}
+		default:
+			break;
+		}
+
+		// Recursively write nested array
+		const TArray<FStoryFlowVariant>& Arr = Variant.GetArray();
+		int32 ArrNum = Arr.Num();
+		Writer << ArrNum;
+		for (int32 idx = 0; idx < ArrNum; ++idx)
+		{
+			SerializeVariantElement(Writer, Arr[idx]);
+		}
+	}
+
+	/** Recursively read a single FStoryFlowVariant element from a memory reader. */
+	void DeserializeVariantElement(FMemoryReader& Reader, FStoryFlowVariant& OutVariant)
+	{
+		OutVariant.Reset();
+
+		int32 TypeInt = 0;
+		Reader << TypeInt;
+		EStoryFlowVariableType VarType = static_cast<EStoryFlowVariableType>(TypeInt);
+
+		switch (VarType)
+		{
+		case EStoryFlowVariableType::Boolean:
+		{
+			bool b = false;
+			Reader << b;
+			OutVariant.SetBool(b);
+			break;
+		}
+		case EStoryFlowVariableType::Integer:
+		{
+			int32 i = 0;
+			Reader << i;
+			OutVariant.SetInt(i);
+			break;
+		}
+		case EStoryFlowVariableType::Float:
+		{
+			float f = 0.0f;
+			Reader << f;
+			OutVariant.SetFloat(f);
+			break;
+		}
+		case EStoryFlowVariableType::String:
+		{
+			FString s;
+			Reader << s;
+			OutVariant.SetString(s);
+			break;
+		}
+		case EStoryFlowVariableType::Enum:
+		{
+			FString s;
+			Reader << s;
+			OutVariant.SetEnum(s);
+			break;
+		}
+		case EStoryFlowVariableType::Image:
+		case EStoryFlowVariableType::Audio:
+		case EStoryFlowVariableType::Character:
+		{
+			FString s;
+			Reader << s;
+			OutVariant.SetString(s);
+			break;
+		}
+		default:
+			break;
+		}
+
+		// Recursively read nested array
+		int32 ArrNum = 0;
+		Reader << ArrNum;
+		if (ArrNum > 0)
+		{
+			TArray<FStoryFlowVariant> Arr;
+			Arr.SetNum(ArrNum);
+			for (int32 idx = 0; idx < ArrNum; ++idx)
+			{
+				DeserializeVariantElement(Reader, Arr[idx]);
+			}
+			OutVariant.SetArray(Arr);
+		}
+	}
+}
+
+void FStoryFlowVariant::PackArrayForSerialization()
+{
+	SerializedArrayData.Empty();
+	if (ArrayValue.Num() == 0)
+	{
+		return;
+	}
+
+	FMemoryWriter Writer(SerializedArrayData);
+	int32 Num = ArrayValue.Num();
+	Writer << Num;
+	for (int32 i = 0; i < Num; ++i)
+	{
+		SerializeVariantElement(Writer, ArrayValue[i]);
+	}
+}
+
+void FStoryFlowVariant::UnpackArrayFromSerialization()
+{
+	ArrayValue.Empty();
+	if (SerializedArrayData.Num() == 0)
+	{
+		return;
+	}
+
+	FMemoryReader Reader(SerializedArrayData);
+	int32 Num = 0;
+	Reader << Num;
+	ArrayValue.SetNum(Num);
+	for (int32 i = 0; i < Num; ++i)
+	{
+		DeserializeVariantElement(Reader, ArrayValue[i]);
+	}
+}
+
+void PackVariablesForSerialization(TMap<FString, FStoryFlowVariable>& Variables)
+{
+	for (auto& Pair : Variables)
+	{
+		Pair.Value.Value.PackArrayForSerialization();
+	}
+}
+
+void UnpackVariablesFromSerialization(TMap<FString, FStoryFlowVariable>& Variables)
+{
+	for (auto& Pair : Variables)
+	{
+		Pair.Value.Value.UnpackArrayFromSerialization();
+	}
+}
 
 EStoryFlowNodeType ParseNodeType(const FString& TypeString)
 {

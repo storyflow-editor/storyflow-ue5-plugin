@@ -6,6 +6,40 @@
 #include "Data/StoryFlowScriptAsset.h"
 #include "Data/StoryFlowHandles.h"
 
+#define SF_EVAL_TRACE(Format, ...) \
+	do { if (Context && Context->bTraceEnabled) { UE_LOG(LogStoryFlow, Log, TEXT("[SF-TRACE] " Format), ##__VA_ARGS__); } } while(0)
+
+static bool IsArrayModifyNode(EStoryFlowNodeType Type)
+{
+	switch (Type)
+	{
+	case EStoryFlowNodeType::AddToBoolArray:
+	case EStoryFlowNodeType::AddToIntArray:
+	case EStoryFlowNodeType::AddToFloatArray:
+	case EStoryFlowNodeType::AddToStringArray:
+	case EStoryFlowNodeType::AddToImageArray:
+	case EStoryFlowNodeType::AddToCharacterArray:
+	case EStoryFlowNodeType::AddToAudioArray:
+	case EStoryFlowNodeType::RemoveFromBoolArray:
+	case EStoryFlowNodeType::RemoveFromIntArray:
+	case EStoryFlowNodeType::RemoveFromFloatArray:
+	case EStoryFlowNodeType::RemoveFromStringArray:
+	case EStoryFlowNodeType::RemoveFromImageArray:
+	case EStoryFlowNodeType::RemoveFromCharacterArray:
+	case EStoryFlowNodeType::RemoveFromAudioArray:
+	case EStoryFlowNodeType::ClearBoolArray:
+	case EStoryFlowNodeType::ClearIntArray:
+	case EStoryFlowNodeType::ClearFloatArray:
+	case EStoryFlowNodeType::ClearStringArray:
+	case EStoryFlowNodeType::ClearImageArray:
+	case EStoryFlowNodeType::ClearCharacterArray:
+	case EStoryFlowNodeType::ClearAudioArray:
+		return true;
+	default:
+		return false;
+	}
+}
+
 FStoryFlowEvaluator::FStoryFlowEvaluator(FStoryFlowExecutionContext* InContext)
 	: Context(InContext)
 {
@@ -303,6 +337,8 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 		Result = false;
 		break;
 	}
+
+	SF_EVAL_TRACE("EVAL %s %s result=%s", *Node->Id, *Node->TypeString, Result ? TEXT("true") : TEXT("false"));
 
 	// Cache result
 	NodeState.CachedOutput.SetBool(Result);
@@ -670,6 +706,8 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 		break;
 	}
 
+	SF_EVAL_TRACE("EVAL %s %s result=%d", *Node->Id, *Node->TypeString, Result);
+
 	return Result;
 }
 
@@ -873,6 +911,8 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 		Result = 0.0f;
 		break;
 	}
+
+	SF_EVAL_TRACE("EVAL %s %s result=%s", *Node->Id, *Node->TypeString, *FString::SanitizeFloat(Result));
 
 	return Result;
 }
@@ -1151,6 +1191,8 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 		break;
 	}
 
+	SF_EVAL_TRACE("EVAL %s %s result=%s", *Node->Id, *Node->TypeString, *Result);
+
 	return Result;
 }
 
@@ -1203,6 +1245,18 @@ TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateArrayInputGeneric(FStoryF
 		}
 		FStoryFlowVariant CharVal = Context->GetCharacterVariableValue(CharPath, SourceNode->Data.VariableName);
 		return CharVal.GetArray();
+	}
+
+	// Handle array modify nodes (add/remove/clear) that output their result array.
+	// These nodes store their result in CachedOutput rather than a variable field.
+	if (IsArrayModifyNode(SourceNode->Type))
+	{
+		FNodeRuntimeState& State = Context->GetNodeState(SourceNode->Id);
+		if (State.bHasCachedOutput)
+		{
+			return State.CachedOutput.GetArray();
+		}
+		return TArray<FStoryFlowVariant>();
 	}
 
 	if (SourceNode->Type != ExpectedGetArrayType)
@@ -1326,6 +1380,16 @@ void FStoryFlowEvaluator::ProcessBooleanChain(FStoryFlowNode* Node)
 				ProcessBooleanChain(CondNode);
 			}
 		}
+		break;
+	}
+
+	case EStoryFlowNodeType::RunScript:
+	{
+		// RunScript nodes need the real SourceHandle to extract the output variable ID.
+		// Just clear the cache here so the subsequent EvaluateBooleanFromNode (called with
+		// the correct SourceHandle from EvaluateBooleanInput) gets a fresh evaluation.
+		NodeState.bHasCachedOutput = false;
+		NodeState.CachedOutput.Reset();
 		break;
 	}
 

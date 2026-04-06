@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
+#include "UObject/ObjectSaveContext.h"
 #include "Data/StoryFlowTypes.h"
 #include "StoryFlowScriptAsset.generated.h"
 
@@ -66,8 +67,11 @@ public:
 	/** Build connection index maps. Call after Connections are populated. */
 	void BuildConnectionIndices();
 
-	/** Rebuild indices after loading from disk */
+	/** Rebuild indices and unpack array variables after loading from disk */
 	virtual void PostLoad() override;
+
+	/** Pack array variables before saving */
+	virtual void PreSave(FObjectPreSaveContext SaveContext) override;
 
 public:
 	/** Get a node by ID */
