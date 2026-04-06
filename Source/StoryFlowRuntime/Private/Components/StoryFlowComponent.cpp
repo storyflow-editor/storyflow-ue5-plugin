@@ -421,15 +421,69 @@ TArray<FString> UStoryFlowComponent::GetAvailableScripts() const
 // Variable Access
 // ============================================================================
 
+FStoryFlowVariable* UStoryFlowComponent::FindVariableByName(const FString& VariableName, bool bGlobal)
+{
+	// During active dialogue, the execution context has everything wired up
+	if (ExecutionContext.bIsExecuting)
+	{
+		return ExecutionContext.FindVariableByName(VariableName, bGlobal);
+	}
+
+	// Outside dialogue: local variables aren't available
+	if (!bGlobal)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Cannot access local variable '%s' outside of active dialogue"), *VariableName);
+		return nullptr;
+	}
+
+	// Outside dialogue: look up global variables directly from the subsystem
+	if (UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem())
+	{
+		for (auto& Pair : Subsystem->GetGlobalVariables())
+		{
+			if (Pair.Value.Name == VariableName)
+			{
+				return &Pair.Value;
+			}
+		}
+	}
+
+	UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Global variable '%s' not found"), *VariableName);
+	return nullptr;
+}
+
+FStoryFlowCharacterDef* UStoryFlowComponent::FindCharacter(const FString& CharacterPath)
+{
+	if (CharacterPath.IsEmpty())
+	{
+		return nullptr;
+	}
+
+	// During active dialogue, the execution context has characters wired up
+	if (ExecutionContext.bIsExecuting)
+	{
+		return ExecutionContext.FindCharacter(CharacterPath);
+	}
+
+	// Outside dialogue: look up directly from the subsystem
+	if (UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem())
+	{
+		FString NormalizedPath = NormalizeCharacterPath(CharacterPath);
+		return Subsystem->GetRuntimeCharacters().Find(NormalizedPath);
+	}
+
+	return nullptr;
+}
+
 bool UStoryFlowComponent::GetBoolVariable(const FString& VariableName, bool bGlobal)
 {
-	FStoryFlowVariable* Var = ExecutionContext.FindVariableByName(VariableName, bGlobal);
+	FStoryFlowVariable* Var = FindVariableByName(VariableName, bGlobal);
 	return Var ? Var->Value.GetBool() : false;
 }
 
 void UStoryFlowComponent::SetBoolVariable(const FString& VariableName, bool bValue, bool bGlobal)
 {
-	if (FStoryFlowVariable* Var = ExecutionContext.FindVariableByName(VariableName, bGlobal))
+	if (FStoryFlowVariable* Var = FindVariableByName(VariableName, bGlobal))
 	{
 		FStoryFlowVariant NewValue;
 		NewValue.SetBool(bValue);
@@ -440,13 +494,13 @@ void UStoryFlowComponent::SetBoolVariable(const FString& VariableName, bool bVal
 
 int32 UStoryFlowComponent::GetIntVariable(const FString& VariableName, bool bGlobal)
 {
-	FStoryFlowVariable* Var = ExecutionContext.FindVariableByName(VariableName, bGlobal);
+	FStoryFlowVariable* Var = FindVariableByName(VariableName, bGlobal);
 	return Var ? Var->Value.GetInt() : 0;
 }
 
 void UStoryFlowComponent::SetIntVariable(const FString& VariableName, int32 Value, bool bGlobal)
 {
-	if (FStoryFlowVariable* Var = ExecutionContext.FindVariableByName(VariableName, bGlobal))
+	if (FStoryFlowVariable* Var = FindVariableByName(VariableName, bGlobal))
 	{
 		FStoryFlowVariant NewValue;
 		NewValue.SetInt(Value);
@@ -457,13 +511,13 @@ void UStoryFlowComponent::SetIntVariable(const FString& VariableName, int32 Valu
 
 float UStoryFlowComponent::GetFloatVariable(const FString& VariableName, bool bGlobal)
 {
-	FStoryFlowVariable* Var = ExecutionContext.FindVariableByName(VariableName, bGlobal);
+	FStoryFlowVariable* Var = FindVariableByName(VariableName, bGlobal);
 	return Var ? Var->Value.GetFloat() : 0.0f;
 }
 
 void UStoryFlowComponent::SetFloatVariable(const FString& VariableName, float Value, bool bGlobal)
 {
-	if (FStoryFlowVariable* Var = ExecutionContext.FindVariableByName(VariableName, bGlobal))
+	if (FStoryFlowVariable* Var = FindVariableByName(VariableName, bGlobal))
 	{
 		FStoryFlowVariant NewValue;
 		NewValue.SetFloat(Value);
@@ -474,13 +528,13 @@ void UStoryFlowComponent::SetFloatVariable(const FString& VariableName, float Va
 
 FString UStoryFlowComponent::GetStringVariable(const FString& VariableName, bool bGlobal)
 {
-	FStoryFlowVariable* Var = ExecutionContext.FindVariableByName(VariableName, bGlobal);
+	FStoryFlowVariable* Var = FindVariableByName(VariableName, bGlobal);
 	return Var ? Var->Value.GetString() : TEXT("");
 }
 
 void UStoryFlowComponent::SetStringVariable(const FString& VariableName, const FString& Value, bool bGlobal)
 {
-	if (FStoryFlowVariable* Var = ExecutionContext.FindVariableByName(VariableName, bGlobal))
+	if (FStoryFlowVariable* Var = FindVariableByName(VariableName, bGlobal))
 	{
 		FStoryFlowVariant NewValue;
 		NewValue.SetString(Value);
@@ -496,7 +550,7 @@ FString UStoryFlowComponent::GetEnumVariable(const FString& VariableName, bool b
 
 void UStoryFlowComponent::SetEnumVariable(const FString& VariableName, const FString& Value, bool bGlobal)
 {
-	if (FStoryFlowVariable* Var = ExecutionContext.FindVariableByName(VariableName, bGlobal))
+	if (FStoryFlowVariable* Var = FindVariableByName(VariableName, bGlobal))
 	{
 		FStoryFlowVariant NewValue;
 		NewValue.SetEnum(Value);
@@ -507,12 +561,277 @@ void UStoryFlowComponent::SetEnumVariable(const FString& VariableName, const FSt
 
 FStoryFlowVariant UStoryFlowComponent::GetCharacterVariable(const FString& CharacterPath, const FString& VariableName)
 {
-	return ExecutionContext.GetCharacterVariableValue(CharacterPath, VariableName);
+	FStoryFlowCharacterDef* CharDef = FindCharacter(CharacterPath);
+	if (!CharDef)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Character not found for GetCharacterVariable: %s"), *CharacterPath);
+		return FStoryFlowVariant();
+	}
+
+	// Handle built-in "Name" field (stored as string table key — resolve it)
+	if (VariableName.Equals(TEXT("Name"), ESearchCase::IgnoreCase))
+	{
+		FStoryFlowVariant Result;
+		Result.SetString(ResolveString(CharDef->Name));
+		return Result;
+	}
+
+	// Handle built-in "Image" field
+	if (VariableName.Equals(TEXT("Image"), ESearchCase::IgnoreCase))
+	{
+		FStoryFlowVariant Result;
+		Result.SetString(CharDef->Image);
+		return Result;
+	}
+
+	// Find custom variable
+	if (const FStoryFlowVariable* Variable = CharDef->Variables.Find(VariableName))
+	{
+		return Variable->Value;
+	}
+
+	UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Variable '%s' not found on character '%s'"), *VariableName, *CharacterPath);
+	return FStoryFlowVariant();
 }
 
 void UStoryFlowComponent::SetCharacterVariable(const FString& CharacterPath, const FString& VariableName, const FStoryFlowVariant& Value)
 {
-	ExecutionContext.SetCharacterVariable(CharacterPath, VariableName, Value);
+	FStoryFlowCharacterDef* CharDef = FindCharacter(CharacterPath);
+	if (!CharDef)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Character not found for SetCharacterVariable: %s"), *CharacterPath);
+		return;
+	}
+
+	// Handle built-in "Name" field
+	if (VariableName.Equals(TEXT("Name"), ESearchCase::IgnoreCase))
+	{
+		CharDef->Name = Value.ToString();
+		return;
+	}
+
+	// Handle built-in "Image" field
+	if (VariableName.Equals(TEXT("Image"), ESearchCase::IgnoreCase))
+	{
+		CharDef->Image = Value.ToString();
+		return;
+	}
+
+	// Find and set custom variable
+	if (FStoryFlowVariable* Variable = CharDef->Variables.Find(VariableName))
+	{
+		Variable->Value = Value;
+	}
+	else
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Variable '%s' not found on character '%s'"), *VariableName, *CharacterPath);
+	}
+}
+
+// ============================================================================
+// Character Variable Access (typed, with asset picker)
+// ============================================================================
+
+FStoryFlowCharacterDef* UStoryFlowComponent::FindCharacterFromAsset(UStoryFlowCharacterAsset* CharacterAsset)
+{
+	if (!CharacterAsset)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Character asset is null"));
+		return nullptr;
+	}
+
+	FStoryFlowCharacterDef* CharDef = FindCharacter(CharacterAsset->CharacterPath);
+	if (!CharDef)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Character not found at runtime: %s"), *CharacterAsset->CharacterPath);
+	}
+	return CharDef;
+}
+
+bool UStoryFlowComponent::GetCharacterBoolVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName)
+{
+	FStoryFlowCharacterDef* CharDef = FindCharacterFromAsset(Character);
+	if (!CharDef) return false;
+
+	if (FStoryFlowVariable* Var = CharDef->Variables.Find(VariableName))
+	{
+		return Var->Value.GetBool();
+	}
+	UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Variable '%s' not found on character '%s'"), *VariableName, *Character->CharacterPath);
+	return false;
+}
+
+void UStoryFlowComponent::SetCharacterBoolVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName, bool bValue)
+{
+	FStoryFlowCharacterDef* CharDef = FindCharacterFromAsset(Character);
+	if (!CharDef) return;
+
+	if (FStoryFlowVariable* Var = CharDef->Variables.Find(VariableName))
+	{
+		FStoryFlowVariant NewValue;
+		NewValue.SetBool(bValue);
+		Var->Value = NewValue;
+	}
+	else
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Variable '%s' not found on character '%s'"), *VariableName, *Character->CharacterPath);
+	}
+}
+
+int32 UStoryFlowComponent::GetCharacterIntVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName)
+{
+	FStoryFlowCharacterDef* CharDef = FindCharacterFromAsset(Character);
+	if (!CharDef) return 0;
+
+	if (FStoryFlowVariable* Var = CharDef->Variables.Find(VariableName))
+	{
+		return Var->Value.GetInt();
+	}
+	UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Variable '%s' not found on character '%s'"), *VariableName, *Character->CharacterPath);
+	return 0;
+}
+
+void UStoryFlowComponent::SetCharacterIntVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName, int32 Value)
+{
+	FStoryFlowCharacterDef* CharDef = FindCharacterFromAsset(Character);
+	if (!CharDef) return;
+
+	if (FStoryFlowVariable* Var = CharDef->Variables.Find(VariableName))
+	{
+		FStoryFlowVariant NewValue;
+		NewValue.SetInt(Value);
+		Var->Value = NewValue;
+	}
+	else
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Variable '%s' not found on character '%s'"), *VariableName, *Character->CharacterPath);
+	}
+}
+
+float UStoryFlowComponent::GetCharacterFloatVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName)
+{
+	FStoryFlowCharacterDef* CharDef = FindCharacterFromAsset(Character);
+	if (!CharDef) return 0.0f;
+
+	if (FStoryFlowVariable* Var = CharDef->Variables.Find(VariableName))
+	{
+		return Var->Value.GetFloat();
+	}
+	UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Variable '%s' not found on character '%s'"), *VariableName, *Character->CharacterPath);
+	return 0.0f;
+}
+
+void UStoryFlowComponent::SetCharacterFloatVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName, float Value)
+{
+	FStoryFlowCharacterDef* CharDef = FindCharacterFromAsset(Character);
+	if (!CharDef) return;
+
+	if (FStoryFlowVariable* Var = CharDef->Variables.Find(VariableName))
+	{
+		FStoryFlowVariant NewValue;
+		NewValue.SetFloat(Value);
+		Var->Value = NewValue;
+	}
+	else
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Variable '%s' not found on character '%s'"), *VariableName, *Character->CharacterPath);
+	}
+}
+
+FString UStoryFlowComponent::ResolveString(const FString& Key) const
+{
+	// During dialogue, execution context handles script + global string lookup
+	if (ExecutionContext.bIsExecuting)
+	{
+		return ExecutionContext.GetString(Key, LanguageCode);
+	}
+
+	// Outside dialogue, resolve through the project's global strings
+	if (UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem())
+	{
+		if (UStoryFlowProjectAsset* Project = Subsystem->GetProject())
+		{
+			return Project->GetGlobalString(Key, LanguageCode);
+		}
+	}
+
+	return Key;
+}
+
+FString UStoryFlowComponent::GetCharacterStringVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName)
+{
+	FStoryFlowCharacterDef* CharDef = FindCharacterFromAsset(Character);
+	if (!CharDef) return TEXT("");
+
+	// Handle built-in "Name" field (stored as string table key)
+	if (VariableName.Equals(TEXT("Name"), ESearchCase::IgnoreCase))
+	{
+		return ResolveString(CharDef->Name);
+	}
+	// Handle built-in "Image" field
+	if (VariableName.Equals(TEXT("Image"), ESearchCase::IgnoreCase))
+	{
+		return CharDef->Image;
+	}
+
+	if (FStoryFlowVariable* Var = CharDef->Variables.Find(VariableName))
+	{
+		return Var->Value.GetString();
+	}
+	UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Variable '%s' not found on character '%s'"), *VariableName, *Character->CharacterPath);
+	return TEXT("");
+}
+
+void UStoryFlowComponent::SetCharacterStringVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName, const FString& Value)
+{
+	FStoryFlowCharacterDef* CharDef = FindCharacterFromAsset(Character);
+	if (!CharDef) return;
+
+	// Handle built-in "Name" field
+	if (VariableName.Equals(TEXT("Name"), ESearchCase::IgnoreCase))
+	{
+		CharDef->Name = Value;
+		return;
+	}
+	// Handle built-in "Image" field
+	if (VariableName.Equals(TEXT("Image"), ESearchCase::IgnoreCase))
+	{
+		CharDef->Image = Value;
+		return;
+	}
+
+	if (FStoryFlowVariable* Var = CharDef->Variables.Find(VariableName))
+	{
+		FStoryFlowVariant NewValue;
+		NewValue.SetString(Value);
+		Var->Value = NewValue;
+	}
+	else
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Variable '%s' not found on character '%s'"), *VariableName, *Character->CharacterPath);
+	}
+}
+
+FString UStoryFlowComponent::GetCharacterEnumVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName)
+{
+	return GetCharacterStringVariable(Character, VariableName);
+}
+
+void UStoryFlowComponent::SetCharacterEnumVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName, const FString& Value)
+{
+	FStoryFlowCharacterDef* CharDef = FindCharacterFromAsset(Character);
+	if (!CharDef) return;
+
+	if (FStoryFlowVariable* Var = CharDef->Variables.Find(VariableName))
+	{
+		FStoryFlowVariant NewValue;
+		NewValue.SetEnum(Value);
+		Var->Value = NewValue;
+	}
+	else
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Variable '%s' not found on character '%s'"), *VariableName, *Character->CharacterPath);
+	}
 }
 
 // ============================================================================
@@ -534,7 +853,7 @@ void UStoryFlowComponent::ResetVariables()
 
 FString UStoryFlowComponent::GetLocalizedString(const FString& Key) const
 {
-	return ExecutionContext.GetString(Key, LanguageCode);
+	return ResolveString(Key);
 }
 
 // ============================================================================

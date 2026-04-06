@@ -11,6 +11,7 @@
 
 class UStoryFlowProjectAsset;
 class UStoryFlowScriptAsset;
+class UStoryFlowCharacterAsset;
 class UStoryFlowSubsystem;
 class UStoryFlowDialogueWidget;
 class UAudioComponent;
@@ -251,16 +252,60 @@ public:
 	void SetEnumVariable(const FString& VariableName, const FString& Value, bool bGlobal = false);
 
 	// ========================================================================
-	// Character Variable Access
+	// Character Variable Access (by path — legacy)
 	// ========================================================================
 
-	/** Get a character variable value */
-	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	/** Get a character variable value (raw variant — prefer typed versions below) */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character (Legacy)")
 	FStoryFlowVariant GetCharacterVariable(const FString& CharacterPath, const FString& VariableName);
 
-	/** Set a character variable value */
-	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	/** Set a character variable value (raw variant — prefer typed versions below) */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character (Legacy)")
 	void SetCharacterVariable(const FString& CharacterPath, const FString& VariableName, const FStoryFlowVariant& Value);
+
+	// ========================================================================
+	// Character Variable Access (typed, with asset picker)
+	// ========================================================================
+
+	/** Get a character's boolean variable */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character")
+	bool GetCharacterBoolVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName);
+
+	/** Set a character's boolean variable */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character")
+	void SetCharacterBoolVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName, bool bValue);
+
+	/** Get a character's integer variable */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character")
+	int32 GetCharacterIntVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName);
+
+	/** Set a character's integer variable */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character")
+	void SetCharacterIntVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName, int32 Value);
+
+	/** Get a character's float variable */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character")
+	float GetCharacterFloatVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName);
+
+	/** Set a character's float variable */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character")
+	void SetCharacterFloatVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName, float Value);
+
+	/** Get a character's string variable */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character")
+	FString GetCharacterStringVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName);
+
+	/** Set a character's string variable */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character")
+	void SetCharacterStringVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName, const FString& Value);
+
+	/** Get a character's enum variable (as string) */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character")
+	FString GetCharacterEnumVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName);
+
+	/** Set a character's enum variable (as string) */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character")
+	void SetCharacterEnumVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName, const FString& Value);
 
 	// ========================================================================
 	// Utility Functions
@@ -341,6 +386,18 @@ protected:
 	void HandleSetCharacterVar(FStoryFlowNode* Node);
 
 	// === Helper Functions ===
+
+	/** Find a variable by display name, falling back to subsystem globals/characters when outside dialogue */
+	FStoryFlowVariable* FindVariableByName(const FString& VariableName, bool bGlobal);
+
+	/** Find a character def, falling back to subsystem when outside dialogue */
+	FStoryFlowCharacterDef* FindCharacter(const FString& CharacterPath);
+
+	/** Find a character def from an asset reference */
+	FStoryFlowCharacterDef* FindCharacterFromAsset(UStoryFlowCharacterAsset* CharacterAsset);
+
+	/** Resolve a string table key to localized text using LanguageCode */
+	FString ResolveString(const FString& Key) const;
 
 	/** Build dialogue state from current node */
 	FStoryFlowDialogueState BuildDialogueState(FStoryFlowNode* DialogueNode);
