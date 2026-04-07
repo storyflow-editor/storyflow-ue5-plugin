@@ -181,7 +181,7 @@ void FStoryFlowExecutionContext::SetCharacterVariable(const FString& CharacterPa
 	// Handle built-in "Image" field
 	if (VariableName.Equals(TEXT("Image"), ESearchCase::IgnoreCase))
 	{
-		CharDef->Image = Value.ToString();
+		CharDef->Image = Value.GetString();
 		return;
 	}
 

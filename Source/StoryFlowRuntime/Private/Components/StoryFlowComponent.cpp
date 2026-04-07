@@ -2296,7 +2296,40 @@ void UStoryFlowComponent::HandleSetBackgroundImage(FStoryFlowNode* Node)
 
 	SF_TRACE(ExecutionContext, "IMAGE \"%s\"", *ImagePath);
 
-	// Broadcast the background image change
+	// Resolve the image key to a texture and store as persistent background
+	if (!ImagePath.IsEmpty())
+	{
+		UTexture2D* ResolvedImage = nullptr;
+
+		// Try current script's ResolvedAssets (important for subscripts)
+		if (UStoryFlowScriptAsset* CurrentScript = ExecutionContext.CurrentScript.Get())
+		{
+			if (TSoftObjectPtr<UObject>* Ptr = CurrentScript->ResolvedAssets.Find(ImagePath))
+			{
+				ResolvedImage = Cast<UTexture2D>(Ptr->LoadSynchronous());
+			}
+		}
+		// Try project's ResolvedAssets
+		if (!ResolvedImage)
+		{
+			if (UStoryFlowProjectAsset* Project = ExecutionContext.Project.Get())
+			{
+				if (TSoftObjectPtr<UObject>* Ptr = Project->ResolvedAssets.Find(ImagePath))
+				{
+					ResolvedImage = Cast<UTexture2D>(Ptr->LoadSynchronous());
+				}
+			}
+		}
+
+		ExecutionContext.PersistentBackgroundImage = ResolvedImage;
+	}
+	else
+	{
+		// Empty key = clear the background
+		ExecutionContext.PersistentBackgroundImage = nullptr;
+	}
+
+	// Broadcast the background image change (string key for Blueprint handlers)
 	OnBackgroundImageChanged.Broadcast(ImagePath);
 
 	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Output));
@@ -2324,7 +2357,38 @@ void UStoryFlowComponent::HandlePlayAudio(FStoryFlowNode* Node)
 
 	SF_TRACE(ExecutionContext, "AUDIO \"%s\"", *AudioPath);
 
-	// Broadcast audio play request
+	// Resolve the audio key and play it internally
+	if (!AudioPath.IsEmpty())
+	{
+		USoundBase* ResolvedAudio = nullptr;
+
+		// Try current script's ResolvedAssets (important for subscripts)
+		if (UStoryFlowScriptAsset* CurrentScript = ExecutionContext.CurrentScript.Get())
+		{
+			if (TSoftObjectPtr<UObject>* Ptr = CurrentScript->ResolvedAssets.Find(AudioPath))
+			{
+				ResolvedAudio = Cast<USoundBase>(Ptr->LoadSynchronous());
+			}
+		}
+		// Try project's ResolvedAssets
+		if (!ResolvedAudio)
+		{
+			if (UStoryFlowProjectAsset* Project = ExecutionContext.Project.Get())
+			{
+				if (TSoftObjectPtr<UObject>* Ptr = Project->ResolvedAssets.Find(AudioPath))
+				{
+					ResolvedAudio = Cast<USoundBase>(Ptr->LoadSynchronous());
+				}
+			}
+		}
+
+		if (ResolvedAudio)
+		{
+			PlayDialogueAudio(ResolvedAudio, bLoop);
+		}
+	}
+
+	// Broadcast event for game code that wants additional handling
 	OnAudioPlayRequested.Broadcast(AudioPath, bLoop);
 
 	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Output));
@@ -2441,6 +2505,40 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 	// Set the character variable
 	ExecutionContext.SetCharacterVariable(CharacterPath, VariableName, NewValue);
 
+	// For Image field: resolve and cache the texture NOW while still in the correct script context.
+	// Cross-script lookups fail because asset keys are per-script, so we cache the resolved texture
+	// for BuildDialogueState to use as fallback.
+	if (VariableName.Equals(TEXT("Image"), ESearchCase::IgnoreCase))
+	{
+		FString ImageKey = NewValue.GetString();
+		if (!ImageKey.IsEmpty())
+		{
+			FStoryFlowCharacterDef* CharDef = ExecutionContext.FindCharacter(CharacterPath);
+			if (CharDef)
+			{
+				UTexture2D* Resolved = nullptr;
+				if (UStoryFlowScriptAsset* CurrentScript = ExecutionContext.CurrentScript.Get())
+				{
+					if (TSoftObjectPtr<UObject>* Ptr = CurrentScript->ResolvedAssets.Find(ImageKey))
+					{
+						Resolved = Cast<UTexture2D>(Ptr->LoadSynchronous());
+					}
+				}
+				if (!Resolved)
+				{
+					if (UStoryFlowProjectAsset* Project = ExecutionContext.Project.Get())
+					{
+						if (TSoftObjectPtr<UObject>* Ptr = Project->ResolvedAssets.Find(ImageKey))
+						{
+							Resolved = Cast<UTexture2D>(Ptr->LoadSynchronous());
+						}
+					}
+				}
+				CharDef->CachedImage = Resolved;
+			}
+		}
+	}
+
 	// Continue execution
 	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 }
@@ -2508,6 +2606,12 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 					{
 						ResolvedImage = Cast<UTexture2D>(ProjectImagePtr->LoadSynchronous());
 					}
+				}
+
+				// Fall back to cached texture for cross-script resolution
+				if (!ResolvedImage && CharDef->CachedImage)
+				{
+					ResolvedImage = CharDef->CachedImage;
 				}
 
 				State.Character.Image = ResolvedImage;

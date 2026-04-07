@@ -356,7 +356,10 @@ public:
 
 	FString GetString(const FString& Default = TEXT("")) const
 	{
-		if (Type == EStoryFlowVariableType::String || Type == EStoryFlowVariableType::Enum)
+		// Image, Audio, and Character types also store their values in StringValue
+		if (Type == EStoryFlowVariableType::String || Type == EStoryFlowVariableType::Enum ||
+			Type == EStoryFlowVariableType::Image || Type == EStoryFlowVariableType::Audio ||
+			Type == EStoryFlowVariableType::Character)
 		{
 			return StringValue;
 		}
@@ -386,6 +389,9 @@ public:
 			return FString::SanitizeFloat(FloatValue);
 		case EStoryFlowVariableType::String:
 		case EStoryFlowVariableType::Enum:
+		case EStoryFlowVariableType::Image:
+		case EStoryFlowVariableType::Audio:
+		case EStoryFlowVariableType::Character:
 			return StringValue;
 		default:
 			return TEXT("");
@@ -934,6 +940,10 @@ struct STORYFLOWRUNTIME_API FStoryFlowCharacterDef
 	/** Asset key for default image */
 	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
 	FString Image;
+
+	/** Cached resolved image texture (set when SetCharacterVar Image runs, used as cross-script fallback) */
+	UPROPERTY()
+	TObjectPtr<UTexture2D> CachedImage = nullptr;
 
 	/** Character-specific variables */
 	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
