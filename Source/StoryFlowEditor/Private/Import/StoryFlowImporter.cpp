@@ -1081,6 +1081,16 @@ void UStoryFlowImporter::ImportMediaAssets(
 		// Check if source file exists
 		if (!FPaths::FileExists(SourcePath))
 		{
+			// Fallback: asset may already exist from a previous full sync (data-only sync)
+			if (UEditorAssetLibrary::DoesAssetExist(PackagePath))
+			{
+				UObject* ExistingAsset = UEditorAssetLibrary::LoadAsset(PackagePath);
+				if (ExistingAsset)
+				{
+					OutResolvedAssets.Add(Asset.Id, TSoftObjectPtr<UObject>(ExistingAsset));
+					continue;
+				}
+			}
 			UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Source file not found: %s"), *SourcePath);
 			continue;
 		}
@@ -1157,6 +1167,14 @@ UTexture2D* UStoryFlowImporter::ImportImageAsset(const FString& SourcePath, cons
 		UTexture2D* Texture = Cast<UTexture2D>(ImportedAssets[0]);
 		if (Texture)
 		{
+			// Configure for UI usage: no compression artifacts, no mipmaps
+			Texture->CompressionSettings = TC_EditorIcon;
+			Texture->MipGenSettings = TMGS_NoMipmaps;
+			Texture->LODGroup = TEXTUREGROUP_UI;
+			Texture->SRGB = true;
+			Texture->UpdateResource();
+			Texture->MarkPackageDirty();
+
 			// Rename to our expected name if needed
 			FString CurrentName = Texture->GetName();
 			if (CurrentName != AssetName)
