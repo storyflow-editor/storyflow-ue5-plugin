@@ -26,7 +26,7 @@
 #define LOCTEXT_NAMESPACE "FStoryFlowEditorModule"
 
 #define STORYFLOW_STYLE_NAME "StoryFlowEditorStyle"
-#define STORYFLOW_VERSION "1.1.0"
+#define STORYFLOW_VERSION "1.1.1"
 #define STORYFLOW_URL_EDITOR_DOCS "https://storyflow-editor.com/docs"
 #define STORYFLOW_URL_PLUGIN_DOCS "https://storyflow-editor.com/integrations/unreal-engine/docs"
 #define STORYFLOW_URL_CHANGELOG "https://storyflow-editor.com/changelog"
