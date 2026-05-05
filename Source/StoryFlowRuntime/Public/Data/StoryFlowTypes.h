@@ -469,35 +469,35 @@ struct STORYFLOWRUNTIME_API FStoryFlowVariable
 	GENERATED_BODY()
 
 	/** Generated hash ID (var_XXXXXXXX) */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Id;
 
 	/** Human-readable display name (used for lookup in Get/Set functions) */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Name;
 
 	/** Variable type */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	EStoryFlowVariableType Type = EStoryFlowVariableType::Boolean;
 
 	/** Current value */
-	UPROPERTY(BlueprintReadWrite, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadWrite, Category = "StoryFlow")
 	FStoryFlowVariant Value;
 
 	/** Array flag */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bIsArray = false;
 
 	/** Enum values (for enum type) */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TArray<FString> EnumValues;
 
 	/** When true, this variable is exposed as an input on Run Script nodes calling this script */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bIsInput = false;
 
 	/** When true, this variable is an output value returned from the script */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bIsOutput = false;
 };
 
@@ -522,11 +522,11 @@ struct STORYFLOWRUNTIME_API FStoryFlowTextBlock
 	GENERATED_BODY()
 
 	/** Unique text block ID */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Id;
 
 	/** String table key for display text */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Text;
 };
 
@@ -543,15 +543,15 @@ struct STORYFLOWRUNTIME_API FStoryFlowChoice
 	GENERATED_BODY()
 
 	/** Unique option ID */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Id;
 
 	/** String table key for display text */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Text;
 
 	/** Hide after first selection */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bOnceOnly = false;
 };
 
@@ -568,11 +568,11 @@ struct STORYFLOWRUNTIME_API FStoryFlowWeightedOption
 	GENERATED_BODY()
 
 	/** Unique option ID (matches source handle suffix) */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Id;
 
 	/** Relative weight (higher = more likely) */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	int32 Weight = 1;
 };
 
@@ -589,15 +589,15 @@ struct STORYFLOWRUNTIME_API FStoryFlowFlowDef
 	GENERATED_BODY()
 
 	/** Flow ID */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Id;
 
 	/** Flow name */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Name;
 
 	/** When true, this flow is an exit route (script termination signal) */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bIsExit = false;
 };
 
@@ -614,19 +614,19 @@ struct STORYFLOWRUNTIME_API FStoryFlowScriptInterfaceParam
 	GENERATED_BODY()
 
 	/** Variable ID in the target script */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Id;
 
 	/** Display name */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Name;
 
 	/** Variable type (boolean, integer, float, string, enum, image, character, audio) */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Type;
 
 	/** Whether this parameter is an array type */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bIsArray = false;
 };
 
@@ -639,11 +639,11 @@ struct STORYFLOWRUNTIME_API FStoryFlowScriptInterfaceExit
 	GENERATED_BODY()
 
 	/** Flow ID in the target script */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Id;
 
 	/** Display name */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Name;
 };
 
@@ -662,133 +662,133 @@ struct STORYFLOWRUNTIME_API FStoryFlowNodeData
 	// === Common Fields ===
 
 	/** Variable reference (for get/set nodes) */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Variable;
 
 	/** Scope flag */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bIsGlobal = false;
 
 	/** Fallback value (when no connection) */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FStoryFlowVariant Value;
 
 	/** First input fallback */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FStoryFlowVariant Value1;
 
 	/** Second input fallback */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FStoryFlowVariant Value2;
 
 	// === Dialogue Fields ===
 
 	/** String table key for title */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Title;
 
 	/** String table key for text */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Text;
 
 	/** Asset key for image */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Image;
 
 	/** Whether to reset/clear image when this dialogue has no image */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bImageReset = false;
 
 	/** Asset key for audio */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Audio;
 
 	/** Whether audio should loop continuously */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bAudioLoop = false;
 
 	/** Whether to stop previous audio when this dialogue has no audio */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bAudioReset = false;
 
 	/** Whether to auto-advance when audio finishes playing (non-looped, no interactive options) */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bAudioAdvanceOnEnd = false;
 
 	/** Whether to allow the player to skip audio and advance early (only when bAudioAdvanceOnEnd is true) */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bAudioAllowSkip = false;
 
 	/** Character key */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Character;
 
 	/** Text blocks (non-interactive text displayed in dialogue) */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TArray<FStoryFlowTextBlock> TextBlocks;
 
 	/** Button options */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TArray<FStoryFlowChoice> Options;
 
 	/** Input source flags */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bImageUseVarInput = false;
 
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bAudioUseVarInput = false;
 
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bCharacterUseVarInput = false;
 
 	// === Script Execution Fields ===
 
 	/** Script path for runScript nodes */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Script;
 
 	/** Flow ID for flow nodes */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString FlowId;
 
 	// === Enum Fields ===
 
 	/** Target enum variable (for intToEnum, etc.) */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString EnumVariable;
 
 	// === Character Variable Fields (for getCharacterVar/setCharacterVar) ===
 
 	/** Character path for character variable nodes */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString CharacterPath;
 
 	/** Variable name for character variable nodes */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString VariableName;
 
 	/** Variable type for character variable nodes */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString VariableType;
 
 	// === Random Branch Fields ===
 
 	/** Weighted output options (for randomBranch nodes) */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TArray<FStoryFlowWeightedOption> RandomBranchOptions;
 
 	// === Script Interface Fields (for runScript nodes) ===
 
 	/** Input parameters from the called script's interface */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TArray<FStoryFlowScriptInterfaceParam> ScriptParameters;
 
 	/** Output variables from the called script's interface */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TArray<FStoryFlowScriptInterfaceParam> ScriptOutputs;
 
 	/** Exit routes from the called script's interface */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TArray<FStoryFlowScriptInterfaceExit> ScriptExits;
 };
 
@@ -805,19 +805,19 @@ struct STORYFLOWRUNTIME_API FStoryFlowNode
 	GENERATED_BODY()
 
 	/** Node type */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	EStoryFlowNodeType Type = EStoryFlowNodeType::Unknown;
 
 	/** Type as string (for extensibility) */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString TypeString;
 
 	/** Unique node ID */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Id;
 
 	/** Type-specific data */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FStoryFlowNodeData Data;
 };
 
@@ -845,23 +845,23 @@ struct STORYFLOWRUNTIME_API FStoryFlowConnection
 	GENERATED_BODY()
 
 	/** Unique edge ID */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Id;
 
 	/** Source node ID */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Source;
 
 	/** Target node ID */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Target;
 
 	/** Source handle (for multi-output nodes). See handle format above. */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString SourceHandle;
 
 	/** Target handle (for multi-input nodes). See handle format above. */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString TargetHandle;
 };
 
@@ -878,19 +878,19 @@ struct STORYFLOWRUNTIME_API FStoryFlowAsset
 	GENERATED_BODY()
 
 	/** Generated asset ID (asset_image_1, etc.) */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Id;
 
 	/** Asset type */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	EStoryFlowAssetType Type = EStoryFlowAssetType::Image;
 
 	/** Relative path within project (normalized) */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Path;
 
 	/** Loaded Unreal asset reference */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TSoftObjectPtr<UObject> LoadedAsset;
 };
 
@@ -907,7 +907,7 @@ struct STORYFLOWRUNTIME_API FStoryFlowStringTable
 	GENERATED_BODY()
 
 	/** String key -> localized value */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TMap<FString, FString> Entries;
 
 	/** Get string with fallback */
@@ -934,11 +934,11 @@ struct STORYFLOWRUNTIME_API FStoryFlowCharacterDef
 	GENERATED_BODY()
 
 	/** String table key for name */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Name;
 
 	/** Asset key for default image */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Image;
 
 	/** Cached resolved image texture (set when SetCharacterVar Image runs, used as cross-script fallback) */
@@ -946,7 +946,7 @@ struct STORYFLOWRUNTIME_API FStoryFlowCharacterDef
 	TObjectPtr<UTexture2D> CachedImage = nullptr;
 
 	/** Character-specific variables */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TMap<FString, FStoryFlowVariable> Variables;
 };
 
@@ -959,15 +959,15 @@ struct STORYFLOWRUNTIME_API FStoryFlowCharacterData
 	GENERATED_BODY()
 
 	/** Resolved character name */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Name;
 
 	/** Loaded character image */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TObjectPtr<UTexture2D> Image = nullptr;
 
 	/** Character variables (for interpolation) */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TMap<FString, FStoryFlowVariant> Variables;
 };
 
@@ -1054,11 +1054,11 @@ struct STORYFLOWRUNTIME_API FStoryFlowDialogueOption
 	GENERATED_BODY()
 
 	/** Option ID */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Id;
 
 	/** Resolved display text */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Text;
 };
 
@@ -1071,51 +1071,51 @@ struct STORYFLOWRUNTIME_API FStoryFlowDialogueState
 	GENERATED_BODY()
 
 	/** Current dialogue node ID */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString NodeId;
 
 	/** Resolved title text */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Title;
 
 	/** Resolved dialogue text (with variable interpolation) */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Text;
 
 	/** Current image asset */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TObjectPtr<UTexture2D> Image = nullptr;
 
 	/** Current audio asset */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TObjectPtr<USoundBase> Audio = nullptr;
 
 	/** Current character data */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FStoryFlowCharacterData Character;
 
 	/** Visible text blocks (non-interactive) */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TArray<FStoryFlowDialogueOption> TextBlocks;
 
 	/** Visible options (buttons, filtered by visibility and once-only) */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TArray<FStoryFlowDialogueOption> Options;
 
 	/** Is this state valid/active */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bIsValid = false;
 
 	/** True when dialogue can be advanced without options (narrative-only with connected output) */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bCanAdvance = false;
 
 	/** True when dialogue will auto-advance after audio finishes playing */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bAudioAdvanceOnEnd = false;
 
 	/** True when player can click to skip audio and advance early (only when bAudioAdvanceOnEnd is true) */
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bAudioAllowSkip = false;
 };
 
@@ -1131,16 +1131,16 @@ struct STORYFLOWRUNTIME_API FStoryFlowProjectMetadata
 {
 	GENERATED_BODY()
 
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Title;
 
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Description;
 
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FDateTime Created;
 
-	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow")
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FDateTime Modified;
 };
 
