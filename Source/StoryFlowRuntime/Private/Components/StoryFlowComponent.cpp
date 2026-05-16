@@ -1039,7 +1039,7 @@ void UStoryFlowComponent::ProcessNode(FStoryFlowNode* Node)
 	}
 	else
 	{
-		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Unhandled node type: %s (%d)"), *Node->TypeString, static_cast<int32>(Node->Type));
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Unsupported node type '%s' at node %s, skipping"), *Node->TypeString, *Node->Id);
 		ProcessNextNode(StoryFlowHandles::Source(Node->Id));
 	}
 
