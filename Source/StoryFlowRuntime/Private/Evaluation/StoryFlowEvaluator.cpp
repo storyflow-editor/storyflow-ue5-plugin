@@ -68,6 +68,24 @@ FStoryFlowEvaluator::FDepthGuard::~FDepthGuard()
 	}
 }
 
+void FStoryFlowEvaluator::MaybeWarnUnknownNode(const FStoryFlowNode* Node)
+{
+	if (!Node || !Context)
+	{
+		return;
+	}
+	if (Node->Type != EStoryFlowNodeType::Unknown)
+	{
+		return;
+	}
+	if (Context->WarnedUnknownNodes.Contains(Node->Id))
+	{
+		return;
+	}
+	Context->WarnedUnknownNodes.Add(Node->Id);
+	UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Unsupported node type '%s' at node %s, returning default value"), *Node->TypeString, *Node->Id);
+}
+
 // ============================================================================
 // Boolean Evaluation
 // ============================================================================
@@ -107,6 +125,10 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 	{
 		return false;
 	}
+
+	// Forward-compat: warn (once) and fall through to default if the source
+	// node is a type the plugin does not understand.
+	MaybeWarnUnknownNode(Node);
 
 	// Check cache first
 	FNodeRuntimeState& NodeState = Context->GetNodeState(Node->Id);
@@ -422,6 +444,10 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 	{
 		return 0;
 	}
+
+	// Forward-compat: warn (once) and fall through to default if the source
+	// node is a type the plugin does not understand.
+	MaybeWarnUnknownNode(Node);
 
 	int32 Result = 0;
 
@@ -751,6 +777,10 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 		return 0.0f;
 	}
 
+	// Forward-compat: warn (once) and fall through to default if the source
+	// node is a type the plugin does not understand.
+	MaybeWarnUnknownNode(Node);
+
 	float Result = 0.0f;
 
 	switch (Node->Type)
@@ -956,6 +986,10 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 	{
 		return TEXT("");
 	}
+
+	// Forward-compat: warn (once) and fall through to default if the source
+	// node is a type the plugin does not understand.
+	MaybeWarnUnknownNode(Node);
 
 	FString Result;
 
@@ -1228,6 +1262,10 @@ TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateArrayInputGeneric(FStoryF
 	{
 		return TArray<FStoryFlowVariant>();
 	}
+
+	// Forward-compat: warn (once) and fall through to empty-array default if
+	// the source node is a type the plugin does not understand.
+	MaybeWarnUnknownNode(SourceNode);
 
 	// Handle getCharacterVar nodes that can return arrays
 	if (SourceNode->Type == EStoryFlowNodeType::GetCharacterVar)

@@ -105,6 +105,15 @@ private:
 	/** Generic array input evaluator — all typed array evaluators delegate to this */
 	TArray<FStoryFlowVariant> EvaluateArrayInputGeneric(FStoryFlowNode* Node, const FString& HandleSuffix, EStoryFlowNodeType ExpectedGetArrayType);
 
+	/**
+	 * Log a one-time warning if the source node's type is Unknown. The default
+	 * return value (false/0/empty) is preserved by the caller; this only
+	 * surfaces visibility when the plugin encounters a node type from a newer
+	 * editor version that it does not understand. Deduplicated per dialogue
+	 * run via Context->WarnedUnknownNodes.
+	 */
+	void MaybeWarnUnknownNode(const FStoryFlowNode* Node);
+
 	/** Execution context */
 	FStoryFlowExecutionContext* Context;
 

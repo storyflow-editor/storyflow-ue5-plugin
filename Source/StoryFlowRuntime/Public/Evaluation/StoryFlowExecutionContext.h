@@ -175,6 +175,13 @@ public:
 	/** Runtime state for each node, keyed by node ID. NOT stored on the shared asset. */
 	TMap<FString, FNodeRuntimeState> NodeRuntimeStates;
 
+	/**
+	 * Tracks node ids for which an "Unknown node type" warning has already been
+	 * logged from the evaluator. Used to deduplicate per dialogue run so the log
+	 * does not spam when the same unsupported source is read repeatedly.
+	 */
+	TSet<FString> WarnedUnknownNodes;
+
 public:
 	// === Node Accessors ===
 
