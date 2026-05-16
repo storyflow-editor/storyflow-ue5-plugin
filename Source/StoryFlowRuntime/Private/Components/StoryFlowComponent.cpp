@@ -537,7 +537,7 @@ void UStoryFlowComponent::SetFloatVariable(const FString& VariableName, float Va
 FString UStoryFlowComponent::GetStringVariable(const FString& VariableName, bool bGlobal)
 {
 	FStoryFlowVariable* Var = FindVariableByName(VariableName, bGlobal);
-	return Var ? Var->Value.GetString() : TEXT("");
+	return Var ? ResolveString(Var->Value.GetString()) : TEXT("");
 }
 
 void UStoryFlowComponent::SetStringVariable(const FString& VariableName, const FString& Value, bool bGlobal)
@@ -565,6 +565,51 @@ void UStoryFlowComponent::SetEnumVariable(const FString& VariableName, const FSt
 		Var->Value = NewValue;
 		NotifyVariableChanged(*Var, bGlobal);
 	}
+}
+
+TArray<FStoryFlowVariant> UStoryFlowComponent::GetArrayVariable(const FString& VariableName, bool bGlobal)
+{
+	TArray<FStoryFlowVariant> Out;
+
+	// When bGlobal is false, search locals (during dialogue) then fall back to globals.
+	// When bGlobal is true, search only globals. Matches Unity's GetArrayVariable parity.
+	FStoryFlowVariable* Var = nullptr;
+	if (!bGlobal && ExecutionContext.bIsExecuting)
+	{
+		Var = ExecutionContext.FindVariableByName(VariableName, /*bIsGlobal=*/false);
+	}
+	if (!Var)
+	{
+		Var = FindVariableByName(VariableName, /*bGlobal=*/true);
+	}
+	if (!Var)
+	{
+		return Out;
+	}
+
+	if (!Var->bIsArray)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Variable '%s' is not an array"), *VariableName);
+		return Out;
+	}
+
+	// Return resolved copies so callers see localized text for String and Enum
+	// element types. Image, audio, and character elements pass through unchanged
+	// because their values are asset keys / paths, not string-table keys.
+	for (const FStoryFlowVariant& Elem : Var->Value.GetArray())
+	{
+		FStoryFlowVariant Copy = Elem;
+		if (Elem.GetType() == EStoryFlowVariableType::String)
+		{
+			Copy.SetString(ResolveString(Elem.GetString()));
+		}
+		else if (Elem.GetType() == EStoryFlowVariableType::Enum)
+		{
+			Copy.SetEnum(ResolveString(Elem.GetString()));
+		}
+		Out.Add(Copy);
+	}
+	return Out;
 }
 
 FStoryFlowVariant UStoryFlowComponent::GetCharacterVariable(const FString& CharacterPath, const FString& VariableName)

@@ -260,6 +260,18 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
 	void SetEnumVariable(const FString& VariableName, const FString& Value, bool bGlobal = false);
 
+	/**
+	 * Read any array variable by display name.
+	 *
+	 * Returns the elements as FStoryFlowVariant copies so callers can use the typed getters
+	 * (GetBool, GetInt, GetFloat, GetString). String and enum element values are routed through
+	 * the string table so callers receive localized text rather than raw keys. Image, audio,
+	 * and character elements are stored as plain strings (asset keys / paths) and pass through
+	 * unchanged. Returns an empty array if the variable is missing or is not an array.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	TArray<FStoryFlowVariant> GetArrayVariable(const FString& VariableName, bool bGlobal = false);
+
 	// ========================================================================
 	// Character Variable Access (by path — legacy)
 	// ========================================================================
