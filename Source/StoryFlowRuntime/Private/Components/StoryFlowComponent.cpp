@@ -636,6 +636,134 @@ void UStoryFlowComponent::SetCharacterVariable(const FString& CharacterPath, con
 	}
 }
 
+TArray<FString> UStoryFlowComponent::GetCharacterArrayVariable(const FString& VariableName)
+{
+	TArray<FString> Out;
+
+	// Mirror _find_variable_by_display_name: try locals (during dialogue) then globals.
+	FStoryFlowVariable* Var = nullptr;
+	if (ExecutionContext.bIsExecuting)
+	{
+		Var = ExecutionContext.FindVariableByName(VariableName, /*bIsGlobal=*/false);
+	}
+	if (!Var)
+	{
+		Var = FindVariableByName(VariableName, /*bGlobal=*/true);
+	}
+
+	if (!Var)
+	{
+		return Out;
+	}
+
+	if (!Var->bIsArray)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Variable '%s' is not an array"), *VariableName);
+		return Out;
+	}
+
+	if (Var->Type != EStoryFlowVariableType::Character)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Variable '%s' is not a character array"), *VariableName);
+		return Out;
+	}
+
+	for (const FStoryFlowVariant& Elem : Var->Value.GetArray())
+	{
+		Out.Add(Elem.GetString());
+	}
+	return Out;
+}
+
+FStoryFlowCharacterDef UStoryFlowComponent::GetCharacter(const FString& CharacterPath)
+{
+	if (FStoryFlowCharacterDef* CharDef = FindCharacter(CharacterPath))
+	{
+		return *CharDef;
+	}
+	return FStoryFlowCharacterDef();
+}
+
+TArray<FString> UStoryFlowComponent::GetCharacterVariableNames(const FString& CharacterPath)
+{
+	TArray<FString> Out;
+	if (FStoryFlowCharacterDef* CharDef = FindCharacter(CharacterPath))
+	{
+		CharDef->Variables.GetKeys(Out);
+	}
+	return Out;
+}
+
+UTexture2D* UStoryFlowComponent::GetCharacterPortrait(const FString& CharacterPath, const FString& AssetKey)
+{
+	FStoryFlowCharacterDef* CharDef = FindCharacter(CharacterPath);
+	if (!CharDef)
+	{
+		return nullptr;
+	}
+
+	const FString Key = AssetKey.IsEmpty() ? CharDef->Image : AssetKey;
+	if (Key.IsEmpty())
+	{
+		return nullptr;
+	}
+
+	return ResolveCharacterPortraitTexture(CharacterPath, Key, CharDef);
+}
+
+UTexture2D* UStoryFlowComponent::ResolveCharacterPortraitTexture(const FString& CharacterPath, const FString& AssetKey, FStoryFlowCharacterDef* CharDef)
+{
+	if (AssetKey.IsEmpty())
+	{
+		return nullptr;
+	}
+
+	UTexture2D* ResolvedImage = nullptr;
+	UStoryFlowProjectAsset* Project = ExecutionContext.bIsExecuting ? ExecutionContext.Project.Get() : GetProject();
+
+	// 1. Try character asset's ResolvedAssets
+	if (Project)
+	{
+		const FString NormalizedCharPath = NormalizeCharacterPath(CharacterPath);
+		if (UStoryFlowCharacterAsset* const* CharAsset = Project->Characters.Find(NormalizedCharPath))
+		{
+			if (TSoftObjectPtr<UObject>* CharImagePtr = (*CharAsset)->ResolvedAssets.Find(AssetKey))
+			{
+				ResolvedImage = Cast<UTexture2D>(CharImagePtr->LoadSynchronous());
+			}
+		}
+	}
+
+	// 2. Try current script's ResolvedAssets (SetCharacterVar may set image to a script-level asset)
+	if (!ResolvedImage)
+	{
+		if (UStoryFlowScriptAsset* CurrentScriptAsset = ExecutionContext.CurrentScript.Get())
+		{
+			if (TSoftObjectPtr<UObject>* ScriptImagePtr = CurrentScriptAsset->ResolvedAssets.Find(AssetKey))
+			{
+				ResolvedImage = Cast<UTexture2D>(ScriptImagePtr->LoadSynchronous());
+			}
+		}
+	}
+
+	// 3. Try project's global ResolvedAssets
+	if (!ResolvedImage && Project)
+	{
+		if (TSoftObjectPtr<UObject>* ProjectImagePtr = Project->ResolvedAssets.Find(AssetKey))
+		{
+			ResolvedImage = Cast<UTexture2D>(ProjectImagePtr->LoadSynchronous());
+		}
+	}
+
+	// Fall back to cached texture for cross-script resolution
+	if (!ResolvedImage && CharDef && CharDef->CachedImage)
+	{
+		ResolvedImage = CharDef->CachedImage;
+	}
+
+	return ResolvedImage;
+}
+
 // ============================================================================
 // Character Variable Access (typed, with asset picker)
 // ============================================================================
@@ -2502,6 +2630,22 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 
 	SF_TRACE(ExecutionContext, "VAR SET \"%s.%s\" global=false value=%s", *CharacterPath, *VariableName, *NewValue.ToString());
 
+	// Detect whether the mutation will succeed so we can fire OnCharacterVariableChanged
+	// after the fact. The branches mirror ExecutionContext::SetCharacterVariable.
+	bool bMutated = false;
+	if (FStoryFlowCharacterDef* PreCharDef = ExecutionContext.FindCharacter(CharacterPath))
+	{
+		if (VariableName.Equals(TEXT("Name"), ESearchCase::IgnoreCase) ||
+			VariableName.Equals(TEXT("Image"), ESearchCase::IgnoreCase))
+		{
+			bMutated = true;
+		}
+		else if (PreCharDef->Variables.Contains(VariableName))
+		{
+			bMutated = true;
+		}
+	}
+
 	// Set the character variable
 	ExecutionContext.SetCharacterVariable(CharacterPath, VariableName, NewValue);
 
@@ -2539,6 +2683,12 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 		}
 	}
 
+	// Notify listeners that the character variable changed (after mutation + image caching).
+	if (bMutated)
+	{
+		OnCharacterVariableChanged.Broadcast(CharacterPath, VariableName, NewValue);
+	}
+
 	// Continue execution
 	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 }
@@ -2571,50 +2721,7 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 			// own assets, the current script's assets, or the project's global assets.
 			if (!CharDef->Image.IsEmpty())
 			{
-				UTexture2D* ResolvedImage = nullptr;
-				UStoryFlowProjectAsset* Project = ExecutionContext.Project.Get();
-
-				// 1. Try character asset's ResolvedAssets
-				if (!ResolvedImage && Project)
-				{
-					FString NormalizedCharPath = NormalizeCharacterPath(DialogueNode->Data.Character);
-					if (UStoryFlowCharacterAsset* const* CharAsset = Project->Characters.Find(NormalizedCharPath))
-					{
-						if (TSoftObjectPtr<UObject>* CharImagePtr = (*CharAsset)->ResolvedAssets.Find(CharDef->Image))
-						{
-							ResolvedImage = Cast<UTexture2D>(CharImagePtr->LoadSynchronous());
-						}
-					}
-				}
-
-				// 2. Try current script's ResolvedAssets (SetCharacterVar may set image to a script-level asset)
-				if (!ResolvedImage)
-				{
-					if (UStoryFlowScriptAsset* CurrentScriptAsset = ExecutionContext.CurrentScript.Get())
-					{
-						if (TSoftObjectPtr<UObject>* ScriptImagePtr = CurrentScriptAsset->ResolvedAssets.Find(CharDef->Image))
-						{
-							ResolvedImage = Cast<UTexture2D>(ScriptImagePtr->LoadSynchronous());
-						}
-					}
-				}
-
-				// 3. Try project's global ResolvedAssets
-				if (!ResolvedImage && Project)
-				{
-					if (TSoftObjectPtr<UObject>* ProjectImagePtr = Project->ResolvedAssets.Find(CharDef->Image))
-					{
-						ResolvedImage = Cast<UTexture2D>(ProjectImagePtr->LoadSynchronous());
-					}
-				}
-
-				// Fall back to cached texture for cross-script resolution
-				if (!ResolvedImage && CharDef->CachedImage)
-				{
-					ResolvedImage = CharDef->CachedImage;
-				}
-
-				State.Character.Image = ResolvedImage;
+				State.Character.Image = ResolveCharacterPortraitTexture(DialogueNode->Data.Character, CharDef->Image, CharDef);
 			}
 
 			// Copy character variables

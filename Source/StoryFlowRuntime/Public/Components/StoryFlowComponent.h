@@ -27,6 +27,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnDialogueStarted);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnDialogueUpdated, const FStoryFlowDialogueState&, DialogueState);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnDialogueEnded);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnVariableChanged, const FStoryFlowVariable&, Variable, bool, bIsGlobal);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnCharacterVariableChanged, const FString&, CharacterPath, const FString&, VariableName, const FStoryFlowVariant&, Value);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnScriptStarted, const FString&, ScriptPath);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnScriptEnded, const FString&, ScriptPath);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnError, const FString&, ErrorMessage);
@@ -126,6 +127,10 @@ public:
 	/** Called when a variable changes */
 	UPROPERTY(BlueprintAssignable, Category = "StoryFlow|Events")
 	FOnVariableChanged OnVariableChanged;
+
+	/** Called when a character variable changes (Name, Image, or custom). Lets non-speaker UIs react to setCharacterVar mutations. */
+	UPROPERTY(BlueprintAssignable, Category = "StoryFlow|Events")
+	FOnCharacterVariableChanged OnCharacterVariableChanged;
 
 	/** Called when a script starts executing */
 	UPROPERTY(BlueprintAssignable, Category = "StoryFlow|Events")
@@ -267,6 +272,49 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character (Legacy)")
 	void SetCharacterVariable(const FString& CharacterPath, const FString& VariableName, const FStoryFlowVariant& Value);
 
+	/**
+	 * Read a script or global variable whose element type is character-array.
+	 *
+	 * Returns the array of character paths stored in the variable. Each path is suitable
+	 * for GetCharacter, GetCharacterVariable, or GetCharacterPortrait. Returns an empty
+	 * array if the variable is missing or is not a character array.
+	 *
+	 * Note: this reads a *script variable whose element type is character*, which is distinct
+	 * from GetCharacterVariable, which reads a variable that lives *on* a character.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character (Legacy)")
+	TArray<FString> GetCharacterArrayVariable(const FString& VariableName);
+
+	/**
+	 * Return the live runtime character data for a path (the same struct the runtime mutates
+	 * via setCharacterVar). Useful when you want to read several fields without separate
+	 * variable calls. Returns a default-constructed struct if no character is registered at that path.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character (Legacy)")
+	FStoryFlowCharacterDef GetCharacter(const FString& CharacterPath);
+
+	/**
+	 * Return the names of all custom variables defined on a character.
+	 *
+	 * Does not include the built-in "Name" and "Image" fields, which are always available via
+	 * GetCharacterVariable regardless of declaration. Empty array if the character is missing.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character (Legacy)")
+	TArray<FString> GetCharacterVariableNames(const FString& CharacterPath);
+
+	/**
+	 * Resolve a character's portrait to a Texture2D.
+	 *
+	 * When AssetKey is empty (default), uses the character's current Image field, which reflects
+	 * any runtime mutations from setCharacterVar("Image", ...). Pass a non-empty AssetKey to
+	 * resolve an alternate pose, e.g. one stored in a custom image-typed character variable.
+	 *
+	 * Walks the standard three asset pools in priority order: character → script → project.
+	 * Returns nullptr if nothing resolves.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character (Legacy)")
+	UTexture2D* GetCharacterPortrait(const FString& CharacterPath, const FString& AssetKey = TEXT(""));
+
 	// ========================================================================
 	// Character Variable Access (typed, with asset picker)
 	// ========================================================================
@@ -405,6 +453,13 @@ protected:
 
 	/** Build dialogue state from current node */
 	FStoryFlowDialogueState BuildDialogueState(FStoryFlowNode* DialogueNode);
+
+	/**
+	 * Resolve a character image asset key to a texture by walking the standard three asset pools.
+	 * Priority: character asset's ResolvedAssets → current script's ResolvedAssets → project's ResolvedAssets.
+	 * Falls back to the character's CachedImage for cross-script resolution. Returns nullptr if nothing resolves.
+	 */
+	UTexture2D* ResolveCharacterPortraitTexture(const FString& CharacterPath, const FString& AssetKey, FStoryFlowCharacterDef* CharDef);
 
 	/** Notify variable change */
 	void NotifyVariableChanged(const FStoryFlowVariable& Variable, bool bIsGlobal);
