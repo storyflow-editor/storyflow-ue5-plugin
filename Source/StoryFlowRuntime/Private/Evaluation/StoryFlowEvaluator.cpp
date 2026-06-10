@@ -1077,6 +1077,18 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 		break;
 	}
 
+	case EStoryFlowNodeType::IntToEnum:
+	{
+		Result = EvaluateIntToEnum(Node);
+		break;
+	}
+
+	case EStoryFlowNodeType::StringToEnum:
+	{
+		Result = EvaluateStringToEnum(Node);
+		break;
+	}
+
 	// Asset variable getters return paths as strings
 	case EStoryFlowNodeType::GetImage:
 	case EStoryFlowNodeType::SetImage:
@@ -1275,6 +1287,76 @@ FString FStoryFlowEvaluator::EvaluateEnumInput(FStoryFlowNode* Node, const FStri
 {
 	// Enums are stored as strings
 	return EvaluateStringInput(Node, HandleSuffix, Fallback);
+}
+
+FString FStoryFlowEvaluator::EvaluateIntToEnum(FStoryFlowNode* Node)
+{
+	int32 Input = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer, Node->Data.Value.GetInt(0));
+	TArray<FString> EnumValues = ResolveConversionEnumValues(Node);
+	if (EnumValues.Num() == 0)
+	{
+		return TEXT("");
+	}
+	int32 ClampedIndex = FMath::Clamp(Input, 0, EnumValues.Num() - 1);
+	return EnumValues[ClampedIndex];
+}
+
+FString FStoryFlowEvaluator::EvaluateStringToEnum(FStoryFlowNode* Node)
+{
+	FString Input = EvaluateStringInput(Node, StoryFlowHandles::In_String, Node->Data.Value.GetString());
+	TArray<FString> EnumValues = ResolveConversionEnumValues(Node);
+	if (EnumValues.Contains(Input))
+	{
+		return Input;
+	}
+	return EnumValues.Num() > 0 ? EnumValues[0] : TEXT("");
+}
+
+TArray<FString> FStoryFlowEvaluator::ResolveConversionEnumValues(FStoryFlowNode* Node)
+{
+	// Values stored on the conversion node itself win when present.
+	if (Node->Data.EnumValues.Num() > 0)
+	{
+		return Node->Data.EnumValues;
+	}
+
+	// Editor exports store no data on conversion nodes - mirror the HTML
+	// runtime and resolve the values from the node the enum output feeds:
+	// the target's variable for getEnum/setEnum, otherwise the target node's
+	// own enumValues.
+	UStoryFlowScriptAsset* Script = Context ? Context->CurrentScript.Get() : nullptr;
+	if (!Script)
+	{
+		return TArray<FString>();
+	}
+
+	const FString EnumOutPrefix = StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Enum);
+	for (const FStoryFlowConnection* Conn : Script->GetEdgesFromSource(Node->Id))
+	{
+		if (!Conn || !Conn->SourceHandle.StartsWith(EnumOutPrefix))
+		{
+			continue;
+		}
+		FStoryFlowNode* TargetNode = Context->GetNode(Conn->Target);
+		if (!TargetNode)
+		{
+			continue;
+		}
+		if (TargetNode->Type == EStoryFlowNodeType::GetEnum || TargetNode->Type == EStoryFlowNodeType::SetEnum)
+		{
+			FStoryFlowVariable* Variable = Context->FindVariable(TargetNode->Data.Variable, TargetNode->Data.bIsGlobal);
+			if (Variable && Variable->EnumValues.Num() > 0)
+			{
+				return Variable->EnumValues;
+			}
+		}
+		if (TargetNode->Data.EnumValues.Num() > 0)
+		{
+			return TargetNode->Data.EnumValues;
+		}
+	}
+
+	return TArray<FString>();
 }
 
 // ============================================================================

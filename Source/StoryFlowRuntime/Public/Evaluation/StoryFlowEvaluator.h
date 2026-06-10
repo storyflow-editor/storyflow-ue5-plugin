@@ -102,6 +102,15 @@ private:
 	/** Evaluate a float comparison (GT, GTE, LT, LTE, EQ with NearlyEqual) */
 	bool EvaluateFloatComparison(FStoryFlowNode* Node, EStoryFlowNodeType ComparisonType);
 
+	/** Evaluate an intToEnum conversion (integer input clamped into the enum value list as an index) */
+	FString EvaluateIntToEnum(FStoryFlowNode* Node);
+
+	/** Evaluate a stringToEnum conversion (exact match passes through, else falls back to the first value) */
+	FString EvaluateStringToEnum(FStoryFlowNode* Node);
+
+	/** Resolve the enum value list an intToEnum/stringToEnum node converts into */
+	TArray<FString> ResolveConversionEnumValues(FStoryFlowNode* Node);
+
 	/** Generic array input evaluator — all typed array evaluators delegate to this */
 	TArray<FStoryFlowVariant> EvaluateArrayInputGeneric(FStoryFlowNode* Node, const FString& HandleSuffix, EStoryFlowNodeType ExpectedGetArrayType);
 
