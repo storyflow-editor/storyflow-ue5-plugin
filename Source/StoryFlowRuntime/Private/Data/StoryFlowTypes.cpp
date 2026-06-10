@@ -31,6 +31,11 @@ namespace
 	{
 		int32 EntryNum = 0;
 		Reader << EntryNum;
+		if (EntryNum < 0)
+		{
+			// Corrupt or forward-format blob — degrade to an empty map instead of crashing
+			return;
+		}
 		OutEntries.SetNum(EntryNum);
 		for (int32 idx = 0; idx < EntryNum; ++idx)
 		{
@@ -230,6 +235,11 @@ void FStoryFlowVariant::UnpackArrayFromSerialization()
 	if (Num == MapBlobSentinel)
 	{
 		DeserializeMapEntries(Reader, MapValue);
+		return;
+	}
+	if (Num < 0)
+	{
+		// Corrupt or forward-format blob — degrade to an empty array instead of crashing
 		return;
 	}
 	ArrayValue.SetNum(Num);

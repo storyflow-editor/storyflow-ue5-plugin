@@ -355,6 +355,7 @@ public:
 	void SetArray(const TArray<FStoryFlowVariant>& Value)
 	{
 		ArrayValue = Value;
+		MapValue.Empty(); // a variant holds either array or map data, never both
 		// Infer type from first element, or keep current type
 		if (Value.Num() > 0)
 		{
@@ -413,6 +414,7 @@ public:
 		return MapValue;
 	}
 
+	// Caller must have established Type via SetMap first (mirrors GetArrayMutable's contract)
 	TArray<FStoryFlowMapEntry>& GetMapMutable()
 	{
 		return MapValue;
@@ -435,6 +437,10 @@ public:
 		case EStoryFlowVariableType::Audio:
 		case EStoryFlowVariableType::Character:
 			return StringValue;
+		case EStoryFlowVariableType::Map:
+			// Map display formatting is deliberately deferred — interpolation of maps
+			// is suppressed contract-wide, so maps render as empty string
+			return TEXT("");
 		default:
 			return TEXT("");
 		}
@@ -473,7 +479,7 @@ public:
 	}
 
 	/**
-	 * Serialize the non-UPROPERTY ArrayValue into/from SerializedArrayData.
+	 * Serialize the non-UPROPERTY ArrayValue and MapValue into/from SerializedArrayData.
 	 * Must be called before saving (PreSave) and after loading (PostLoad).
 	 */
 	void PackArrayForSerialization();
@@ -481,9 +487,9 @@ public:
 
 private:
 	/**
-	 * Flat binary blob that persists the recursive ArrayValue through Unreal's serialization.
-	 * ArrayValue cannot be a UPROPERTY (UHT doesn't support recursive struct arrays),
-	 * so we serialize it into this byte array before saving and restore it after loading.
+	 * Flat binary blob that persists the recursive ArrayValue and MapValue through Unreal's
+	 * serialization. Neither can be a UPROPERTY (UHT doesn't support recursive struct arrays),
+	 * so we serialize them into this byte array before saving and restore them after loading.
 	 */
 	UPROPERTY()
 	TArray<uint8> SerializedArrayData;
@@ -506,6 +512,7 @@ inline void FStoryFlowVariant::SetMap(const TArray<FStoryFlowMapEntry>& Value)
 {
 	Type = EStoryFlowVariableType::Map;
 	MapValue = Value;
+	ArrayValue.Empty(); // a variant holds either array or map data, never both
 }
 
 inline void FStoryFlowVariant::Reset()
@@ -582,9 +589,9 @@ struct STORYFLOWRUNTIME_API FStoryFlowVariable
 };
 
 /**
- * Pack/unpack all FStoryFlowVariant array values in a variable map.
- * Use these helpers in asset PreSave/PostLoad to persist array data
- * that lives in the non-UPROPERTY FStoryFlowVariant::ArrayValue field.
+ * Pack/unpack all FStoryFlowVariant array values or map entries in a variable map.
+ * Use these helpers in asset PreSave/PostLoad to persist array/map data that lives
+ * in the non-UPROPERTY FStoryFlowVariant::ArrayValue and MapValue fields.
  */
 STORYFLOWRUNTIME_API void PackVariablesForSerialization(TMap<FString, FStoryFlowVariable>& Variables);
 STORYFLOWRUNTIME_API void UnpackVariablesFromSerialization(TMap<FString, FStoryFlowVariable>& Variables);
