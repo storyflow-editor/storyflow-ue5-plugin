@@ -2911,6 +2911,55 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 		return;
 	}
 
+	// Map-typed character variables take a dedicated path: resolve the wired map
+	// input and SNAPSHOT it into the character's own storage. HTML parity
+	// (updateCharacterVariable → setCharacterVariableValue): the character stores
+	// the serialized entry-array form — an independent copy, never an alias of
+	// the source variable's live map (map-character.test.ts pins this).
+	if (VariableType == TEXT("map"))
+	{
+		// Missing K/V types: the map input handle cannot be built — HTML
+		// short-circuits with NO write (and no trace), but exec still continues.
+		if (Node->Data.KeyType.IsEmpty() || Node->Data.ValueType.IsEmpty())
+		{
+			HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
+			return;
+		}
+
+		// Resolve the wired map input (optionId "input": target-{id}-map-{K}-{V}-input,
+		// see SecondaryMapHandle in SetCharacterVariableNode) and copy its entries
+		// immediately (pointer-lifetime rule on EvaluateMapInput). Unwired or
+		// unresolved → empty (HTML defaults the new value to a fresh Map).
+		TArray<FStoryFlowMapEntry> NewEntries;
+		if (Evaluator)
+		{
+			if (const TArray<FStoryFlowMapEntry>* SourceMap = Evaluator->EvaluateMapInput(Node, TEXT("input")))
+			{
+				NewEntries = *SourceMap;
+			}
+		}
+
+		// Trace shape matches the map pin on HandleSetMap (size=, not value=)
+		SF_TRACE(ExecutionContext, "VAR SET \"%s.%s\" global=false size=%d", *CharacterPath, *VariableName, NewEntries.Num());
+
+		// Write only when the variable exists and is map-typed (HTML's
+		// setCharacterVariableValue type-mismatch → false, no write). Name/Image
+		// built-ins are never map-typed, so the custom-variable lookup suffices.
+		FStoryFlowVariable* CharVar = ExecutionContext.FindCharacterVariable(CharacterPath, VariableName);
+		if (CharVar && CharVar->Type == EStoryFlowVariableType::Map)
+		{
+			CharVar->Value.SetMap(NewEntries); // fresh storage — never aliases the source
+			OnCharacterVariableChanged.Broadcast(CharacterPath, VariableName, CharVar->Value);
+		}
+		else
+		{
+			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: SetCharacterVar map write skipped - variable '%s' on '%s' missing or not map-typed"), *VariableName, *CharacterPath);
+		}
+
+		HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
+		return;
+	}
+
 	// Get the value to set - check for connected input edge
 	FStoryFlowVariant NewValue;
 	const bool bIsArray = Node->Data.bIsArray;

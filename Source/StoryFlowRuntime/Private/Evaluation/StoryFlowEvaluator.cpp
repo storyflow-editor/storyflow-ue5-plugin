@@ -1393,6 +1393,9 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 	// types read through this evaluator (enums delegate here via
 	// EvaluateEnumInput, like the GetMapValue string arm above): keys cover
 	// string/enum, values the full string/enum/image/character/audio family.
+	// Stored strings returned VERBATIM here too — strings-table resolution for
+	// string-typed map values is Task 7 (same treatment as the GetMapValue
+	// string arm).
 	case EStoryFlowNodeType::ForEachMap:
 	{
 		FNodeRuntimeState& LoopState = Context->GetNodeState(Node->Id);
@@ -1780,9 +1783,40 @@ FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariable(FStoryFlowNode*
 
 	case EStoryFlowNodeType::GetCharacterVar:
 	case EStoryFlowNodeType::SetCharacterVar:
-		// TODO(Task 6): resolve map-typed character variables here (mirror the
-		// CharacterPath + VariableName lookup the scalar evaluators use).
+	{
+		// Map-typed character variables resolve to the character's LIVE runtime
+		// variable (the subsystem's mutable copy), mirroring the getMap arm above.
+		// Same CharacterPath + VariableName lookup the scalar charvar evaluators
+		// use: wired character input wins over the inline dropdown path.
+		if (SourceNode->Data.VariableType != TEXT("map"))
+		{
+			return nullptr;
+		}
+		FString CharPath = SourceNode->Data.CharacterPath;
+		if (const FStoryFlowConnection* CharEdge = Context->FindInputEdge(SourceNode->Id, StoryFlowHandles::In_CharacterInput))
+		{
+			if (FStoryFlowNode* CharNode = Context->GetNode(CharEdge->Source))
+			{
+				CharPath = EvaluateStringFromNode(CharNode, SourceNode->Id, CharEdge->SourceHandle);
+			}
+		}
+		FStoryFlowVariable* Var = Context->FindCharacterVariable(CharPath, SourceNode->Data.VariableName);
+		if (Var && Var->Type == EStoryFlowVariableType::Map)
+		{
+			if (!Var->Value.IsMap())
+			{
+				// Variable imported without an initial value — establish the map
+				// type so the returned storage is correctly typed for mutation.
+				Var->Value.SetMap(TArray<FStoryFlowMapEntry>());
+			}
+			if (bOutIsGlobal)
+			{
+				*bOutIsGlobal = false; // character variables are never script-globals
+			}
+			return Var;
+		}
 		return nullptr;
+	}
 
 	case EStoryFlowNodeType::RunScript:
 		// TODO(Task 8): runScript map outputs — HTML resolves _outputValues maps;
