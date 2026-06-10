@@ -40,6 +40,23 @@ static bool IsArrayModifyNode(EStoryFlowNodeType Type)
 	}
 }
 
+// Set*Array nodes expose the variable they set on their array output port,
+// exactly like their Get*Array twin (HTML pairs 'getBoolArray'/'setBoolArray', etc.)
+static EStoryFlowNodeType SetArrayTwinOf(EStoryFlowNodeType GetArrayType)
+{
+	switch (GetArrayType)
+	{
+	case EStoryFlowNodeType::GetBoolArray:      return EStoryFlowNodeType::SetBoolArray;
+	case EStoryFlowNodeType::GetIntArray:       return EStoryFlowNodeType::SetIntArray;
+	case EStoryFlowNodeType::GetFloatArray:     return EStoryFlowNodeType::SetFloatArray;
+	case EStoryFlowNodeType::GetStringArray:    return EStoryFlowNodeType::SetStringArray;
+	case EStoryFlowNodeType::GetImageArray:     return EStoryFlowNodeType::SetImageArray;
+	case EStoryFlowNodeType::GetCharacterArray: return EStoryFlowNodeType::SetCharacterArray;
+	case EStoryFlowNodeType::GetAudioArray:     return EStoryFlowNodeType::SetAudioArray;
+	default:                                    return GetArrayType;
+	}
+}
+
 FStoryFlowEvaluator::FStoryFlowEvaluator(FStoryFlowExecutionContext* InContext)
 	: Context(InContext)
 {
@@ -142,6 +159,7 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 	switch (Node->Type)
 	{
 	case EStoryFlowNodeType::GetBool:
+	case EStoryFlowNodeType::SetBool:
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
 		Result = Var ? Var->Value.GetBool() : false;
@@ -341,6 +359,7 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 	}
 
 	case EStoryFlowNodeType::GetCharacterVar:
+	case EStoryFlowNodeType::SetCharacterVar:
 	{
 		FString CharPath = Node->Data.CharacterPath;
 		if (const FStoryFlowConnection* CharEdge = Context->FindInputEdge(Node->Id, StoryFlowHandles::In_CharacterInput))
@@ -454,6 +473,7 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 	switch (Node->Type)
 	{
 	case EStoryFlowNodeType::GetInt:
+	case EStoryFlowNodeType::SetInt:
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
 		Result = Var ? Var->Value.GetInt() : 0;
@@ -710,6 +730,7 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 	}
 
 	case EStoryFlowNodeType::GetCharacterVar:
+	case EStoryFlowNodeType::SetCharacterVar:
 	{
 		FString CharPath = Node->Data.CharacterPath;
 		if (UStoryFlowScriptAsset* Script = Context->CurrentScript.Get())
@@ -786,6 +807,7 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 	switch (Node->Type)
 	{
 	case EStoryFlowNodeType::GetFloat:
+	case EStoryFlowNodeType::SetFloat:
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
 		Result = Var ? Var->Value.GetFloat() : 0.0f;
@@ -920,6 +942,7 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 	}
 
 	case EStoryFlowNodeType::GetCharacterVar:
+	case EStoryFlowNodeType::SetCharacterVar:
 	{
 		FString CharPath = Node->Data.CharacterPath;
 		if (UStoryFlowScriptAsset* Script = Context->CurrentScript.Get())
@@ -996,6 +1019,7 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 	switch (Node->Type)
 	{
 	case EStoryFlowNodeType::GetString:
+	case EStoryFlowNodeType::SetString:
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
 		Result = Var ? Var->Value.GetString() : TEXT("");
@@ -1039,6 +1063,7 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 	}
 
 	case EStoryFlowNodeType::GetEnum:
+	case EStoryFlowNodeType::SetEnum:
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
 		Result = Var ? Var->Value.GetString() : TEXT("");
@@ -1054,13 +1079,23 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 
 	// Asset variable getters return paths as strings
 	case EStoryFlowNodeType::GetImage:
+	case EStoryFlowNodeType::SetImage:
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
 		Result = Var ? Var->Value.GetString() : TEXT("");
 		break;
 	}
 
+	case EStoryFlowNodeType::SetBackgroundImage:
+	{
+		// As an image source the node exposes the image it sets: connected
+		// image input first, then the dropdown value (matches HTML runtime).
+		Result = EvaluateStringInput(Node, StoryFlowHandles::In_ImageInput, Node->Data.Value.GetString());
+		break;
+	}
+
 	case EStoryFlowNodeType::GetAudio:
+	case EStoryFlowNodeType::SetAudio:
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
 		Result = Var ? Var->Value.GetString() : TEXT("");
@@ -1068,6 +1103,7 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 	}
 
 	case EStoryFlowNodeType::GetCharacter:
+	case EStoryFlowNodeType::SetCharacter:
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
 		Result = Var ? Var->Value.GetString() : TEXT("");
@@ -1203,6 +1239,7 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 	}
 
 	case EStoryFlowNodeType::GetCharacterVar:
+	case EStoryFlowNodeType::SetCharacterVar:
 	{
 		FString CharPath = Node->Data.CharacterPath;
 		if (UStoryFlowScriptAsset* Script = Context->CurrentScript.Get())
@@ -1267,8 +1304,8 @@ TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateArrayInputGeneric(FStoryF
 	// the source node is a type the plugin does not understand.
 	MaybeWarnUnknownNode(SourceNode);
 
-	// Handle getCharacterVar nodes that can return arrays
-	if (SourceNode->Type == EStoryFlowNodeType::GetCharacterVar)
+	// Handle getCharacterVar/setCharacterVar nodes that can return arrays
+	if (SourceNode->Type == EStoryFlowNodeType::GetCharacterVar || SourceNode->Type == EStoryFlowNodeType::SetCharacterVar)
 	{
 		FString CharPath = SourceNode->Data.CharacterPath;
 		if (UStoryFlowScriptAsset* Script = Context->CurrentScript.Get())
@@ -1297,7 +1334,7 @@ TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateArrayInputGeneric(FStoryF
 		return TArray<FStoryFlowVariant>();
 	}
 
-	if (SourceNode->Type != ExpectedGetArrayType)
+	if (SourceNode->Type != ExpectedGetArrayType && SourceNode->Type != SetArrayTwinOf(ExpectedGetArrayType))
 	{
 		return TArray<FStoryFlowVariant>();
 	}

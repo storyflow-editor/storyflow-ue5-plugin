@@ -1960,8 +1960,8 @@ void UStoryFlowComponent::HandleArraySet(FStoryFlowNode* Node)
 
 	if (bIsSetElement && Evaluator)
 	{
-		// Set element at index
-		int32 Index = Evaluator->EvaluateIntegerInput(Node, TEXT("integer"), Node->Data.Value.GetInt(0));
+		// Set element at index (editor handles: array "<type>-array-2", index "integer-3", value "<type>-4")
+		int32 Index = Evaluator->EvaluateIntegerInput(Node, TEXT("integer-3"), Node->Data.Value.GetInt(0));
 		TArray<FStoryFlowVariant>& Arr = Var->Value.GetArrayMutable();
 		if (Index >= 0 && Index < Arr.Num())
 		{
@@ -1969,22 +1969,30 @@ void UStoryFlowComponent::HandleArraySet(FStoryFlowNode* Node)
 			switch (Node->Type)
 			{
 			case EStoryFlowNodeType::SetBoolArrayElement:
-				Arr[Index].SetBool(Evaluator->EvaluateBooleanInput(Node, TEXT("boolean"), Node->Data.Value.GetBool(false)));
+				Arr[Index].SetBool(Evaluator->EvaluateBooleanInput(Node, TEXT("boolean-4"), Node->Data.Value.GetBool(false)));
 				break;
 			case EStoryFlowNodeType::SetIntArrayElement:
-				Arr[Index].SetInt(Evaluator->EvaluateIntegerInput(Node, StoryFlowHandles::In_IntegerValue, Node->Data.Value.GetInt(0)));
+				Arr[Index].SetInt(Evaluator->EvaluateIntegerInput(Node, TEXT("integer-4"), Node->Data.Value.GetInt(0)));
 				break;
 			case EStoryFlowNodeType::SetFloatArrayElement:
-				Arr[Index].SetFloat(Evaluator->EvaluateFloatInput(Node, TEXT("float"), Node->Data.Value.GetFloat(0.0f)));
+				Arr[Index].SetFloat(Evaluator->EvaluateFloatInput(Node, TEXT("float-4"), Node->Data.Value.GetFloat(0.0f)));
 				break;
 			case EStoryFlowNodeType::SetStringArrayElement:
 			{
 				FString ResolvedFallback = ExecutionContext.GetString(Node->Data.Value.GetString(), LanguageCode);
-				Arr[Index].SetString(Evaluator->EvaluateStringInput(Node, TEXT("string"), ResolvedFallback));
+				Arr[Index].SetString(Evaluator->EvaluateStringInput(Node, TEXT("string-4"), ResolvedFallback));
 				break;
 			}
+			case EStoryFlowNodeType::SetImageArrayElement:
+				Arr[Index].SetString(Evaluator->EvaluateStringInput(Node, TEXT("image-4"), Node->Data.Value.GetString()));
+				break;
+			case EStoryFlowNodeType::SetCharacterArrayElement:
+				Arr[Index].SetString(Evaluator->EvaluateStringInput(Node, TEXT("character-4"), Node->Data.Value.GetString()));
+				break;
+			case EStoryFlowNodeType::SetAudioArrayElement:
+				Arr[Index].SetString(Evaluator->EvaluateStringInput(Node, TEXT("audio-4"), Node->Data.Value.GetString()));
+				break;
 			default:
-				Arr[Index].SetString(Evaluator->EvaluateStringInput(Node, TEXT("string"), Node->Data.Value.GetString()));
 				break;
 			}
 		}
@@ -2086,25 +2094,25 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 	// Determine operation type from node type name
 	switch (Node->Type)
 	{
-	// Add operations
+	// Add operations (editor handles: array "<type>-array-2", value "<type>-3")
 	case EStoryFlowNodeType::AddToBoolArray:
 	{
 		FStoryFlowVariant Elem;
-		Elem.SetBool(Evaluator ? Evaluator->EvaluateBooleanInput(Node, TEXT("boolean"), Node->Data.Value.GetBool(false)) : Node->Data.Value.GetBool(false));
+		Elem.SetBool(Evaluator ? Evaluator->EvaluateBooleanInput(Node, TEXT("boolean-3"), Node->Data.Value.GetBool(false)) : Node->Data.Value.GetBool(false));
 		Arr.Add(Elem);
 		break;
 	}
 	case EStoryFlowNodeType::AddToIntArray:
 	{
 		FStoryFlowVariant Elem;
-		Elem.SetInt(Evaluator ? Evaluator->EvaluateIntegerInput(Node, TEXT("integer"), Node->Data.Value.GetInt(0)) : Node->Data.Value.GetInt(0));
+		Elem.SetInt(Evaluator ? Evaluator->EvaluateIntegerInput(Node, TEXT("integer-3"), Node->Data.Value.GetInt(0)) : Node->Data.Value.GetInt(0));
 		Arr.Add(Elem);
 		break;
 	}
 	case EStoryFlowNodeType::AddToFloatArray:
 	{
 		FStoryFlowVariant Elem;
-		Elem.SetFloat(Evaluator ? Evaluator->EvaluateFloatInput(Node, TEXT("float"), Node->Data.Value.GetFloat(0.0f)) : Node->Data.Value.GetFloat(0.0f));
+		Elem.SetFloat(Evaluator ? Evaluator->EvaluateFloatInput(Node, TEXT("float-3"), Node->Data.Value.GetFloat(0.0f)) : Node->Data.Value.GetFloat(0.0f));
 		Arr.Add(Elem);
 		break;
 	}
@@ -2112,7 +2120,7 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 	{
 		FStoryFlowVariant Elem;
 		FString ResolvedFallback = ExecutionContext.GetString(Node->Data.Value.GetString(), LanguageCode);
-		FString EvalResult = Evaluator ? Evaluator->EvaluateStringInput(Node, TEXT("string"), ResolvedFallback) : ResolvedFallback;
+		FString EvalResult = Evaluator ? Evaluator->EvaluateStringInput(Node, TEXT("string-3"), ResolvedFallback) : ResolvedFallback;
 		// If evaluator returned empty but we have a resolved default, use the default
 		// (the input edge may evaluate a localization key that the string evaluator can't resolve)
 		if (EvalResult.IsEmpty() && !ResolvedFallback.IsEmpty())
@@ -2124,11 +2132,23 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 		break;
 	}
 	case EStoryFlowNodeType::AddToImageArray:
+	{
+		FStoryFlowVariant Elem;
+		Elem.SetString(Evaluator ? Evaluator->EvaluateStringInput(Node, TEXT("image-3"), Node->Data.Value.GetString()) : Node->Data.Value.GetString());
+		Arr.Add(Elem);
+		break;
+	}
 	case EStoryFlowNodeType::AddToCharacterArray:
+	{
+		FStoryFlowVariant Elem;
+		Elem.SetString(Evaluator ? Evaluator->EvaluateStringInput(Node, TEXT("character-3"), Node->Data.Value.GetString()) : Node->Data.Value.GetString());
+		Arr.Add(Elem);
+		break;
+	}
 	case EStoryFlowNodeType::AddToAudioArray:
 	{
 		FStoryFlowVariant Elem;
-		Elem.SetString(Evaluator ? Evaluator->EvaluateStringInput(Node, TEXT("string"), Node->Data.Value.GetString()) : Node->Data.Value.GetString());
+		Elem.SetString(Evaluator ? Evaluator->EvaluateStringInput(Node, TEXT("audio-3"), Node->Data.Value.GetString()) : Node->Data.Value.GetString());
 		Arr.Add(Elem);
 		break;
 	}
@@ -2620,10 +2640,25 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 
 	// Get the value to set - check for connected input edge
 	FStoryFlowVariant NewValue;
-	FString InputHandleSuffix = VariableType + TEXT("-input");
+	const bool bIsArray = Node->Data.bIsArray;
+	// Array variables wire through "<type>-array-input", scalars through "<type>-input"
+	FString InputHandleSuffix = VariableType + (bIsArray ? TEXT("-array-input") : TEXT("-input"));
 	const FStoryFlowConnection* InputEdge = ExecutionContext.FindInputEdge(Node->Id, InputHandleSuffix);
 
-	if (InputEdge)
+	if (bIsArray)
+	{
+		if (InputEdge && Evaluator)
+		{
+			NewValue.SetArray(EvaluateCharacterVarArrayInput(Node, VariableType, InputHandleSuffix));
+		}
+		else if (Node->Data.Value.GetArray().Num() > 0)
+		{
+			// Use inline array value from node data
+			NewValue = Node->Data.Value;
+		}
+		// Unwired with no inline array: leave NewValue empty (matches the HTML runtime's [] default)
+	}
+	else if (InputEdge)
 	{
 		// Evaluate the connected node
 		FStoryFlowNode* SourceNode = ExecutionContext.GetNode(InputEdge->Source);
@@ -2673,7 +2708,8 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: HandleSetCharacterVar - Setting '%s' on character '%s' to '%s'"),
 		*VariableName, *CharacterPath, *NewValue.ToString());
 
-	SF_TRACE(ExecutionContext, "VAR SET \"%s.%s\" global=false value=%s", *CharacterPath, *VariableName, *NewValue.ToString());
+	FString ValueStr = bIsArray ? FString::Printf(TEXT("[%d elements]"), NewValue.GetArray().Num()) : NewValue.ToString();
+	SF_TRACE(ExecutionContext, "VAR SET \"%s.%s\" global=false value=%s", *CharacterPath, *VariableName, *ValueStr);
 
 	// Detect whether the mutation will succeed so we can fire OnCharacterVariableChanged
 	// after the fact. The branches mirror ExecutionContext::SetCharacterVariable.
@@ -2736,6 +2772,36 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 
 	// Continue execution
 	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
+}
+
+TArray<FStoryFlowVariant> UStoryFlowComponent::EvaluateCharacterVarArrayInput(FStoryFlowNode* Node, const FString& VariableType, const FString& HandleSuffix)
+{
+	if (VariableType == TEXT("boolean"))
+	{
+		return Evaluator->EvaluateBoolArrayInput(Node, HandleSuffix);
+	}
+	if (VariableType == TEXT("integer"))
+	{
+		return Evaluator->EvaluateIntArrayInput(Node, HandleSuffix);
+	}
+	if (VariableType == TEXT("float"))
+	{
+		return Evaluator->EvaluateFloatArrayInput(Node, HandleSuffix);
+	}
+	if (VariableType == TEXT("image"))
+	{
+		return Evaluator->EvaluateImageArrayInput(Node, HandleSuffix);
+	}
+	if (VariableType == TEXT("character"))
+	{
+		return Evaluator->EvaluateCharacterArrayInput(Node, HandleSuffix);
+	}
+	if (VariableType == TEXT("audio"))
+	{
+		return Evaluator->EvaluateAudioArrayInput(Node, HandleSuffix);
+	}
+	// String / enum - string-keyed storage (matches the HTML runtime's default branch)
+	return Evaluator->EvaluateStringArrayInput(Node, HandleSuffix);
 }
 
 // ============================================================================

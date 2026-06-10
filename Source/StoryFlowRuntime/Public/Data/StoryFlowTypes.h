@@ -771,6 +771,10 @@ struct STORYFLOWRUNTIME_API FStoryFlowNodeData
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString VariableType;
 
+	/** Array flag for character variable nodes */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	bool bIsArray = false;
+
 	// === Random Branch Fields ===
 
 	/** Weighted output options (for randomBranch nodes) */

@@ -449,6 +449,15 @@ protected:
 	void HandleGetCharacterVar(FStoryFlowNode* Node);
 	void HandleSetCharacterVar(FStoryFlowNode* Node);
 
+	/**
+	 * Evaluate the wired array input of a setCharacterVar node, dispatching to the
+	 * evaluator's typed array reader for the variable's element type. TArray value
+	 * semantics return a container copy, so the character variable never aliases
+	 * the source array (matches the HTML runtime's .slice() semantics).
+	 * Caller must ensure Evaluator is valid.
+	 */
+	TArray<FStoryFlowVariant> EvaluateCharacterVarArrayInput(FStoryFlowNode* Node, const FString& VariableType, const FString& HandleSuffix);
+
 	// === Helper Functions ===
 
 	/** Find a variable by display name, falling back to subsystem globals/characters when outside dialogue */

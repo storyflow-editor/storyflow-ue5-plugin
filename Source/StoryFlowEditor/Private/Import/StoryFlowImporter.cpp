@@ -605,6 +605,10 @@ FStoryFlowNodeData UStoryFlowImporter::ParseNodeData(const TSharedPtr<FJsonObjec
 	{
 		Data.VariableType = NodeObject->GetStringField(TEXT("variableType"));
 	}
+	if (NodeObject->HasField(TEXT("isArray")))
+	{
+		Data.bIsArray = NodeObject->GetBoolField(TEXT("isArray"));
+	}
 
 	return Data;
 }

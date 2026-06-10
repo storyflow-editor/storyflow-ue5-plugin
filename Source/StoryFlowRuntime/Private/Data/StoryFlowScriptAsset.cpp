@@ -154,11 +154,16 @@ const FStoryFlowConnection* UStoryFlowScriptAsset::FindInputEdge(const FString& 
 		// Fallback: prefix match for handles with trailing option ID.
 		// The editor appends a numbered suffix to handles (e.g., "string-2", "string-array-1")
 		// while the runtime constants omit it (e.g., "string", "string-array").
+		// A scalar suffix ("string") must not swallow its array sibling
+		// ("string-array-1") on nodes carrying both inputs (e.g. arrayContains,
+		// getArrayElement) — the HTML runtime is immune because it queries with
+		// fully numbered handles.
 		const FString Prefix = Pattern + TEXT("-");
+		const FString ArrayPrefix = Prefix + TEXT("array-");
 		for (int32 Idx : *Indices)
 		{
 			const FStoryFlowConnection& Conn = Connections[Idx];
-			if (Conn.TargetHandle.StartsWith(Prefix))
+			if (Conn.TargetHandle.StartsWith(Prefix) && !Conn.TargetHandle.StartsWith(ArrayPrefix))
 			{
 				return &Conn;
 			}
