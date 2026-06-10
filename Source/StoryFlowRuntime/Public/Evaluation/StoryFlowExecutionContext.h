@@ -275,7 +275,7 @@ public:
 	/** Interpolate variables in text */
 	FString InterpolateVariables(const FString& Text) const;
 
-	/** Resolve string table keys in string-type variable initial values (scalar + array) */
+	/** Resolve string table keys in string-type variable initial values (scalar + array + string-valued map entries; map keys never resolve) */
 	void ResolveStringVariableValues(TMap<FString, FStoryFlowVariable>& Variables) const;
 
 	// === Validation ===

@@ -1692,6 +1692,12 @@ TArray<FStoryFlowMapEntry>* FStoryFlowEvaluator::EvaluateMapInput(FStoryFlowNode
 
 FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariable(FStoryFlowNode* Node, const FString& OptionId, bool* bOutIsGlobal, bool* bOutIsCharacterSource)
 {
+	// Reset both out-flags up front so they are deterministic even on null return
+	// (symmetric — callers must not read stale values from either flag).
+	if (bOutIsGlobal)
+	{
+		*bOutIsGlobal = false;
+	}
 	if (bOutIsCharacterSource)
 	{
 		*bOutIsCharacterSource = false;
@@ -1816,7 +1822,8 @@ FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariable(FStoryFlowNode*
 			if (!Var->Value.IsMap())
 			{
 				// Variable imported without an initial value — establish the map
-				// type so the returned storage is correctly typed for mutation.
+				// type so the returned storage is correctly typed for reads
+				// (charvar chains are read-only; see bOutIsCharacterSource above).
 				Var->Value.SetMap(TArray<FStoryFlowMapEntry>());
 			}
 			if (bOutIsGlobal)

@@ -2966,7 +2966,9 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 			}
 		}
 
-		// Trace shape matches the map pin on HandleSetMap (size=, not value=)
+		// Trace shape matches the map pin on HandleSetMap (size=, not value=).
+		// HTML traces before the write check — trace-then-gate order is parity,
+		// don't reorder.
 		SF_TRACE(ExecutionContext, "VAR SET \"%s.%s\" global=false size=%d", *CharacterPath, *VariableName, NewEntries.Num());
 
 		// Write only when the variable exists and is map-typed (HTML's

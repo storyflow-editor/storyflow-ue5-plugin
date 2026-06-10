@@ -568,6 +568,27 @@ void FStoryFlowExecutionContext::ResolveStringVariableValues(TMap<FString, FStor
 				}
 			}
 		}
+		else if (VarPair.Value.Type == EStoryFlowVariableType::Map &&
+			VarPair.Value.ValueType == EStoryFlowVariableType::String)
+		{
+			// Map entry VALUES of string valueType store exported strings-table keys
+			// verbatim (importer ParseMapEntries) — resolve them at this load boundary,
+			// the identical path/timing scalar string variables use, against the same
+			// table scoping (current script's strings, then project globals). KEYS are
+			// raw identifiers and must NEVER resolve, regardless of keyType. In-place
+			// value rewrite preserves entry order.
+			if (VarPair.Value.Value.IsMap())
+			{
+				for (FStoryFlowMapEntry& Entry : VarPair.Value.Value.GetMapMutable())
+				{
+					FString Key = Entry.Value.GetString();
+					if (!Key.IsEmpty())
+					{
+						Entry.Value.SetString(GetString(Key));
+					}
+				}
+			}
+		}
 	}
 }
 
