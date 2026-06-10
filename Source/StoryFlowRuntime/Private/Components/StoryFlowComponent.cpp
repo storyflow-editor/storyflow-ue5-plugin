@@ -1122,7 +1122,16 @@ void UStoryFlowComponent::ProcessNode(FStoryFlowNode* Node)
 	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: ProcessNode id='%s' type='%s' (%d)"),
 		*Node->Id, *Node->TypeString, static_cast<int32>(Node->Type));
 
-	SF_TRACE(ExecutionContext, "NODE %s %s", *Node->Id, *Node->TypeString);
+	// Trace parity: the HTML runtime never processes start nodes — every entry
+	// point (initial load, runScript, flows) follows the edge out of "0" and
+	// processes its TARGET directly, so HTML traces never contain a start hop.
+	// UE routes through the start node; suppress its NODE line (and the matching
+	// EDGE line in ProcessNextNode) so traces diff 1:1 against the editor's
+	// map-trace-fixture snapshot.
+	if (Node->Type != EStoryFlowNodeType::Start)
+	{
+		SF_TRACE(ExecutionContext, "NODE %s %s", *Node->Id, *Node->TypeString);
+	}
 
 	ExecutionContext.CurrentNodeId = Node->Id;
 
@@ -1345,7 +1354,15 @@ void UStoryFlowComponent::ProcessNextNode(const FString& SourceHandle)
 
 	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Found edge: source='%s' -> target='%s'"), *Edge->Source, *Edge->Target);
 
-	SF_TRACE(ExecutionContext, "EDGE %s:%s -> %s", *Edge->Source, *Edge->SourceHandle, *Edge->Target);
+	// Trace parity: suppress the edge OUT of a start node — the HTML runtime
+	// follows it without tracing (see the matching NODE gate in ProcessNode).
+	{
+		FStoryFlowNode* EdgeSourceNode = ExecutionContext.GetNode(Edge->Source);
+		if (!EdgeSourceNode || EdgeSourceNode->Type != EStoryFlowNodeType::Start)
+		{
+			SF_TRACE(ExecutionContext, "EDGE %s:%s -> %s", *Edge->Source, *Edge->SourceHandle, *Edge->Target);
+		}
+	}
 
 	FStoryFlowNode* TargetNode = ExecutionContext.GetNode(Edge->Target);
 	if (!TargetNode)
@@ -1883,11 +1900,9 @@ void UStoryFlowComponent::HandleEntryFlow(FStoryFlowNode* Node)
 
 void UStoryFlowComponent::HandleGetBool(FStoryFlowNode* Node)
 {
-	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
-	{
-		SF_TRACE(ExecutionContext, "VAR GET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Var->Value.ToString());
-	}
-	// Data node - just continue
+	// Data node - just continue. No VAR GET trace here: the HTML runtime emits
+	// VAR GET on data-pull EVALUATION of get/set variable nodes (see the
+	// evaluator's Get*/Set* arms), never when a get node sits in the exec chain.
 	ProcessNextNode(StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Boolean));
 }
 
@@ -1913,10 +1928,7 @@ void UStoryFlowComponent::HandleSetBool(FStoryFlowNode* Node)
 
 void UStoryFlowComponent::HandleGetInt(FStoryFlowNode* Node)
 {
-	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
-	{
-		SF_TRACE(ExecutionContext, "VAR GET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Var->Value.ToString());
-	}
+	// No VAR GET trace — see HandleGetBool
 	ProcessNextNode(StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Integer));
 }
 
@@ -1942,10 +1954,7 @@ void UStoryFlowComponent::HandleSetInt(FStoryFlowNode* Node)
 
 void UStoryFlowComponent::HandleGetFloat(FStoryFlowNode* Node)
 {
-	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
-	{
-		SF_TRACE(ExecutionContext, "VAR GET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Var->Value.ToString());
-	}
+	// No VAR GET trace — see HandleGetBool
 	ProcessNextNode(StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Float));
 }
 
@@ -1971,10 +1980,7 @@ void UStoryFlowComponent::HandleSetFloat(FStoryFlowNode* Node)
 
 void UStoryFlowComponent::HandleGetString(FStoryFlowNode* Node)
 {
-	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
-	{
-		SF_TRACE(ExecutionContext, "VAR GET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Var->Value.ToString());
-	}
+	// No VAR GET trace — see HandleGetBool
 	ProcessNextNode(StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_String));
 }
 
@@ -2001,10 +2007,7 @@ void UStoryFlowComponent::HandleSetString(FStoryFlowNode* Node)
 
 void UStoryFlowComponent::HandleGetEnum(FStoryFlowNode* Node)
 {
-	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
-	{
-		SF_TRACE(ExecutionContext, "VAR GET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Var->Value.ToString());
-	}
+	// No VAR GET trace — see HandleGetBool
 	ProcessNextNode(StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Enum));
 }
 

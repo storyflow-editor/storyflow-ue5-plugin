@@ -1,0 +1,68 @@
+[SF-TRACE] NODE 11 setMapValue
+[SF-TRACE] EDGE 11:source-11-1 -> 12
+[SF-TRACE] NODE 12 removeMapKey
+[SF-TRACE] EDGE 12:source-12-1 -> 13
+[SF-TRACE] NODE 13 setMap
+[SF-TRACE] VAR SET "inv2" global=false size=1
+[SF-TRACE] EDGE 13:source-13-1 -> 14
+[SF-TRACE] NODE 14 setMapValue
+[SF-TRACE] EDGE 14:source-14-1 -> 30
+[SF-TRACE] NODE 30 setInt
+[SF-TRACE] EVAL 21 mapSize result=2
+[SF-TRACE] VAR SET "size" global=false value=2
+[SF-TRACE] EDGE 30:source-30-1 -> 31
+[SF-TRACE] NODE 31 setBool
+[SF-TRACE] EVAL 22 hasMapKey result=true
+[SF-TRACE] VAR SET "found" global=false value=true
+[SF-TRACE] EDGE 31:source-31-1 -> 32
+[SF-TRACE] NODE 32 setInt
+[SF-TRACE] EVAL 23 getMapValue result=2
+[SF-TRACE] VAR SET "silverVal" global=false value=2
+[SF-TRACE] EDGE 32:source-32-1 -> 33
+[SF-TRACE] NODE 33 setInt
+[SF-TRACE] EVAL 24 getMapValue result=0
+[SF-TRACE] VAR SET "goldVal" global=false value=0
+[SF-TRACE] EDGE 33:source-33-1 -> 34
+[SF-TRACE] NODE 34 setBool
+[SF-TRACE] EVAL 24 getMapValue result=false
+[SF-TRACE] VAR SET "goldOk" global=false value=false
+[SF-TRACE] EDGE 34:source-34-1 -> 35
+[SF-TRACE] NODE 35 setInt
+[SF-TRACE] EVAL 27 arrayLengthString result=2
+[SF-TRACE] VAR SET "keyCount" global=false value=2
+[SF-TRACE] EDGE 35:source-35-1 -> 36
+[SF-TRACE] NODE 36 setInt
+[SF-TRACE] EVAL 28 arrayLengthInt result=2
+[SF-TRACE] VAR SET "valCount" global=false value=2
+[SF-TRACE] EDGE 36:source-36-1 -> 37
+[SF-TRACE] NODE 37 setString
+[SF-TRACE] EVAL 29A getStringArrayElement result=silver
+[SF-TRACE] VAR SET "firstKey" global=false value=silver
+[SF-TRACE] EDGE 37:source-37-1 -> 38
+[SF-TRACE] NODE 38 setInt
+[SF-TRACE] EVAL 29B getIntArrayElement result=9
+[SF-TRACE] VAR SET "secondVal" global=false value=9
+[SF-TRACE] EDGE 38:source-38-1 -> 40
+[SF-TRACE] NODE 40 forEachMap
+[SF-TRACE] LOOP 40 index=0 key=silver value=2
+[SF-TRACE] EDGE 40:source-40-loopBody -> 43
+[SF-TRACE] NODE 43 setInt
+[SF-TRACE] VAR GET "looted" global=false value=0
+[SF-TRACE] EVAL 41 getInt result=0
+[SF-TRACE] EVAL 40 forEachMap result=2
+[SF-TRACE] EVAL 42 plus result=2
+[SF-TRACE] VAR SET "looted" global=false value=2
+[SF-TRACE] NODE 40 forEachMap
+[SF-TRACE] LOOP 40 index=1 key=copper value=9
+[SF-TRACE] EDGE 40:source-40-loopBody -> 43
+[SF-TRACE] NODE 43 setInt
+[SF-TRACE] VAR GET "looted" global=false value=2
+[SF-TRACE] EVAL 41 getInt result=2
+[SF-TRACE] EVAL 40 forEachMap result=9
+[SF-TRACE] EVAL 42 plus result=11
+[SF-TRACE] VAR SET "looted" global=false value=11
+[SF-TRACE] NODE 40 forEachMap
+[SF-TRACE] EDGE 40:source-40-completed -> 50
+[SF-TRACE] NODE 50 clearMap
+[SF-TRACE] EDGE 50:source-50-1 -> 99
+[SF-TRACE] NODE 99 end

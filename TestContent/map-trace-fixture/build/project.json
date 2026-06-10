@@ -1,0 +1,11 @@
+{
+  "version": "2.0.0",
+  "apiVersion": "1.0",
+  "metadata": {
+    "title": "Map Trace Fixture",
+    "description": "Cross-runtime map trace acceptance fixture (see map-trace-fixture.test.ts)",
+    "created": "2026-06-10T17:53:04.631Z",
+    "modified": "2026-06-10T17:53:04.631Z"
+  },
+  "startupScript": "map-trace-fixture.json"
+}

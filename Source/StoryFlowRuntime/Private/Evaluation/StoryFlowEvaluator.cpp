@@ -182,6 +182,12 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
 		Result = Var ? Var->Value.GetBool() : false;
+		// HTML parity: the evaluator's get/set arm emits VAR GET on every data
+		// pull (runtime-evaluators.js), before the EVAL line below.
+		if (Var)
+		{
+			SF_EVAL_TRACE("VAR GET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Var->Value.ToString());
+		}
 		break;
 	}
 
@@ -556,6 +562,13 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
 		Result = Var ? Var->Value.GetInt() : 0;
+		// HTML parity: VAR GET on every data pull, before the EVAL line (see the
+		// boolean evaluator's arm). Pinned by the map-trace-fixture snapshot
+		// (getInt "looted" inside the forEachMap body).
+		if (Var)
+		{
+			SF_EVAL_TRACE("VAR GET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Var->Value.ToString());
+		}
 		break;
 	}
 
@@ -928,6 +941,11 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
 		Result = Var ? Var->Value.GetFloat() : 0.0f;
+		// HTML parity: VAR GET on every data pull (see the boolean evaluator's arm)
+		if (Var)
+		{
+			SF_EVAL_TRACE("VAR GET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Var->Value.ToString());
+		}
 		break;
 	}
 
@@ -1171,6 +1189,11 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
 		Result = Var ? Var->Value.GetString() : TEXT("");
+		// HTML parity: VAR GET on every data pull (see the boolean evaluator's arm)
+		if (Var)
+		{
+			SF_EVAL_TRACE("VAR GET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Var->Value.ToString());
+		}
 		break;
 	}
 
@@ -1215,6 +1238,11 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
 		Result = Var ? Var->Value.GetString() : TEXT("");
+		// HTML parity: VAR GET on every data pull (see the boolean evaluator's arm)
+		if (Var)
+		{
+			SF_EVAL_TRACE("VAR GET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Var->Value.ToString());
+		}
 		break;
 	}
 
@@ -1243,6 +1271,11 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
 		Result = Var ? Var->Value.GetString() : TEXT("");
+		// HTML parity: VAR GET on every data pull (see the boolean evaluator's arm)
+		if (Var)
+		{
+			SF_EVAL_TRACE("VAR GET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Var->Value.ToString());
+		}
 		break;
 	}
 
@@ -1259,6 +1292,11 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
 		Result = Var ? Var->Value.GetString() : TEXT("");
+		// HTML parity: VAR GET on every data pull (see the boolean evaluator's arm)
+		if (Var)
+		{
+			SF_EVAL_TRACE("VAR GET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Var->Value.ToString());
+		}
 		break;
 	}
 
@@ -1267,6 +1305,11 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
 		Result = Var ? Var->Value.GetString() : TEXT("");
+		// HTML parity: VAR GET on every data pull (see the boolean evaluator's arm)
+		if (Var)
+		{
+			SF_EVAL_TRACE("VAR GET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Var->Value.ToString());
+		}
 		break;
 	}
 
