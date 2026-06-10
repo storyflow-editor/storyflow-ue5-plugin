@@ -2143,6 +2143,18 @@ void FStoryFlowEvaluator::ProcessBooleanChain(FStoryFlowNode* Node)
 		break;
 	}
 
+	case EStoryFlowNodeType::ForEachBoolLoop:
+	{
+		// The loop handler stores the CURRENT ELEMENT in CachedOutput each iteration, and
+		// the boolean evaluator has no ForEachBoolLoop arm - element reads resolve entirely
+		// through that cache hit. The default arm below would wipe the live element and then
+		// cache a stale 'false' from the empty-handle evaluation, so a bool element wired
+		// into a branch condition inside its own loop body would always read false. Leave
+		// the cache untouched. (The other typed forEach loops never appear in boolean
+		// chains - their element outputs aren't boolean.)
+		break;
+	}
+
 	default:
 	{
 		// For any other type that produces a boolean (comparisons, array contains, type conversions, etc.),
