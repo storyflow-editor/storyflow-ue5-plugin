@@ -1074,6 +1074,11 @@ void UStoryFlowComponent::ResetVariables()
 	{
 		ExecutionContext.LocalVariables = CurrentScriptAsset->Variables;
 		DeepCopyMapVariables(ExecutionContext.LocalVariables); // detach shared map storage from the asset
+		// Resolve string-table keys to localized text, exactly like Initialize does at
+		// every other asset->runtime copy (after the detach, so resolution mutates the
+		// runtime copy and never the asset). Without this, string variables display raw
+		// keys like "var_3_value" after a reset.
+		ExecutionContext.ResolveStringVariableValues(ExecutionContext.LocalVariables);
 		ExecutionContext.RebuildLocalNameIndex();
 	}
 
