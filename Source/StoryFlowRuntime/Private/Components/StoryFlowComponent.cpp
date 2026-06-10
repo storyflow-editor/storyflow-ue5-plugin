@@ -1257,8 +1257,8 @@ const TMap<EStoryFlowNodeType, UStoryFlowComponent::FNodeHandler>& UStoryFlowCom
 		T.Add(EStoryFlowNodeType::MapKeys,      &UStoryFlowComponent::HandleMapPureNode);
 		T.Add(EStoryFlowNodeType::MapValues,    &UStoryFlowComponent::HandleMapPureNode);
 
-		// ForEachMap is deliberately UNREGISTERED until Task 5 implements map
-		// entry iteration — it falls to the "Unsupported node type" skip path.
+		// Map entry iteration (snapshot-at-init semantics — see HandleForEachMap)
+		T.Add(EStoryFlowNodeType::ForEachMap, &UStoryFlowComponent::HandleForEachMap);
 
 		return T;
 	}();
@@ -2458,6 +2458,99 @@ void UStoryFlowComponent::HandleForEachLoop(FStoryFlowNode* Node)
 		// Loop complete - cleanup
 		NodeState.bLoopInitialized = false;
 		NodeState.LoopArray.Empty();
+		NodeState.bHasCachedOutput = false;
+		NodeState.CachedOutput.Reset();
+
+		if (ExecutionContext.LoopStack.Num() > 0 && ExecutionContext.LoopStack.Last().NodeId == Node->Id)
+		{
+			ExecutionContext.LoopStack.Pop();
+		}
+
+		// Continue after loop
+		ProcessNextNode(StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_LoopCompleted));
+	}
+}
+
+void UStoryFlowComponent::HandleForEachMap(FStoryFlowNode* Node)
+{
+	// Mirrors the HTML runtime's processForEachMap: iterate map entries (Key +
+	// Value) in insertion order. Entries are SNAPSHOT once at loop init — body
+	// mutations (even removeMapKey of the current key) land on the live map but
+	// neither skip, repeat, nor extend iteration. ContinueForEachLoop re-enters
+	// here via the dispatch table (it reuses LoopIndex/bLoopInitialized).
+
+	// Missing K/V types: the map input handle cannot be built — HTML follows
+	// "completed" immediately with zero iterations.
+	if (Node->Data.KeyType.IsEmpty() || Node->Data.ValueType.IsEmpty())
+	{
+		ProcessNextNode(StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_LoopCompleted));
+		return;
+	}
+
+	FNodeRuntimeState& NodeState = ExecutionContext.GetNodeState(Node->Id);
+
+	// Initialize loop on first entry: resolve the live map (input "map") and
+	// copy its entries immediately (pointer-lifetime rule on EvaluateMapInput
+	// — never hold the live pointer; mutators realloc the storage in place)
+	if (!NodeState.bLoopInitialized)
+	{
+		TArray<FStoryFlowMapEntry> Entries;
+		if (Evaluator)
+		{
+			if (const TArray<FStoryFlowMapEntry>* Map = Evaluator->EvaluateMapInput(Node, TEXT("map")))
+			{
+				Entries = *Map;
+			}
+		}
+
+		NodeState.LoopEntries = MoveTemp(Entries);
+		NodeState.LoopIndex = 0;
+		NodeState.bLoopInitialized = true;
+	}
+
+	if (NodeState.LoopIndex < NodeState.LoopEntries.Num())
+	{
+		// Clear evaluation caches from previous iteration so boolean chains re-evaluate
+		ExecutionContext.ClearEvaluationCache();
+
+		// Restore cached outputs for all active outer ARRAY loops (nested forEach
+		// support — mirrors HandleForEachLoop). Outer MAP loops need no restore:
+		// their LoopKey/LoopValue live outside the evaluation cache.
+		for (const FStoryFlowLoopContext& Frame : ExecutionContext.LoopStack)
+		{
+			FNodeRuntimeState& OuterState = ExecutionContext.GetNodeState(Frame.NodeId);
+			if (OuterState.bLoopInitialized && OuterState.LoopIndex < OuterState.LoopArray.Num())
+			{
+				OuterState.CachedOutput = OuterState.LoopArray[OuterState.LoopIndex];
+				OuterState.bHasCachedOutput = true;
+			}
+		}
+
+		// Expose the current entry's Key/Value (read by the typed evaluators
+		// via the "-key"/"-value" source handle suffixes)
+		const FStoryFlowMapEntry& Entry = NodeState.LoopEntries[NodeState.LoopIndex];
+		NodeState.LoopKey = Entry.Key;
+		NodeState.LoopValue = Entry.Value;
+
+		SF_TRACE(ExecutionContext, "LOOP %s index=%d key=%s value=%s", *Node->Id, NodeState.LoopIndex, *NodeState.LoopKey.ToString(), *NodeState.LoopValue.ToString());
+
+		// Push loop context for this iteration
+		FStoryFlowLoopContext LoopContext;
+		LoopContext.NodeId = Node->Id;
+		LoopContext.Type = EStoryFlowLoopType::ForEach;
+		LoopContext.CurrentIndex = NodeState.LoopIndex;
+		ExecutionContext.LoopStack.Push(LoopContext);
+
+		// Execute loop body
+		ProcessNextNode(StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_LoopBody));
+	}
+	else
+	{
+		// Loop complete - cleanup
+		NodeState.bLoopInitialized = false;
+		NodeState.LoopEntries.Empty();
+		NodeState.LoopKey.Reset();
+		NodeState.LoopValue.Reset();
 		NodeState.bHasCachedOutput = false;
 		NodeState.CachedOutput.Reset();
 

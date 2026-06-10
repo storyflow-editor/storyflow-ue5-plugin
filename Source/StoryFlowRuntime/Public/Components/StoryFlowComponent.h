@@ -432,6 +432,7 @@ protected:
 
 	// Loop Handlers
 	void HandleForEachLoop(FStoryFlowNode* Node);
+	void HandleForEachMap(FStoryFlowNode* Node);
 	void ContinueForEachLoop(const FString& NodeId);
 
 	// Enum Handlers

@@ -40,6 +40,19 @@ struct FNodeRuntimeState
 	TArray<FStoryFlowVariant> LoopArray;
 	bool bLoopInitialized = false;
 
+	/**
+	 * Map loop state (forEachMap). LoopEntries is a SNAPSHOT taken once at loop
+	 * init — body mutations land on the live map but never affect iteration.
+	 * LoopKey/LoopValue expose the current entry to the typed evaluators (read
+	 * via the "-key"/"-value" source handle suffixes). They live in dedicated
+	 * fields rather than CachedOutput so ClearEvaluationCache (which wipes
+	 * CachedOutput per iteration) leaves them intact — outer map loops then
+	 * need no restore step in the nested-loop restore pass.
+	 */
+	TArray<FStoryFlowMapEntry> LoopEntries;
+	FStoryFlowVariant LoopKey;
+	FStoryFlowVariant LoopValue;
+
 	/** Output values from a completed RunScript call (keyed by variable ID) */
 	TMap<FString, FStoryFlowVariant> OutputValues;
 	bool bHasOutputValues = false;

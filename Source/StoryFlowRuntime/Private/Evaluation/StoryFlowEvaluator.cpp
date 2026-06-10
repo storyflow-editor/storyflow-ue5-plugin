@@ -382,6 +382,28 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 		break;
 	}
 
+	// forEachMap Key/Value — two outputs share one node:
+	//   "source-{id}-{keyType}-key" and "source-{id}-{valueType}-value".
+	// Discriminate by SourceHandle suffix (precedent: getMapValue "-isValid").
+	// Reads come from the iteration SNAPSHOT (LoopKey/LoopValue), not the live
+	// map, so this is NOT a map read for the bIsMapRead cache bypass: within an
+	// iteration the value is constant (caching correct), and the per-iteration
+	// ClearEvaluationCache drops it before the next entry — exactly the array
+	// loop element precedent. keyType can't be "boolean" per spec — the key
+	// branch is unreachable, included for symmetry with the HTML evaluators.
+	case EStoryFlowNodeType::ForEachMap:
+	{
+		if (SourceHandle.EndsWith(TEXT("-key")) && Node->Data.KeyType == TEXT("boolean"))
+		{
+			Result = NodeState.LoopKey.GetBool(false);
+		}
+		else if (SourceHandle.EndsWith(TEXT("-value")) && Node->Data.ValueType == TEXT("boolean"))
+		{
+			Result = NodeState.LoopValue.GetBool(false);
+		}
+		break;
+	}
+
 	case EStoryFlowNodeType::RunScript:
 	{
 		if (NodeState.bHasOutputValues && !SourceHandle.IsEmpty())
@@ -679,6 +701,23 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 		{
 			// Return current element value for ForEachIntLoop
 			Result = LoopState.CachedOutput.GetInt();
+		}
+		break;
+	}
+
+	// forEachMap Key/Value (integer) — discriminate by SourceHandle suffix
+	// ("-key"/"-value"); reads come from the iteration snapshot, see the
+	// boolean evaluator's ForEachMap arm for the full pattern note
+	case EStoryFlowNodeType::ForEachMap:
+	{
+		FNodeRuntimeState& LoopState = Context->GetNodeState(Node->Id);
+		if (SourceHandle.EndsWith(TEXT("-key")) && Node->Data.KeyType == TEXT("integer"))
+		{
+			Result = LoopState.LoopKey.GetInt(0);
+		}
+		else if (SourceHandle.EndsWith(TEXT("-value")) && Node->Data.ValueType == TEXT("integer"))
+		{
+			Result = LoopState.LoopValue.GetInt(0);
 		}
 		break;
 	}
@@ -998,6 +1037,24 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 		if (LoopState.bHasCachedOutput)
 		{
 			Result = LoopState.CachedOutput.GetFloat();
+		}
+		break;
+	}
+
+	// forEachMap Key/Value (float) — discriminate by SourceHandle suffix
+	// ("-key"/"-value"); reads come from the iteration snapshot, see the
+	// boolean evaluator's ForEachMap arm for the full pattern note. keyType
+	// can't be "float" per spec — key branch included for symmetry.
+	case EStoryFlowNodeType::ForEachMap:
+	{
+		FNodeRuntimeState& LoopState = Context->GetNodeState(Node->Id);
+		if (SourceHandle.EndsWith(TEXT("-key")) && Node->Data.KeyType == TEXT("float"))
+		{
+			Result = LoopState.LoopKey.GetFloat(0.0f);
+		}
+		else if (SourceHandle.EndsWith(TEXT("-value")) && Node->Data.ValueType == TEXT("float"))
+		{
+			Result = LoopState.LoopValue.GetFloat(0.0f);
 		}
 		break;
 	}
@@ -1326,6 +1383,31 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 		if (LoopState.bHasCachedOutput)
 		{
 			Result = LoopState.CachedOutput.GetString();
+		}
+		break;
+	}
+
+	// forEachMap Key/Value (string-family) — discriminate by SourceHandle suffix
+	// ("-key"/"-value"); reads come from the iteration snapshot, see the boolean
+	// evaluator's ForEachMap arm for the full pattern note. All string-family
+	// types read through this evaluator (enums delegate here via
+	// EvaluateEnumInput, like the GetMapValue string arm above): keys cover
+	// string/enum, values the full string/enum/image/character/audio family.
+	case EStoryFlowNodeType::ForEachMap:
+	{
+		FNodeRuntimeState& LoopState = Context->GetNodeState(Node->Id);
+		const FString& MapKeyType = Node->Data.KeyType;
+		const FString& MapValueType = Node->Data.ValueType;
+		if (SourceHandle.EndsWith(TEXT("-key")) &&
+			(MapKeyType == TEXT("string") || MapKeyType == TEXT("enum")))
+		{
+			Result = LoopState.LoopKey.GetString();
+		}
+		else if (SourceHandle.EndsWith(TEXT("-value")) &&
+			(MapValueType == TEXT("string") || MapValueType == TEXT("enum") || MapValueType == TEXT("image") ||
+			 MapValueType == TEXT("character") || MapValueType == TEXT("audio")))
+		{
+			Result = LoopState.LoopValue.GetString();
 		}
 		break;
 	}
@@ -1891,6 +1973,16 @@ void FStoryFlowEvaluator::ProcessBooleanChain(FStoryFlowNode* Node)
 		// the correct SourceHandle from EvaluateBooleanInput) gets a fresh evaluation.
 		NodeState.bHasCachedOutput = false;
 		NodeState.CachedOutput.Reset();
+		break;
+	}
+
+	case EStoryFlowNodeType::ForEachMap:
+	{
+		// ForEachMap needs the real SourceHandle to discriminate "-key"/"-value" —
+		// the default arm's empty-handle evaluation would cache false and poison
+		// the real read. No-op: the subsequent EvaluateBooleanFromNode (with the
+		// correct SourceHandle) evaluates fresh — the loop handler clears the
+		// evaluation cache at the start of every iteration.
 		break;
 	}
 
