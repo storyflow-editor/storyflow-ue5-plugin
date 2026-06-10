@@ -10,6 +10,42 @@
 
 namespace
 {
+	// Forward declarations (map entries and variant elements recurse into each other)
+	void SerializeVariantElement(FMemoryWriter& Writer, const FStoryFlowVariant& Variant);
+	void DeserializeVariantElement(FMemoryReader& Reader, FStoryFlowVariant& OutVariant);
+
+	/** Write map entries as: entry count, then Key/Value variants per entry (recursive). */
+	void SerializeMapEntries(FMemoryWriter& Writer, const TArray<FStoryFlowMapEntry>& Entries)
+	{
+		int32 EntryNum = Entries.Num();
+		Writer << EntryNum;
+		for (int32 idx = 0; idx < EntryNum; ++idx)
+		{
+			SerializeVariantElement(Writer, Entries[idx].Key);
+			SerializeVariantElement(Writer, Entries[idx].Value);
+		}
+	}
+
+	/** Read map entries written by SerializeMapEntries. */
+	void DeserializeMapEntries(FMemoryReader& Reader, TArray<FStoryFlowMapEntry>& OutEntries)
+	{
+		int32 EntryNum = 0;
+		Reader << EntryNum;
+		OutEntries.SetNum(EntryNum);
+		for (int32 idx = 0; idx < EntryNum; ++idx)
+		{
+			DeserializeVariantElement(Reader, OutEntries[idx].Key);
+			DeserializeVariantElement(Reader, OutEntries[idx].Value);
+		}
+	}
+
+	/**
+	 * Sentinel written in place of the blob's leading array count when the blob holds
+	 * a variant's own map entries. Array blobs always start with a non-negative count,
+	 * so non-map blobs keep their existing byte layout.
+	 */
+	constexpr int32 MapBlobSentinel = -1;
+
 	/** Recursively write a single FStoryFlowVariant element into a memory writer. */
 	void SerializeVariantElement(FMemoryWriter& Writer, const FStoryFlowVariant& Variant)
 	{
@@ -45,6 +81,13 @@ namespace
 		{
 			FString s = Variant.GetString();
 			Writer << s;
+			break;
+		}
+		case EStoryFlowVariableType::Map:
+		{
+			// Map payload replaces the scalar value; only written for the new Map type,
+			// so the byte layout of non-map elements is unchanged
+			SerializeMapEntries(Writer, Variant.GetMap());
 			break;
 		}
 		default:
@@ -116,6 +159,13 @@ namespace
 			OutVariant.SetString(s);
 			break;
 		}
+		case EStoryFlowVariableType::Map:
+		{
+			TArray<FStoryFlowMapEntry> Entries;
+			DeserializeMapEntries(Reader, Entries);
+			OutVariant.SetMap(Entries);
+			break;
+		}
 		default:
 			break;
 		}
@@ -139,6 +189,18 @@ namespace
 void FStoryFlowVariant::PackArrayForSerialization()
 {
 	SerializedArrayData.Empty();
+
+	// Map variants: sentinel in the count slot, then the map entries.
+	// A variant holds either array or map data, never both.
+	if (MapValue.Num() > 0)
+	{
+		FMemoryWriter Writer(SerializedArrayData);
+		int32 Sentinel = MapBlobSentinel;
+		Writer << Sentinel;
+		SerializeMapEntries(Writer, MapValue);
+		return;
+	}
+
 	if (ArrayValue.Num() == 0)
 	{
 		return;
@@ -156,6 +218,7 @@ void FStoryFlowVariant::PackArrayForSerialization()
 void FStoryFlowVariant::UnpackArrayFromSerialization()
 {
 	ArrayValue.Empty();
+	MapValue.Empty();
 	if (SerializedArrayData.Num() == 0)
 	{
 		return;
@@ -164,6 +227,11 @@ void FStoryFlowVariant::UnpackArrayFromSerialization()
 	FMemoryReader Reader(SerializedArrayData);
 	int32 Num = 0;
 	Reader << Num;
+	if (Num == MapBlobSentinel)
+	{
+		DeserializeMapEntries(Reader, MapValue);
+		return;
+	}
 	ArrayValue.SetNum(Num);
 	for (int32 i = 0; i < Num; ++i)
 	{
@@ -386,6 +454,19 @@ EStoryFlowNodeType ParseNodeType(const FString& TypeString)
 		// Character Variables
 		{ TEXT("getCharacterVar"), EStoryFlowNodeType::GetCharacterVar },
 		{ TEXT("setCharacterVar"), EStoryFlowNodeType::SetCharacterVar },
+
+		// Map Variables
+		{ TEXT("getMap"), EStoryFlowNodeType::GetMap },
+		{ TEXT("setMap"), EStoryFlowNodeType::SetMap },
+		{ TEXT("getMapValue"), EStoryFlowNodeType::GetMapValue },
+		{ TEXT("setMapValue"), EStoryFlowNodeType::SetMapValue },
+		{ TEXT("hasMapKey"), EStoryFlowNodeType::HasMapKey },
+		{ TEXT("mapSize"), EStoryFlowNodeType::MapSize },
+		{ TEXT("mapKeys"), EStoryFlowNodeType::MapKeys },
+		{ TEXT("mapValues"), EStoryFlowNodeType::MapValues },
+		{ TEXT("removeMapKey"), EStoryFlowNodeType::RemoveMapKey },
+		{ TEXT("clearMap"), EStoryFlowNodeType::ClearMap },
+		{ TEXT("forEachMap"), EStoryFlowNodeType::ForEachMap },
 	};
 
 	if (const EStoryFlowNodeType* Found = TypeMap.Find(TypeString))

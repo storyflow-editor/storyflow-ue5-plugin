@@ -217,6 +217,19 @@ enum class EStoryFlowNodeType : uint8
 	GetCharacterVar,
 	SetCharacterVar,
 
+	// Map Variables
+	GetMap,
+	SetMap,
+	GetMapValue,
+	SetMapValue,
+	HasMapKey,
+	MapSize,
+	MapKeys,
+	MapValues,
+	RemoveMapKey,
+	ClearMap,
+	ForEachMap,
+
 	// Unknown/Custom
 	Unknown UMETA(Hidden)
 };
@@ -235,7 +248,8 @@ enum class EStoryFlowVariableType : uint8
 	Enum,
 	Image,
 	Audio,
-	Character
+	Character,
+	Map
 };
 
 /**
@@ -261,6 +275,10 @@ enum class EStoryFlowLoopType : uint8
 // ============================================================================
 // Variant Type (Type-safe value container)
 // ============================================================================
+
+// Forward declaration — defined below FStoryFlowVariant (an entry holds variants by value,
+// so the entry struct needs the complete variant type)
+struct FStoryFlowMapEntry;
 
 /**
  * Type-safe value container for StoryFlow variables
@@ -289,6 +307,12 @@ private:
 	// Note: Not a UPROPERTY because UHT doesn't support recursive struct arrays
 	// Still usable in C++ code, just not reflected to Blueprint
 	TArray<FStoryFlowVariant> ArrayValue;
+
+	// Note: Not a UPROPERTY for the same reason as ArrayValue (entries hold variants
+	// recursively). Ordered entry array, NOT a TMap — entry order is observable through
+	// mapKeys/mapValues/forEachMap and must match the editor's serialized order.
+	// Persisted through SerializedArrayData alongside ArrayValue.
+	TArray<FStoryFlowMapEntry> MapValue;
 
 public:
 	// Type checking
@@ -338,6 +362,9 @@ public:
 		}
 	}
 
+	// Defined below FStoryFlowMapEntry (assigning the entry array needs the complete type)
+	void SetMap(const TArray<FStoryFlowMapEntry>& Value);
+
 	// Getters with default fallbacks
 	bool GetBool(bool Default = false) const
 	{
@@ -376,6 +403,21 @@ public:
 		return ArrayValue;
 	}
 
+	bool IsMap() const
+	{
+		return Type == EStoryFlowVariableType::Map;
+	}
+
+	const TArray<FStoryFlowMapEntry>& GetMap() const
+	{
+		return MapValue;
+	}
+
+	TArray<FStoryFlowMapEntry>& GetMapMutable()
+	{
+		return MapValue;
+	}
+
 	// Conversion to string for display
 	FString ToString() const
 	{
@@ -398,17 +440,8 @@ public:
 		}
 	}
 
-	// Reset
-	void Reset()
-	{
-		Type = EStoryFlowVariableType::None;
-		bBoolValue = false;
-		IntValue = 0;
-		FloatValue = 0.0f;
-		StringValue.Empty();
-		ArrayValue.Empty();
-		SerializedArrayData.Empty();
-	}
+	// Reset — defined below FStoryFlowMapEntry (clearing the entry array needs the complete type)
+	void Reset();
 
 	// Static factory methods
 	static FStoryFlowVariant FromBool(bool Value)
@@ -456,6 +489,37 @@ private:
 	TArray<uint8> SerializedArrayData;
 };
 
+/** One map entry. Entry ORDER is observable through mapKeys/mapValues/forEachMap
+ *  and must match the editor's serialized order — which is why map storage is an
+ *  ordered array of entries, not a TMap (unspecified iteration order). */
+struct FStoryFlowMapEntry
+{
+	FStoryFlowVariant Key;
+	FStoryFlowVariant Value;
+};
+
+// FStoryFlowVariant members that need the complete FStoryFlowMapEntry type
+// (declaring TArray<FStoryFlowMapEntry> only needs the forward declaration,
+// but assigning/clearing the entry array does not)
+
+inline void FStoryFlowVariant::SetMap(const TArray<FStoryFlowMapEntry>& Value)
+{
+	Type = EStoryFlowVariableType::Map;
+	MapValue = Value;
+}
+
+inline void FStoryFlowVariant::Reset()
+{
+	Type = EStoryFlowVariableType::None;
+	bBoolValue = false;
+	IntValue = 0;
+	FloatValue = 0.0f;
+	StringValue.Empty();
+	ArrayValue.Empty();
+	MapValue.Empty();
+	SerializedArrayData.Empty();
+}
+
 // ============================================================================
 // Variable Definition
 // ============================================================================
@@ -491,6 +555,22 @@ struct STORYFLOWRUNTIME_API FStoryFlowVariable
 	/** Enum values (for enum type) */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TArray<FString> EnumValues;
+
+	/** Key type (for map type: String, Integer, or Enum) */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	EStoryFlowVariableType KeyType = EStoryFlowVariableType::String;
+
+	/** Value type (for map type) */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	EStoryFlowVariableType ValueType = EStoryFlowVariableType::String;
+
+	/** Key enum values (for map type with enum keys) */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	TArray<FString> KeyEnumValues;
+
+	/** Value enum values (for map type with enum values) */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	TArray<FString> ValueEnumValues;
 
 	/** When true, this variable is exposed as an input on Run Script nodes calling this script */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
@@ -778,6 +858,24 @@ struct STORYFLOWRUNTIME_API FStoryFlowNodeData
 	/** Array flag for character variable nodes */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bIsArray = false;
+
+	// === Map Fields (for map variable nodes) ===
+
+	/** Key type for map nodes (string, integer, enum) */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	FString KeyType;
+
+	/** Value type for map nodes */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	FString ValueType;
+
+	/** Inline key fallback (when the key input has no connection) */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	FStoryFlowVariant MapKey;
+
+	/** Inline value fallback (when the value input has no connection) */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	FStoryFlowVariant MapInlineValue;
 
 	// === Random Branch Fields ===
 
