@@ -1702,6 +1702,12 @@ FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariable(FStoryFlowNode*
 		// CharacterPath + VariableName lookup the scalar evaluators use).
 		return nullptr;
 
+	case EStoryFlowNodeType::RunScript:
+		// TODO(Task 8): runScript map outputs — HTML resolves _outputValues maps;
+		// until then this is unresolved. NOTE: HandleSetMap's wired-but-unresolved
+		// branch wipes the target to empty — T8 must also revisit that interaction.
+		return nullptr;
+
 	default:
 		return nullptr;
 	}

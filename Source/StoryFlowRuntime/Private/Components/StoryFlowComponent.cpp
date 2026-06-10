@@ -1379,6 +1379,8 @@ void UStoryFlowComponent::HandleEnd(FStoryFlowNode* Node)
 
 		// Gather output variable values BEFORE popping (still in called script)
 		// Key by variable Name so evaluators can match via ScriptOutputs name lookup
+		// TODO(Task 8): a map-typed output variant copy SHARES the dead invocation's
+		// storage (TSharedPtr) — decide alias-vs-detach when map runScript outputs land.
 		TMap<FString, FStoryFlowVariant> OutputValues;
 		for (const auto& VarPair : ExecutionContext.LocalVariables)
 		{
@@ -2295,7 +2297,9 @@ void UStoryFlowComponent::HandleMapModify(FStoryFlowNode* Node)
 	FStoryFlowVariable* Var = Evaluator->ResolveMapInputVariable(Node, TEXT("2"), &bIsGlobal);
 	if (!Var)
 	{
-		// Unresolved map: HTML mutates a throwaway empty Map — no effect, no dispatch
+		// Unresolved map: HTML mutates a throwaway empty Map — no effect, no dispatch.
+		// Silent no-op is HTML parity, but leave a breadcrumb for authors at Verbose.
+		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Map mutator node %s could not resolve its map input - mutation skipped"), *Node->Id);
 		HandleSetNodeEnd(Node, FlowHandle);
 		return;
 	}

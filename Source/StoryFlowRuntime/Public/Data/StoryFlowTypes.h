@@ -442,6 +442,8 @@ public:
 	// Caller must have established Type via SetMap first (mirrors GetArrayMutable's
 	// contract). Lazily allocates the shared storage — a Type=Map variant can have
 	// null storage after deserializing an empty map (Pack skips empty blobs).
+	// Lazy allocation does not set Type — misuse on a non-map variant creates
+	// orphan storage.
 	TArray<FStoryFlowMapEntry>& GetMapMutable();
 
 	// Conversion to string for display
