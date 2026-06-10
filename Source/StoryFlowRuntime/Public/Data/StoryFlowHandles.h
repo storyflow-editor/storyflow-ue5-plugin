@@ -118,7 +118,8 @@ namespace StoryFlowHandles
 	//   Target: "target-{nodeId}-map-{keyType}-{valueType}-{optionId}"
 	// Target optionIds: "1" (pure map reads: getMapValue/hasMapKey/mapSize/
 	// mapKeys/mapValues), "2" (setMap + mutators: setMapValue/removeMapKey/
-	// clearMap), "map" (forEachMap) — optionIds are NOT always digits.
+	// clearMap), "map" (forEachMap), "input" (setCharacterVar's map input)
+	// — optionIds are NOT always digits.
 
 	/** Build a map input handle suffix: "map-{KeyType}-{ValueType}-{OptionId}" */
 	inline FString In_Map(const FString& KeyType, const FString& ValueType, const FString& OptionId)
