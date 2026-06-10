@@ -813,7 +813,7 @@ FStoryFlowVariable UStoryFlowImporter::ParseVariable(const FString& VariableId, 
 		{
 			// Map values are an ordered array of {key, value} entry objects, not a scalar variant
 			TArray<FStoryFlowMapEntry> Entries;
-			ParseMapEntries(VariableObject->GetArrayField(TEXT("value")), Variable.KeyType, Variable.ValueType, Entries);
+			ParseMapEntries(VariableObject->GetArrayField(TEXT("value")), Variable.KeyType, Variable.ValueType, Variable.Name.IsEmpty() ? Variable.Id : Variable.Name, Entries);
 			Variable.Value.SetMap(Entries);
 		}
 		else
@@ -850,7 +850,7 @@ FStoryFlowVariable UStoryFlowImporter::ParseVariable(const FString& VariableId, 
 	return Variable;
 }
 
-void UStoryFlowImporter::ParseMapEntries(const TArray<TSharedPtr<FJsonValue>>& EntriesArray, EStoryFlowVariableType KeyType, EStoryFlowVariableType ValueType, TArray<FStoryFlowMapEntry>& OutEntries)
+void UStoryFlowImporter::ParseMapEntries(const TArray<TSharedPtr<FJsonValue>>& EntriesArray, EStoryFlowVariableType KeyType, EStoryFlowVariableType ValueType, const FString& VariableContext, TArray<FStoryFlowMapEntry>& OutEntries)
 {
 	// Entry order is contractual — it is observable through mapKeys/mapValues/forEachMap
 	// and must match the editor's serialized order
@@ -870,7 +870,7 @@ void UStoryFlowImporter::ParseMapEntries(const TArray<TSharedPtr<FJsonValue>>& E
 		const TSharedPtr<FJsonValue> KeyField = EntryObject->TryGetField(TEXT("key"));
 		if (!KeyField.IsValid())
 		{
-			UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Skipping map entry with missing key"));
+			UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Skipping map entry with missing key in map variable '%s'"), *VariableContext);
 			continue;
 		}
 		if (KeyType == EStoryFlowVariableType::Integer)

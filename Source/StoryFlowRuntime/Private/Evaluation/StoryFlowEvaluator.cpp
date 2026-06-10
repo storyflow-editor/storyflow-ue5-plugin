@@ -357,7 +357,7 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 		// Discriminate by SourceHandle suffix (precedent: runScript "-out-" parsing).
 		FStoryFlowVariant Value;
 		const bool bFound = ComputeGetMapValue(Node, Value);
-		if (SourceHandle.Contains(TEXT("-isValid")))
+		if (SourceHandle.EndsWith(TEXT("-isValid")))
 		{
 			// IsValid is always boolean, regardless of the node's ValueType
 			Result = bFound;
@@ -371,10 +371,13 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 
 	case EStoryFlowNodeType::HasMapKey:
 	{
+		// Key FIRST: the map pointer may alias node-state storage that any
+		// further evaluation (GetNodeState/FindOrAdd) can relocate, so resolve
+		// the map last and consume it immediately.
+		const FStoryFlowVariant Key = EvaluateMapOpKeyInput(Node, TEXT("2"));
 		if (const TArray<FStoryFlowMapEntry>* Map = EvaluateMapInput(Node, TEXT("1")))
 		{
-			const FStoryFlowVariant Key = EvaluateMapOpKeyInput(Node, TEXT("2"));
-			Result = FindMapEntryByKey(*Map, Node->Data.KeyType, Key) != nullptr;
+			Result = FindMapEntryByKey(*Map, Node->Data.KeyType, Key) != INDEX_NONE;
 		}
 		break;
 	}
@@ -1701,32 +1704,35 @@ FStoryFlowVariant FStoryFlowEvaluator::EvaluateMapOpKeyInput(FStoryFlowNode* Nod
 	return Key;
 }
 
-const FStoryFlowMapEntry* FStoryFlowEvaluator::FindMapEntryByKey(const TArray<FStoryFlowMapEntry>& Entries, const FString& KeyType, const FStoryFlowVariant& Key)
+int32 FStoryFlowEvaluator::FindMapEntryByKey(const TArray<FStoryFlowMapEntry>& Entries, const FString& KeyType, const FStoryFlowVariant& Key)
 {
 	// Integer keys compare as Int32; string/enum keys as exact (case-sensitive) strings
 	if (KeyType == TEXT("integer"))
 	{
 		const int32 KeyInt = Key.GetInt(0);
-		return Entries.FindByPredicate([KeyInt](const FStoryFlowMapEntry& Entry) { return Entry.Key.GetInt() == KeyInt; });
+		return Entries.IndexOfByPredicate([KeyInt](const FStoryFlowMapEntry& Entry) { return Entry.Key.GetInt(0) == KeyInt; });
 	}
 	const FString KeyString = Key.GetString();
-	return Entries.FindByPredicate([&KeyString](const FStoryFlowMapEntry& Entry) { return Entry.Key.GetString().Equals(KeyString); });
+	return Entries.IndexOfByPredicate([&KeyString](const FStoryFlowMapEntry& Entry) { return Entry.Key.GetString().Equals(KeyString); });
 }
 
 bool FStoryFlowEvaluator::ComputeGetMapValue(FStoryFlowNode* Node, FStoryFlowVariant& OutValue)
 {
-	// Mirrors the HTML runtime's computeGetMapValue: resolve the map (input "1"),
-	// resolve the key (input "2" / inline fallback), report whether the key was
-	// found. Miss/unresolved leaves OutValue untouched and returns IsValid=false.
+	// Mirrors the HTML runtime's computeGetMapValue: resolve the key (input "2"
+	// / inline fallback) FIRST — the map pointer may alias node-state storage
+	// that any further evaluation can relocate — then resolve the map (input
+	// "1") and consume it immediately. Miss/unresolved leaves OutValue
+	// untouched and returns IsValid=false.
+	const FStoryFlowVariant Key = EvaluateMapOpKeyInput(Node, TEXT("2"));
 	const TArray<FStoryFlowMapEntry>* Map = EvaluateMapInput(Node, TEXT("1"));
 	if (!Map)
 	{
 		return false;
 	}
-	const FStoryFlowVariant Key = EvaluateMapOpKeyInput(Node, TEXT("2"));
-	if (const FStoryFlowMapEntry* Entry = FindMapEntryByKey(*Map, Node->Data.KeyType, Key))
+	const int32 EntryIndex = FindMapEntryByKey(*Map, Node->Data.KeyType, Key);
+	if (EntryIndex != INDEX_NONE)
 	{
-		OutValue = Entry->Value;
+		OutValue = (*Map)[EntryIndex].Value;
 		return true;
 	}
 	return false;

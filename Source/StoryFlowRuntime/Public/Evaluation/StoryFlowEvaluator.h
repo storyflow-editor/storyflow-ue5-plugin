@@ -92,6 +92,11 @@ public:
 	 * K/V come from Node's own Data.KeyType/Data.ValueType (catalog map op nodes carry
 	 * them in node data), the caller passes only the OptionId ("1" pure reads,
 	 * "2" mutators, "map" forEachMap).
+	 *
+	 * The returned pointer may be invalidated by any subsequent node-state
+	 * allocation (GetNodeState/FindOrAdd). Resolve all other inputs FIRST, then
+	 * resolve the map and consume it immediately — never hold it across another
+	 * evaluation.
 	 */
 	TArray<FStoryFlowMapEntry>* EvaluateMapInput(FStoryFlowNode* Node, const FString& OptionId);
 
@@ -103,11 +108,12 @@ public:
 	FStoryFlowVariant EvaluateMapOpKeyInput(FStoryFlowNode* Node, const FString& OptionId);
 
 	/**
-	 * Find a map entry by key. Integer keys compare as Int32; string/enum keys
-	 * as exact (case-sensitive) strings. KeyType is the node/variable's key type
-	 * string ("integer", "string", "enum").
+	 * Find a map entry's index by key (INDEX_NONE on miss). Integer keys compare
+	 * as Int32; string/enum keys as exact (case-sensitive) strings. KeyType is
+	 * the node/variable's key type string ("integer", "string", "enum").
+	 * Returns an index (not a pointer) so mutators can write entries in place.
 	 */
-	static const FStoryFlowMapEntry* FindMapEntryByKey(const TArray<FStoryFlowMapEntry>& Entries, const FString& KeyType, const FStoryFlowVariant& Key);
+	static int32 FindMapEntryByKey(const TArray<FStoryFlowMapEntry>& Entries, const FString& KeyType, const FStoryFlowVariant& Key);
 
 	// === Boolean Chain Processing ===
 
