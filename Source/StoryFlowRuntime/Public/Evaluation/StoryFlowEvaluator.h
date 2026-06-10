@@ -93,12 +93,27 @@ public:
 	 * them in node data), the caller passes only the OptionId ("1" pure reads,
 	 * "2" mutators, "map" forEachMap).
 	 *
-	 * The returned pointer may be invalidated by any subsequent node-state
-	 * allocation (GetNodeState/FindOrAdd). Resolve all other inputs FIRST, then
-	 * resolve the map and consume it immediately — never hold it across another
-	 * evaluation.
+	 * Resolution walks upstream through chained mutators to the origin variable
+	 * (see ResolveMapInputVariable), so the returned storage always lives behind
+	 * a variable's shared map allocation. Still: resolve all other inputs FIRST,
+	 * then resolve the map and consume it immediately — never hold the pointer
+	 * across another evaluation.
 	 */
 	TArray<FStoryFlowMapEntry>* EvaluateMapInput(FStoryFlowNode* Node, const FString& OptionId);
+
+	/**
+	 * Resolve the ORIGIN variable behind one of Node's map inputs: follow the
+	 * input edge, walk upstream through chained mutators (each mutator's map
+	 * output is the SAME live storage as its own map input "2" — mirrors the
+	 * HTML runtime's evaluateMapFromNode chain arm), and resolve the terminal
+	 * getMap/setMap node's bound variable. Returns nullptr when the chain does
+	 * not terminate at a resolvable map variable (HTML falls back to a throwaway
+	 * empty Map, i.e. mutations no-op and reads return defaults).
+	 *
+	 * On success the variable's map storage is established (Type + allocation)
+	 * and bOutIsGlobal (optional) reports the terminal node's scope flag.
+	 */
+	FStoryFlowVariable* ResolveMapInputVariable(FStoryFlowNode* Node, const FString& OptionId, bool* bOutIsGlobal = nullptr);
 
 	/**
 	 * Resolve a map op's key: wired key input first ("target-{nodeId}-{keyType}-{optionId}"),
@@ -106,6 +121,15 @@ public:
 	 * node's KeyType string (Int32 for integer keys, string otherwise).
 	 */
 	FStoryFlowVariant EvaluateMapOpKeyInput(FStoryFlowNode* Node, const FString& OptionId);
+
+	/**
+	 * Resolve a map op's value: wired value input first ("target-{nodeId}-{valueType}-{optionId}"),
+	 * else the inline Data.MapInlineValue fallback (typed off the declared valueType at
+	 * import — NOT Data.Value, see the MapInlineValue doc). The returned variant is
+	 * typed per the node's ValueType string; image/character/audio values flow through
+	 * the string evaluator like the scalar Set* handlers.
+	 */
+	FStoryFlowVariant EvaluateMapOpValueInput(FStoryFlowNode* Node, const FString& OptionId);
 
 	/**
 	 * Find a map entry's index by key (INDEX_NONE on miss). Integer keys compare

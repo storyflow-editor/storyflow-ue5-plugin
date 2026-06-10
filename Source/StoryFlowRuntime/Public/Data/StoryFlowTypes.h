@@ -312,7 +312,15 @@ private:
 	// recursively). Ordered entry array, NOT a TMap — entry order is observable through
 	// mapKeys/mapValues/forEachMap and must match the editor's serialized order.
 	// Persisted through SerializedArrayData alongside ArrayValue.
-	TArray<FStoryFlowMapEntry> MapValue;
+	//
+	// Stored behind a shared pointer so AliasMap can make two variables observe the
+	// SAME live entry storage — the HTML runtime's setMap assigns the _runtimeMap
+	// REFERENCE (runtime-variables.js updateMapVariable), so after setMap(b ← a)
+	// a later clearMap(a) must also empty b. A plain variant copy shares storage
+	// (matches HTML call-frame save/restore, which keeps live references);
+	// DeepCopyMap detaches at asset→runtime copy boundaries where HTML re-inflates
+	// fresh maps from script data.
+	TSharedPtr<TArray<FStoryFlowMapEntry>> MapValue;
 
 public:
 	// Type checking
@@ -355,7 +363,7 @@ public:
 	void SetArray(const TArray<FStoryFlowVariant>& Value)
 	{
 		ArrayValue = Value;
-		MapValue.Empty(); // a variant holds either array or map data, never both
+		MapValue.Reset(); // a variant holds either array or map data, never both
 		// Infer type from first element, or keep current type
 		if (Value.Num() > 0)
 		{
@@ -365,6 +373,24 @@ public:
 
 	// Defined below FStoryFlowMapEntry (assigning the entry array needs the complete type)
 	void SetMap(const TArray<FStoryFlowMapEntry>& Value);
+
+	/**
+	 * Share Source's live map storage (defined below FStoryFlowMapEntry).
+	 * After aliasing, mutations through either variant are observed by both —
+	 * mirrors the HTML runtime's updateMapVariable assigning the _runtimeMap
+	 * reference. Non-const: establishes Source's storage if not yet allocated
+	 * so the alias holds even when the source map is still empty.
+	 */
+	void AliasMap(FStoryFlowVariant& Source);
+
+	/**
+	 * Reallocate this variant's map storage so it no longer shares entries with
+	 * any alias (defined below FStoryFlowMapEntry). Called at asset→runtime copy
+	 * boundaries (script locals, subsystem globals/characters) where the HTML
+	 * runtime re-inflates fresh maps from serialized data. Map values are scalar
+	 * types (no nested maps), so one level is a full deep copy.
+	 */
+	void DeepCopyMap();
 
 	// Getters with default fallbacks
 	bool GetBool(bool Default = false) const
@@ -409,16 +435,14 @@ public:
 		return Type == EStoryFlowVariableType::Map;
 	}
 
-	const TArray<FStoryFlowMapEntry>& GetMap() const
-	{
-		return MapValue;
-	}
+	// Defined below FStoryFlowMapEntry (dereferencing the shared storage needs the
+	// complete type). Returns a static empty array when storage is unallocated.
+	const TArray<FStoryFlowMapEntry>& GetMap() const;
 
-	// Caller must have established Type via SetMap first (mirrors GetArrayMutable's contract)
-	TArray<FStoryFlowMapEntry>& GetMapMutable()
-	{
-		return MapValue;
-	}
+	// Caller must have established Type via SetMap first (mirrors GetArrayMutable's
+	// contract). Lazily allocates the shared storage — a Type=Map variant can have
+	// null storage after deserializing an empty map (Pack skips empty blobs).
+	TArray<FStoryFlowMapEntry>& GetMapMutable();
 
 	// Conversion to string for display
 	FString ToString() const
@@ -511,8 +535,39 @@ struct FStoryFlowMapEntry
 inline void FStoryFlowVariant::SetMap(const TArray<FStoryFlowMapEntry>& Value)
 {
 	Type = EStoryFlowVariableType::Map;
-	MapValue = Value;
+	MapValue = MakeShared<TArray<FStoryFlowMapEntry>>(Value); // fresh storage — never aliases
 	ArrayValue.Empty(); // a variant holds either array or map data, never both
+}
+
+inline const TArray<FStoryFlowMapEntry>& FStoryFlowVariant::GetMap() const
+{
+	static const TArray<FStoryFlowMapEntry> EmptyEntries;
+	return MapValue.IsValid() ? *MapValue : EmptyEntries;
+}
+
+inline TArray<FStoryFlowMapEntry>& FStoryFlowVariant::GetMapMutable()
+{
+	if (!MapValue.IsValid())
+	{
+		MapValue = MakeShared<TArray<FStoryFlowMapEntry>>();
+	}
+	return *MapValue;
+}
+
+inline void FStoryFlowVariant::AliasMap(FStoryFlowVariant& Source)
+{
+	Source.GetMapMutable(); // ensure Source has storage so the alias holds while empty
+	Type = EStoryFlowVariableType::Map;
+	MapValue = Source.MapValue; // SHARE the live storage (see MapValue doc)
+	ArrayValue.Empty(); // a variant holds either array or map data, never both
+}
+
+inline void FStoryFlowVariant::DeepCopyMap()
+{
+	if (MapValue.IsValid())
+	{
+		MapValue = MakeShared<TArray<FStoryFlowMapEntry>>(*MapValue);
+	}
 }
 
 inline void FStoryFlowVariant::Reset()
@@ -523,7 +578,7 @@ inline void FStoryFlowVariant::Reset()
 	FloatValue = 0.0f;
 	StringValue.Empty();
 	ArrayValue.Empty();
-	MapValue.Empty();
+	MapValue.Reset();
 	SerializedArrayData.Empty();
 }
 
@@ -595,6 +650,16 @@ struct STORYFLOWRUNTIME_API FStoryFlowVariable
  */
 STORYFLOWRUNTIME_API void PackVariablesForSerialization(TMap<FString, FStoryFlowVariable>& Variables);
 STORYFLOWRUNTIME_API void UnpackVariablesFromSerialization(TMap<FString, FStoryFlowVariable>& Variables);
+
+/**
+ * Detach every map variable's shared entry storage in a variable map (see
+ * FStoryFlowVariant::DeepCopyMap). Call right after copying variables out of an
+ * asset (script locals, subsystem globals, runtime characters) so runtime map
+ * mutations never write into the asset and never alias a previous run — the HTML
+ * runtime re-inflates fresh maps from script data at these boundaries
+ * (runtime-state.js SWITCH_SCRIPT / LOAD_CONTENT).
+ */
+STORYFLOWRUNTIME_API void DeepCopyMapVariables(TMap<FString, FStoryFlowVariable>& Variables);
 
 // ============================================================================
 // Text Block

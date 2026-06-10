@@ -1025,6 +1025,7 @@ void UStoryFlowComponent::ResetVariables()
 	if (UStoryFlowScriptAsset* CurrentScriptAsset = ExecutionContext.CurrentScript.Get())
 	{
 		ExecutionContext.LocalVariables = CurrentScriptAsset->Variables;
+		DeepCopyMapVariables(ExecutionContext.LocalVariables); // detach shared map storage from the asset
 		ExecutionContext.RebuildLocalNameIndex();
 	}
 
@@ -1241,6 +1242,23 @@ const TMap<EStoryFlowNodeType, UStoryFlowComponent::FNodeHandler>& UStoryFlowCom
 		// Character variable handlers
 		T.Add(EStoryFlowNodeType::GetCharacterVar,  &UStoryFlowComponent::HandleGetCharacterVar);
 		T.Add(EStoryFlowNodeType::SetCharacterVar,  &UStoryFlowComponent::HandleSetCharacterVar);
+
+		// Map variable handlers
+		T.Add(EStoryFlowNodeType::SetMap,        &UStoryFlowComponent::HandleSetMap);
+		T.Add(EStoryFlowNodeType::SetMapValue,   &UStoryFlowComponent::HandleMapModify);
+		T.Add(EStoryFlowNodeType::RemoveMapKey,  &UStoryFlowComponent::HandleMapModify);
+		T.Add(EStoryFlowNodeType::ClearMap,      &UStoryFlowComponent::HandleMapModify);
+
+		// Map pure reads (evaluated lazily on data pull; handler only routes exec)
+		T.Add(EStoryFlowNodeType::GetMap,       &UStoryFlowComponent::HandleMapPureNode);
+		T.Add(EStoryFlowNodeType::GetMapValue,  &UStoryFlowComponent::HandleMapPureNode);
+		T.Add(EStoryFlowNodeType::HasMapKey,    &UStoryFlowComponent::HandleMapPureNode);
+		T.Add(EStoryFlowNodeType::MapSize,      &UStoryFlowComponent::HandleMapPureNode);
+		T.Add(EStoryFlowNodeType::MapKeys,      &UStoryFlowComponent::HandleMapPureNode);
+		T.Add(EStoryFlowNodeType::MapValues,    &UStoryFlowComponent::HandleMapPureNode);
+
+		// ForEachMap is deliberately UNREGISTERED until Task 5 implements map
+		// entry iteration — it falls to the "Unsupported node type" skip path.
 
 		return T;
 	}();
@@ -2197,6 +2215,164 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 }
 
+void UStoryFlowComponent::HandleSetMap(FStoryFlowNode* Node)
+{
+	// Mirrors the HTML runtime's setMap → updateMapVariable (runtime-variables.js):
+	// resolve the wired map input ("2") and ALIAS the bound variable's storage to
+	// the origin variable's live storage — HTML assigns the _runtimeMap REFERENCE,
+	// so after setMap(b ← chain from getMap(a)) a later clearMap(a) also empties b.
+	// Copy-on-set would break the cross-runtime aliasing pin.
+	FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
+	if (!Var || Var->Type != EStoryFlowVariableType::Map)
+	{
+		// HTML returns early without trace/dispatch but still continues exec
+		HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
+		return;
+	}
+
+	// Missing K/V types: the map input handle cannot be built — HTML behaves as
+	// disconnected (keeps the current value, still traces and dispatches).
+	if (Evaluator && !Node->Data.KeyType.IsEmpty() && !Node->Data.ValueType.IsEmpty())
+	{
+		const FString HandleSuffix = StoryFlowHandles::In_Map(Node->Data.KeyType, Node->Data.ValueType, TEXT("2"));
+		if (ExecutionContext.FindInputEdge(Node->Id, HandleSuffix))
+		{
+			bool bSourceIsGlobal = false;
+			if (FStoryFlowVariable* SourceVar = Evaluator->ResolveMapInputVariable(Node, TEXT("2"), &bSourceIsGlobal))
+			{
+				// Wired and resolved: share the origin variable's live map storage
+				Var->Value.AliasMap(SourceVar->Value);
+			}
+			else
+			{
+				// Wired but unresolved: HTML assigns a fresh empty Map
+				Var->Value.SetMap(TArray<FStoryFlowMapEntry>());
+			}
+		}
+		// No edge: keep the current value (maps have no inline fallback)
+	}
+
+	// Trace shape pinned by the cross-runtime fixture: size=, not value=
+	SF_TRACE(ExecutionContext, "VAR SET \"%s\" global=%s size=%d", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), Var->Value.GetMap().Num());
+	NotifyVariableChanged(*Var, Node->Data.bIsGlobal);
+	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
+}
+
+void UStoryFlowComponent::HandleMapModify(FStoryFlowNode* Node)
+{
+	// setMapValue / removeMapKey / clearMap — one handler, three ops (mirrors the
+	// HTML runtime's map mutator handlers). Mutates the ORIGIN variable's live map
+	// storage in place so downstream chained ops observe the mutation, then fires
+	// the variable's change notification (HTML's updateConnectedMapVariable
+	// dispatch). NOTE: HTML mutators emit NO "VAR SET" trace line — only setMap
+	// does (see the map-trace-fixture snapshot) — so none is emitted here.
+	const FString FlowHandle = StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow);
+
+	// Missing K/V types: HTML skips the mutation but still continues exec
+	if (!Evaluator || Node->Data.KeyType.IsEmpty() || Node->Data.ValueType.IsEmpty())
+	{
+		HandleSetNodeEnd(Node, FlowHandle);
+		return;
+	}
+
+	// Resolve ALL non-map inputs FIRST (pointer-lifetime rule on EvaluateMapInput):
+	// key (input "3"), and for setMapValue the typed value (input "4" with the
+	// inline Data.MapInlineValue fallback)
+	FStoryFlowVariant Key;
+	if (Node->Type != EStoryFlowNodeType::ClearMap)
+	{
+		Key = Evaluator->EvaluateMapOpKeyInput(Node, TEXT("3"));
+	}
+
+	FStoryFlowVariant NewValue;
+	if (Node->Type == EStoryFlowNodeType::SetMapValue)
+	{
+		NewValue = Evaluator->EvaluateMapOpValueInput(Node, TEXT("4"));
+	}
+
+	// THEN resolve the live map (input "2") and mutate immediately
+	bool bIsGlobal = false;
+	FStoryFlowVariable* Var = Evaluator->ResolveMapInputVariable(Node, TEXT("2"), &bIsGlobal);
+	if (!Var)
+	{
+		// Unresolved map: HTML mutates a throwaway empty Map — no effect, no dispatch
+		HandleSetNodeEnd(Node, FlowHandle);
+		return;
+	}
+
+	TArray<FStoryFlowMapEntry>& Map = Var->Value.GetMapMutable();
+	switch (Node->Type)
+	{
+	case EStoryFlowNodeType::SetMapValue:
+	{
+		const int32 EntryIndex = FStoryFlowEvaluator::FindMapEntryByKey(Map, Node->Data.KeyType, Key);
+		if (EntryIndex != INDEX_NONE)
+		{
+			// Existing key: overwrite in place, keeping its position
+			Map[EntryIndex].Value = NewValue;
+		}
+		else
+		{
+			// New key: append — JS Map insertion-order semantics
+			FStoryFlowMapEntry Entry;
+			Entry.Key = Key;
+			Entry.Value = NewValue;
+			Map.Add(MoveTemp(Entry));
+		}
+		break;
+	}
+
+	case EStoryFlowNodeType::RemoveMapKey:
+	{
+		const int32 EntryIndex = FStoryFlowEvaluator::FindMapEntryByKey(Map, Node->Data.KeyType, Key);
+		if (EntryIndex != INDEX_NONE)
+		{
+			// RemoveAt preserves the order of the remaining entries
+			Map.RemoveAt(EntryIndex);
+		}
+		break;
+	}
+
+	case EStoryFlowNodeType::ClearMap:
+		Map.Empty();
+		break;
+
+	default:
+		break;
+	}
+
+	NotifyVariableChanged(*Var, bIsGlobal);
+	HandleSetNodeEnd(Node, FlowHandle);
+}
+
+void UStoryFlowComponent::HandleMapPureNode(FStoryFlowNode* Node)
+{
+	// Pure map reads are evaluated lazily on data pull (map reads are never
+	// memoized — see the evaluator). This handler only routes exec, mirroring
+	// the HTML handlers' continuation handles: getMapValue flows on via its
+	// typed value output; hasMapKey/mapSize via their typed data outputs.
+	// getMap (no exec ports — HTML registers no handler) and mapKeys/mapValues
+	// (HTML handlers end without processNextNode) dead-end deliberately.
+	switch (Node->Type)
+	{
+	case EStoryFlowNodeType::GetMapValue:
+	{
+		const FString ValueType = Node->Data.ValueType.IsEmpty() ? TEXT("string") : Node->Data.ValueType;
+		ProcessNextNode(StoryFlowHandles::Source(Node->Id, FString::Printf(TEXT("%s-value"), *ValueType)));
+		break;
+	}
+	case EStoryFlowNodeType::HasMapKey:
+		ProcessNextNode(StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Boolean));
+		break;
+	case EStoryFlowNodeType::MapSize:
+		ProcessNextNode(StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Integer));
+		break;
+	default:
+		// GetMap, MapKeys, MapValues: no exec continuation
+		break;
+	}
+}
+
 void UStoryFlowComponent::HandleForEachLoop(FStoryFlowNode* Node)
 {
 	FNodeRuntimeState& NodeState = ExecutionContext.GetNodeState(Node->Id);
@@ -3043,7 +3219,8 @@ void UStoryFlowComponent::HandleSetNodeEnd(FStoryFlowNode* Node, const FString& 
 							   ConnPtr->SourceHandle.Contains(TEXT("-enum-")) ||
 							   ConnPtr->SourceHandle.Contains(TEXT("-image-")) ||
 							   ConnPtr->SourceHandle.Contains(TEXT("-character-")) ||
-							   ConnPtr->SourceHandle.Contains(TEXT("-audio-"));
+							   ConnPtr->SourceHandle.Contains(TEXT("-audio-")) ||
+							   ConnPtr->SourceHandle.Contains(TEXT("-map-"));
 
 			if (!bIsDataEdge)
 			{

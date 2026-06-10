@@ -449,6 +449,11 @@ protected:
 	void HandleGetCharacterVar(FStoryFlowNode* Node);
 	void HandleSetCharacterVar(FStoryFlowNode* Node);
 
+	// Map Variable Handlers
+	void HandleSetMap(FStoryFlowNode* Node);
+	void HandleMapModify(FStoryFlowNode* Node);
+	void HandleMapPureNode(FStoryFlowNode* Node);
+
 	/**
 	 * Evaluate the wired array input of a setCharacterVar node, dispatching to the
 	 * evaluator's typed array reader for the variable's element type. TArray value

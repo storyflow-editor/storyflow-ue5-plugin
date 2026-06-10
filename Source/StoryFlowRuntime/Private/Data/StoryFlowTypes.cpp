@@ -197,12 +197,12 @@ void FStoryFlowVariant::PackArrayForSerialization()
 
 	// Map variants: sentinel in the count slot, then the map entries.
 	// A variant holds either array or map data, never both.
-	if (MapValue.Num() > 0)
+	if (MapValue.IsValid() && MapValue->Num() > 0)
 	{
 		FMemoryWriter Writer(SerializedArrayData);
 		int32 Sentinel = MapBlobSentinel;
 		Writer << Sentinel;
-		SerializeMapEntries(Writer, MapValue);
+		SerializeMapEntries(Writer, *MapValue);
 		return;
 	}
 
@@ -223,7 +223,7 @@ void FStoryFlowVariant::PackArrayForSerialization()
 void FStoryFlowVariant::UnpackArrayFromSerialization()
 {
 	ArrayValue.Empty();
-	MapValue.Empty();
+	MapValue.Reset();
 	if (SerializedArrayData.Num() == 0)
 	{
 		return;
@@ -234,7 +234,8 @@ void FStoryFlowVariant::UnpackArrayFromSerialization()
 	Reader << Num;
 	if (Num == MapBlobSentinel)
 	{
-		DeserializeMapEntries(Reader, MapValue);
+		MapValue = MakeShared<TArray<FStoryFlowMapEntry>>();
+		DeserializeMapEntries(Reader, *MapValue);
 		return;
 	}
 	if (Num < 0)
@@ -262,6 +263,14 @@ void UnpackVariablesFromSerialization(TMap<FString, FStoryFlowVariable>& Variabl
 	for (auto& Pair : Variables)
 	{
 		Pair.Value.Value.UnpackArrayFromSerialization();
+	}
+}
+
+void DeepCopyMapVariables(TMap<FString, FStoryFlowVariable>& Variables)
+{
+	for (auto& Pair : Variables)
+	{
+		Pair.Value.Value.DeepCopyMap();
 	}
 }
 

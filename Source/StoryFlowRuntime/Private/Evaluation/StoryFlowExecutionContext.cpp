@@ -16,8 +16,11 @@ void FStoryFlowExecutionContext::Initialize(UStoryFlowProjectAsset* InProject, U
 
 	if (InScript)
 	{
-		// Copy local variables from script
+		// Copy local variables from script. Map storage is shared (TSharedPtr) —
+		// detach it so runtime mutations never write into the asset (HTML
+		// re-inflates fresh maps from script data here).
 		LocalVariables = InScript->Variables;
+		DeepCopyMapVariables(LocalVariables);
 		ResolveStringVariableValues(LocalVariables);
 		CurrentNodeId = InScript->StartNode;
 	}
@@ -38,8 +41,11 @@ void FStoryFlowExecutionContext::InitializeWithSubsystem(UStoryFlowProjectAsset*
 
 	if (InScript)
 	{
-		// Copy local variables from script
+		// Copy local variables from script. Map storage is shared (TSharedPtr) —
+		// detach it so runtime mutations never write into the asset (HTML
+		// re-inflates fresh maps from script data here).
 		LocalVariables = InScript->Variables;
+		DeepCopyMapVariables(LocalVariables);
 		ResolveStringVariableValues(LocalVariables);
 		CurrentNodeId = InScript->StartNode;
 	}
@@ -290,7 +296,11 @@ bool FStoryFlowExecutionContext::PushScript(const FString& ScriptPath, const FSt
 		return false;
 	}
 
-	// Save current state
+	// Save current state. SavedVariables intentionally SHARES map storage with the
+	// live locals (variant copy keeps the TSharedPtr): the HTML runtime's call
+	// frames hold live variable references (runtime-core.js pushCallStack saves
+	// gameState.variables.slice()), so aliasing established before a runScript
+	// call survives the call and restore. Do NOT deep-copy here.
 	FStoryFlowCallFrame Frame;
 	Frame.ScriptPath = CurrentScript.IsValid() ? CurrentScript->ScriptPath : TEXT("");
 	Frame.ReturnNodeId = ReturnNodeId;
@@ -308,9 +318,12 @@ bool FStoryFlowExecutionContext::PushScript(const FString& ScriptPath, const FSt
 	// Clear flow stack for new script (each script has its own flow scope)
 	FlowCallStack.Reset();
 
-	// Switch to new script
+	// Switch to new script. Detach map storage from the asset — the HTML runtime
+	// deep-copies + re-inflates script variables per invocation (runtime-state.js
+	// SWITCH_SCRIPT), so each call gets fresh maps and never mutates the asset.
 	CurrentScript = NewScript;
 	LocalVariables = NewScript->Variables;
+	DeepCopyMapVariables(LocalVariables);
 	ResolveStringVariableValues(LocalVariables);
 	CurrentNodeId = NewScript->StartNode;
 	RebuildLocalNameIndex();

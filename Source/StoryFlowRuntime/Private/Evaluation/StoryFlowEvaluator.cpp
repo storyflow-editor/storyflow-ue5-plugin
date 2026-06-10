@@ -1601,6 +1601,12 @@ TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateAudioArrayInput(FStoryFlo
 
 TArray<FStoryFlowMapEntry>* FStoryFlowEvaluator::EvaluateMapInput(FStoryFlowNode* Node, const FString& OptionId)
 {
+	FStoryFlowVariable* Var = ResolveMapInputVariable(Node, OptionId);
+	return Var ? &Var->Value.GetMapMutable() : nullptr;
+}
+
+FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariable(FStoryFlowNode* Node, const FString& OptionId, bool* bOutIsGlobal)
+{
 	if (!Context || !Node)
 	{
 		return nullptr;
@@ -1624,12 +1630,43 @@ TArray<FStoryFlowMapEntry>* FStoryFlowEvaluator::EvaluateMapInput(FStoryFlowNode
 	}
 
 	FStoryFlowNode* SourceNode = Context->GetNode(Edge->Source);
+
+	// Walk upstream through chained mutators (mirrors the HTML runtime's
+	// evaluateMapFromNode chain arm): a mutator mutates the origin variable's
+	// live storage in place, so its map output IS its own map input ("2") —
+	// follow that edge until a terminal variable-bound node. Bounded to defend
+	// against cyclic graphs (HTML recursion has no guard; we fail to unresolved).
+	int32 Hops = 0;
+	while (SourceNode &&
+		(SourceNode->Type == EStoryFlowNodeType::SetMapValue ||
+		 SourceNode->Type == EStoryFlowNodeType::RemoveMapKey ||
+		 SourceNode->Type == EStoryFlowNodeType::ClearMap))
+	{
+		if (++Hops > STORYFLOW_MAX_EVALUATION_DEPTH)
+		{
+			UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map mutator chain too deep at node %s - possible cycle"), *SourceNode->Id);
+			return nullptr;
+		}
+		if (SourceNode->Data.KeyType.IsEmpty() || SourceNode->Data.ValueType.IsEmpty())
+		{
+			MaybeWarnMissingMapTypes(SourceNode);
+			return nullptr;
+		}
+		const FString UpstreamSuffix = StoryFlowHandles::In_Map(SourceNode->Data.KeyType, SourceNode->Data.ValueType, TEXT("2"));
+		const FStoryFlowConnection* UpstreamEdge = Context->FindInputEdge(SourceNode->Id, UpstreamSuffix);
+		if (!UpstreamEdge)
+		{
+			return nullptr;
+		}
+		SourceNode = Context->GetNode(UpstreamEdge->Source);
+	}
+
 	if (!SourceNode)
 	{
 		return nullptr;
 	}
 
-	// Forward-compat: warn (once) and fall through to unresolved if the source
+	// Forward-compat: warn (once) and fall through to unresolved if the terminal
 	// node is a type the plugin does not understand.
 	MaybeWarnUnknownNode(SourceNode);
 
@@ -1638,9 +1675,9 @@ TArray<FStoryFlowMapEntry>* FStoryFlowEvaluator::EvaluateMapInput(FStoryFlowNode
 	case EStoryFlowNodeType::GetMap:
 	case EStoryFlowNodeType::SetMap:
 	{
-		// Resolve the bound variable and return its LIVE map storage. Maps alias:
-		// mutators (Task 4) write through this pointer and every later read must
-		// observe the change, so never return a copy here.
+		// Resolve the bound variable and return it with LIVE map storage
+		// established. Maps alias: mutators write through this storage and every
+		// later read must observe the change, so never hand out a copy here.
 		FStoryFlowVariable* Var = Context->FindVariable(SourceNode->Data.Variable, SourceNode->Data.bIsGlobal);
 		if (Var && Var->Type == EStoryFlowVariableType::Map)
 		{
@@ -1650,21 +1687,11 @@ TArray<FStoryFlowMapEntry>* FStoryFlowEvaluator::EvaluateMapInput(FStoryFlowNode
 				// type so the returned storage is correctly typed for mutation.
 				Var->Value.SetMap(TArray<FStoryFlowMapEntry>());
 			}
-			return &Var->Value.GetMapMutable();
-		}
-		return nullptr;
-	}
-
-	case EStoryFlowNodeType::SetMapValue:
-	case EStoryFlowNodeType::RemoveMapKey:
-	case EStoryFlowNodeType::ClearMap:
-	{
-		// Map mutator nodes expose the map they mutated on their map output.
-		// Task 4 populates CachedOutput when the mutator executes.
-		FNodeRuntimeState& State = Context->GetNodeState(SourceNode->Id);
-		if (State.bHasCachedOutput && State.CachedOutput.IsMap())
-		{
-			return &State.CachedOutput.GetMapMutable();
+			if (bOutIsGlobal)
+			{
+				*bOutIsGlobal = SourceNode->Data.bIsGlobal;
+			}
+			return Var;
 		}
 		return nullptr;
 	}
@@ -1702,6 +1729,44 @@ FStoryFlowVariant FStoryFlowEvaluator::EvaluateMapOpKeyInput(FStoryFlowNode* Nod
 		Key.SetString(EvaluateStringInput(Node, HandleSuffix, Node->Data.MapKey.GetString()));
 	}
 	return Key;
+}
+
+FStoryFlowVariant FStoryFlowEvaluator::EvaluateMapOpValueInput(FStoryFlowNode* Node, const FString& OptionId)
+{
+	// Value inputs are typed by the node's valueType: "target-{nodeId}-{valueType}-{optionId}".
+	// Wired input wins; inline Data.MapInlineValue (typed off the declared valueType
+	// at import) is the fallback. Mirrors the HTML runtime's getMapOpValueInput.
+	FStoryFlowVariant Value;
+	if (!Context || !Node)
+	{
+		return Value;
+	}
+
+	const FString& ValueType = Node->Data.ValueType;
+	const FString HandleSuffix = FString::Printf(TEXT("%s-%s"), *ValueType, *OptionId);
+	if (ValueType == TEXT("boolean"))
+	{
+		Value.SetBool(EvaluateBooleanInput(Node, HandleSuffix, Node->Data.MapInlineValue.GetBool(false)));
+	}
+	else if (ValueType == TEXT("integer"))
+	{
+		Value.SetInt(EvaluateIntegerInput(Node, HandleSuffix, Node->Data.MapInlineValue.GetInt(0)));
+	}
+	else if (ValueType == TEXT("float"))
+	{
+		Value.SetFloat(EvaluateFloatInput(Node, HandleSuffix, Node->Data.MapInlineValue.GetFloat(0.0f)));
+	}
+	else if (ValueType == TEXT("enum"))
+	{
+		Value.SetEnum(EvaluateEnumInput(Node, HandleSuffix, Node->Data.MapInlineValue.GetString()));
+	}
+	else
+	{
+		// string, image, character, and audio values all flow through the string
+		// evaluator (matches the scalar Set* handler precedent)
+		Value.SetString(EvaluateStringInput(Node, HandleSuffix, Node->Data.MapInlineValue.GetString()));
+	}
+	return Value;
 }
 
 int32 FStoryFlowEvaluator::FindMapEntryByKey(const TArray<FStoryFlowMapEntry>& Entries, const FString& KeyType, const FStoryFlowVariant& Key)
