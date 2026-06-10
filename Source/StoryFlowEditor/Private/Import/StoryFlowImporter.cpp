@@ -38,6 +38,48 @@ namespace
 		SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
 		return UPackage::SavePackage(Package, Asset, *PackageFileName, SaveArgs);
 	}
+
+	/** Map an exported type string to EStoryFlowVariableType. Returns None for unknown strings. */
+	EStoryFlowVariableType VariableTypeFromString(const FString& TypeString)
+	{
+		if (TypeString == TEXT("boolean"))
+		{
+			return EStoryFlowVariableType::Boolean;
+		}
+		if (TypeString == TEXT("integer"))
+		{
+			return EStoryFlowVariableType::Integer;
+		}
+		if (TypeString == TEXT("float"))
+		{
+			return EStoryFlowVariableType::Float;
+		}
+		if (TypeString == TEXT("string"))
+		{
+			return EStoryFlowVariableType::String;
+		}
+		if (TypeString == TEXT("enum"))
+		{
+			return EStoryFlowVariableType::Enum;
+		}
+		if (TypeString == TEXT("image"))
+		{
+			return EStoryFlowVariableType::Image;
+		}
+		if (TypeString == TEXT("audio"))
+		{
+			return EStoryFlowVariableType::Audio;
+		}
+		if (TypeString == TEXT("character"))
+		{
+			return EStoryFlowVariableType::Character;
+		}
+		if (TypeString == TEXT("map"))
+		{
+			return EStoryFlowVariableType::Map;
+		}
+		return EStoryFlowVariableType::None;
+	}
 }
 
 UStoryFlowProjectAsset* UStoryFlowImporter::ImportProject(const FString& BuildDirectory, const FString& ContentPath)
@@ -617,6 +659,40 @@ FStoryFlowNodeData UStoryFlowImporter::ParseNodeData(const TSharedPtr<FJsonObjec
 		Data.bIsArray = NodeObject->GetBoolField(TEXT("isArray"));
 	}
 
+	// Map fields (per-variable map nodes and catalog op nodes)
+	if (NodeObject->HasField(TEXT("keyType")))
+	{
+		Data.KeyType = NodeObject->GetStringField(TEXT("keyType"));
+	}
+	if (NodeObject->HasField(TEXT("valueType")))
+	{
+		Data.ValueType = NodeObject->GetStringField(TEXT("valueType"));
+	}
+
+	// Inline fallbacks for catalog op nodes (used when the corresponding input handle is unwired)
+	if (NodeObject->HasField(TEXT("key")))
+	{
+		// Inline keys are always raw (never strings-table keys): numbers for integer keys, strings otherwise
+		const TSharedPtr<FJsonValue> KeyField = NodeObject->TryGetField(TEXT("key"));
+		if (KeyField.IsValid())
+		{
+			if (KeyField->Type == EJson::Number)
+			{
+				Data.MapKey.SetInt(static_cast<int32>(KeyField->AsNumber()));
+			}
+			else
+			{
+				Data.MapKey.SetString(KeyField->AsString());
+			}
+		}
+	}
+	if (!Data.ValueType.IsEmpty() && NodeObject->HasField(TEXT("value")))
+	{
+		// Gated on valueType because scalar nodes share the "value" JSON field. For string
+		// values this stores the exported strings-table key verbatim (resolved at read time)
+		Data.MapInlineValue = ParseVariant(NodeObject->TryGetField(TEXT("value")), VariableTypeFromString(Data.ValueType));
+	}
+
 	return Data;
 }
 
@@ -686,43 +762,62 @@ FStoryFlowVariable UStoryFlowImporter::ParseVariable(const FString& VariableId, 
 	{
 		TypeString = VariableObject->GetStringField(TEXT("type"));
 	}
-	if (TypeString == TEXT("boolean"))
+	const EStoryFlowVariableType ParsedType = VariableTypeFromString(TypeString);
+	if (ParsedType != EStoryFlowVariableType::None)
 	{
-		Variable.Type = EStoryFlowVariableType::Boolean;
+		Variable.Type = ParsedType;
 	}
-	else if (TypeString == TEXT("integer"))
+	// Unknown type strings leave Type at its default, matching the old if/else chain
+
+	// Parse map key/value types and their enum values (before the value — entry parsing depends on them)
+	if (Variable.Type == EStoryFlowVariableType::Map)
 	{
-		Variable.Type = EStoryFlowVariableType::Integer;
-	}
-	else if (TypeString == TEXT("float"))
-	{
-		Variable.Type = EStoryFlowVariableType::Float;
-	}
-	else if (TypeString == TEXT("string"))
-	{
-		Variable.Type = EStoryFlowVariableType::String;
-	}
-	else if (TypeString == TEXT("enum"))
-	{
-		Variable.Type = EStoryFlowVariableType::Enum;
-	}
-	else if (TypeString == TEXT("image"))
-	{
-		Variable.Type = EStoryFlowVariableType::Image;
-	}
-	else if (TypeString == TEXT("audio"))
-	{
-		Variable.Type = EStoryFlowVariableType::Audio;
-	}
-	else if (TypeString == TEXT("character"))
-	{
-		Variable.Type = EStoryFlowVariableType::Character;
+		if (VariableObject->HasField(TEXT("keyType")))
+		{
+			const EStoryFlowVariableType ParsedKeyType = VariableTypeFromString(VariableObject->GetStringField(TEXT("keyType")));
+			if (ParsedKeyType != EStoryFlowVariableType::None)
+			{
+				Variable.KeyType = ParsedKeyType;
+			}
+		}
+		if (VariableObject->HasField(TEXT("valueType")))
+		{
+			const EStoryFlowVariableType ParsedValueType = VariableTypeFromString(VariableObject->GetStringField(TEXT("valueType")));
+			if (ParsedValueType != EStoryFlowVariableType::None)
+			{
+				Variable.ValueType = ParsedValueType;
+			}
+		}
+		if (VariableObject->HasField(TEXT("keyEnumValues")))
+		{
+			for (const TSharedPtr<FJsonValue>& EnumValue : VariableObject->GetArrayField(TEXT("keyEnumValues")))
+			{
+				Variable.KeyEnumValues.Add(EnumValue->AsString());
+			}
+		}
+		if (VariableObject->HasField(TEXT("valueEnumValues")))
+		{
+			for (const TSharedPtr<FJsonValue>& EnumValue : VariableObject->GetArrayField(TEXT("valueEnumValues")))
+			{
+				Variable.ValueEnumValues.Add(EnumValue->AsString());
+			}
+		}
 	}
 
 	// Parse value
 	if (VariableObject->HasField(TEXT("value")))
 	{
-		Variable.Value = ParseVariant(VariableObject->TryGetField(TEXT("value")), Variable.Type);
+		if (Variable.Type == EStoryFlowVariableType::Map)
+		{
+			// Map values are an ordered array of {key, value} entry objects, not a scalar variant
+			TArray<FStoryFlowMapEntry> Entries;
+			ParseMapEntries(VariableObject->GetArrayField(TEXT("value")), Variable.KeyType, Variable.ValueType, Entries);
+			Variable.Value.SetMap(Entries);
+		}
+		else
+		{
+			Variable.Value = ParseVariant(VariableObject->TryGetField(TEXT("value")), Variable.Type);
+		}
 	}
 
 	// Parse array flag
@@ -751,6 +846,43 @@ FStoryFlowVariable UStoryFlowImporter::ParseVariable(const FString& VariableId, 
 	}
 
 	return Variable;
+}
+
+void UStoryFlowImporter::ParseMapEntries(const TArray<TSharedPtr<FJsonValue>>& EntriesArray, EStoryFlowVariableType KeyType, EStoryFlowVariableType ValueType, TArray<FStoryFlowMapEntry>& OutEntries)
+{
+	// Entry order is contractual — it is observable through mapKeys/mapValues/forEachMap
+	// and must match the editor's serialized order
+	for (const TSharedPtr<FJsonValue>& EntryValue : EntriesArray)
+	{
+		TSharedPtr<FJsonObject> EntryObject = EntryValue->AsObject();
+		if (!EntryObject.IsValid())
+		{
+			continue;
+		}
+
+		FStoryFlowMapEntry Entry;
+
+		// Keys are raw values (numbers for integer keys, strings otherwise) and never
+		// resolve through the strings table or asset map
+		const TSharedPtr<FJsonValue> KeyField = EntryObject->TryGetField(TEXT("key"));
+		if (KeyField.IsValid())
+		{
+			if (KeyType == EStoryFlowVariableType::Integer)
+			{
+				Entry.Key.SetInt(static_cast<int32>(KeyField->AsNumber()));
+			}
+			else
+			{
+				Entry.Key.SetString(KeyField->AsString());
+			}
+		}
+
+		// String-family values store the exported strings-table key / asset id verbatim;
+		// resolution happens at read time, exactly like scalar variables
+		Entry.Value = ParseVariant(EntryObject->TryGetField(TEXT("value")), ValueType);
+
+		OutEntries.Add(Entry);
+	}
 }
 
 void UStoryFlowImporter::ParseStrings(const TSharedPtr<FJsonObject>& StringsObject, TMap<FString, FString>& OutStrings)
