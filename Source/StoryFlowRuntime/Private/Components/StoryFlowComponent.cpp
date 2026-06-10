@@ -1025,6 +1025,10 @@ void UStoryFlowComponent::ResetVariables()
 	if (UStoryFlowScriptAsset* CurrentScriptAsset = ExecutionContext.CurrentScript.Get())
 	{
 		ExecutionContext.LocalVariables = CurrentScriptAsset->Variables;
+		// Resolve string-table keys to localized text, exactly like Initialize does at
+		// every other asset->runtime copy. Without this, string variables display raw
+		// keys like "var_3_value" after a reset.
+		ExecutionContext.ResolveStringVariableValues(ExecutionContext.LocalVariables);
 		ExecutionContext.RebuildLocalNameIndex();
 	}
 
