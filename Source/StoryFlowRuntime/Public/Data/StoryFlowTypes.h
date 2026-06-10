@@ -880,7 +880,9 @@ struct STORYFLOWRUNTIME_API FStoryFlowNodeData
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FStoryFlowVariant MapKey;
 
-	/** Inline value fallback (when the value input has no connection) */
+	/** Inline value fallback (when the value input has no connection).
+	 *  For map op nodes read this, NOT Data.Value — Data.Value is parsed without
+	 *  type context and mis-types integral floats and enums. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FStoryFlowVariant MapInlineValue;
 

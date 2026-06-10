@@ -182,6 +182,13 @@ public:
 	 */
 	TSet<FString> WarnedUnknownNodes;
 
+	/**
+	 * Tracks map node ids for which a "missing keyType/valueType" warning has
+	 * already been logged from the evaluator. Same dedup pattern as
+	 * WarnedUnknownNodes — map reads are pulled repeatedly, warn once per node.
+	 */
+	TSet<FString> WarnedMapNodes;
+
 public:
 	// === Node Accessors ===
 

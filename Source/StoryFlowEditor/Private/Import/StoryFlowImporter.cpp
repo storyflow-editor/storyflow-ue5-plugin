@@ -672,11 +672,13 @@ FStoryFlowNodeData UStoryFlowImporter::ParseNodeData(const TSharedPtr<FJsonObjec
 	// Inline fallbacks for catalog op nodes (used when the corresponding input handle is unwired)
 	if (NodeObject->HasField(TEXT("key")))
 	{
-		// Inline keys are always raw (never strings-table keys): numbers for integer keys, strings otherwise
+		// Inline keys are always raw (never strings-table keys). Coerce off the DECLARED
+		// keyType — not the JSON value's type — so node-inline keys and variable-entry keys
+		// (ParseMapEntries) share one coercion strategy and numeric-string keys can't diverge.
 		const TSharedPtr<FJsonValue> KeyField = NodeObject->TryGetField(TEXT("key"));
 		if (KeyField.IsValid())
 		{
-			if (KeyField->Type == EJson::Number)
+			if (Data.KeyType == TEXT("integer"))
 			{
 				Data.MapKey.SetInt(static_cast<int32>(KeyField->AsNumber()));
 			}
@@ -863,18 +865,21 @@ void UStoryFlowImporter::ParseMapEntries(const TArray<TSharedPtr<FJsonValue>>& E
 		FStoryFlowMapEntry Entry;
 
 		// Keys are raw values (numbers for integer keys, strings otherwise) and never
-		// resolve through the strings table or asset map
+		// resolve through the strings table or asset map. An entry without a key is
+		// unaddressable — skip it (matches the ParseNodes empty-id precedent).
 		const TSharedPtr<FJsonValue> KeyField = EntryObject->TryGetField(TEXT("key"));
-		if (KeyField.IsValid())
+		if (!KeyField.IsValid())
 		{
-			if (KeyType == EStoryFlowVariableType::Integer)
-			{
-				Entry.Key.SetInt(static_cast<int32>(KeyField->AsNumber()));
-			}
-			else
-			{
-				Entry.Key.SetString(KeyField->AsString());
-			}
+			UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Skipping map entry with missing key"));
+			continue;
+		}
+		if (KeyType == EStoryFlowVariableType::Integer)
+		{
+			Entry.Key.SetInt(static_cast<int32>(KeyField->AsNumber()));
+		}
+		else
+		{
+			Entry.Key.SetString(KeyField->AsString());
 		}
 
 		// String-family values store the exported strings-table key / asset id verbatim;

@@ -103,6 +103,20 @@ void FStoryFlowEvaluator::MaybeWarnUnknownNode(const FStoryFlowNode* Node)
 	UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Unsupported node type '%s' at node %s, returning default value"), *Node->TypeString, *Node->Id);
 }
 
+void FStoryFlowEvaluator::MaybeWarnMissingMapTypes(const FStoryFlowNode* Node)
+{
+	if (!Node || !Context)
+	{
+		return;
+	}
+	if (Context->WarnedMapNodes.Contains(Node->Id))
+	{
+		return;
+	}
+	Context->WarnedMapNodes.Add(Node->Id);
+	UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map node '%s' at node %s is missing keyType/valueType data, returning default value"), *Node->TypeString, *Node->Id);
+}
+
 // ============================================================================
 // Boolean Evaluation
 // ============================================================================
@@ -147,9 +161,14 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 	// node is a type the plugin does not understand.
 	MaybeWarnUnknownNode(Node);
 
+	// Map reads are never memoized: maps resolve to LIVE variable storage and
+	// in-place mutations (setMapValue/removeMapKey/clearMap) must be observable
+	// on the next read. The HTML runtime recomputes map reads inline the same way.
+	const bool bIsMapRead = (Node->Type == EStoryFlowNodeType::GetMapValue || Node->Type == EStoryFlowNodeType::HasMapKey);
+
 	// Check cache first
 	FNodeRuntimeState& NodeState = Context->GetNodeState(Node->Id);
-	if (NodeState.bHasCachedOutput && NodeState.CachedOutput.GetType() == EStoryFlowVariableType::Boolean)
+	if (!bIsMapRead && NodeState.bHasCachedOutput && NodeState.CachedOutput.GetType() == EStoryFlowVariableType::Boolean)
 	{
 		return NodeState.CachedOutput.GetBool();
 	}
@@ -328,6 +347,38 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 		break;
 	}
 
+	// Map op arms branch on the node's OWN Data.KeyType/Data.ValueType strings —
+	// a NEW pattern for this evaluator: catalog map ops carry K/V in node data,
+	// unlike array ops which encode the element type in the node type itself.
+	case EStoryFlowNodeType::GetMapValue:
+	{
+		// getMapValue exposes two outputs sharing one node:
+		//   "source-{id}-{valueType}-value" and "source-{id}-boolean-isValid".
+		// Discriminate by SourceHandle suffix (precedent: runScript "-out-" parsing).
+		FStoryFlowVariant Value;
+		const bool bFound = ComputeGetMapValue(Node, Value);
+		if (SourceHandle.Contains(TEXT("-isValid")))
+		{
+			// IsValid is always boolean, regardless of the node's ValueType
+			Result = bFound;
+		}
+		else if (Node->Data.ValueType == TEXT("boolean"))
+		{
+			Result = Value.GetBool(false);
+		}
+		break;
+	}
+
+	case EStoryFlowNodeType::HasMapKey:
+	{
+		if (const TArray<FStoryFlowMapEntry>* Map = EvaluateMapInput(Node, TEXT("1")))
+		{
+			const FStoryFlowVariant Key = EvaluateMapOpKeyInput(Node, TEXT("2"));
+			Result = FindMapEntryByKey(*Map, Node->Data.KeyType, Key) != nullptr;
+		}
+		break;
+	}
+
 	case EStoryFlowNodeType::RunScript:
 	{
 		if (NodeState.bHasOutputValues && !SourceHandle.IsEmpty())
@@ -381,9 +432,12 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 
 	SF_EVAL_TRACE("EVAL %s %s result=%s", *Node->Id, *Node->TypeString, Result ? TEXT("true") : TEXT("false"));
 
-	// Cache result
-	NodeState.CachedOutput.SetBool(Result);
-	NodeState.bHasCachedOutput = true;
+	// Cache result (map reads excluded — see bIsMapRead above)
+	if (!bIsMapRead)
+	{
+		NodeState.CachedOutput.SetBool(Result);
+		NodeState.bHasCachedOutput = true;
+	}
 
 	return Result;
 }
@@ -647,6 +701,27 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 		break;
 	}
 
+	// Map ops branch on the node's Data.KeyType/Data.ValueType (K/V in node data
+	// — see the boolean evaluator's map arms for the pattern note)
+	case EStoryFlowNodeType::MapSize:
+	{
+		// Unresolved/missing-K-V map input falls through to 0 (HTML runtime parity)
+		const TArray<FStoryFlowMapEntry>* Map = EvaluateMapInput(Node, TEXT("1"));
+		Result = Map ? Map->Num() : 0;
+		break;
+	}
+
+	case EStoryFlowNodeType::GetMapValue:
+	{
+		if (Node->Data.ValueType == TEXT("integer"))
+		{
+			FStoryFlowVariant Value;
+			ComputeGetMapValue(Node, Value);
+			Result = Value.GetInt(0);
+		}
+		break;
+	}
+
 	case EStoryFlowNodeType::LengthString:
 	{
 		FString Input = EvaluateStringInput(Node, StoryFlowHandles::In_String, Node->Data.Value.GetString());
@@ -900,6 +975,19 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 		break;
 	}
 
+	// Map op branches on the node's Data.ValueType (K/V in node data — see the
+	// boolean evaluator's map arms for the pattern note)
+	case EStoryFlowNodeType::GetMapValue:
+	{
+		if (Node->Data.ValueType == TEXT("float"))
+		{
+			FStoryFlowVariant Value;
+			ComputeGetMapValue(Node, Value);
+			Result = Value.GetFloat(0.0f);
+		}
+		break;
+	}
+
 	case EStoryFlowNodeType::ForEachFloatLoop:
 	{
 		// Return current element value
@@ -1139,6 +1227,25 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 		if (Array.Num() > 0)
 		{
 			Result = Array[FMath::RandRange(0, Array.Num() - 1)].GetString();
+		}
+		break;
+	}
+
+	// Map op branches on the node's Data.ValueType (K/V in node data — see the
+	// boolean evaluator's map arms for the pattern note). All string-family value
+	// types (string/enum/image/character/audio) read through this evaluator —
+	// enums included, mirroring scalar enum reads (EvaluateEnumInput delegates
+	// here). Stored strings are returned VERBATIM; strings-table resolution for
+	// string-typed map values is Task 7.
+	case EStoryFlowNodeType::GetMapValue:
+	{
+		const FString& MapValueType = Node->Data.ValueType;
+		if (MapValueType == TEXT("string") || MapValueType == TEXT("enum") || MapValueType == TEXT("image") ||
+			MapValueType == TEXT("character") || MapValueType == TEXT("audio"))
+		{
+			FStoryFlowVariant Value;
+			ComputeGetMapValue(Node, Value);
+			Result = Value.GetString();
 		}
 		break;
 	}
@@ -1404,6 +1511,26 @@ TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateArrayInputGeneric(FStoryF
 		return CharVal.GetArray();
 	}
 
+	// mapKeys / mapValues: pure ops that project a map into an array. Recomputed
+	// fresh on every pull — maps mutate in place, so a cached output would go
+	// stale (the HTML runtime recomputes these inline too). Entries are already
+	// typed variants (Int32 or string keys; per-ValueType values), so they copy
+	// straight into the result regardless of which typed wrapper the consumer
+	// used (int array for integer keys, string array for string/enum keys, etc.).
+	if (SourceNode->Type == EStoryFlowNodeType::MapKeys || SourceNode->Type == EStoryFlowNodeType::MapValues)
+	{
+		TArray<FStoryFlowVariant> Result;
+		if (const TArray<FStoryFlowMapEntry>* Map = EvaluateMapInput(SourceNode, TEXT("1")))
+		{
+			Result.Reserve(Map->Num());
+			for (const FStoryFlowMapEntry& Entry : *Map)
+			{
+				Result.Add(SourceNode->Type == EStoryFlowNodeType::MapKeys ? Entry.Key : Entry.Value);
+			}
+		}
+		return Result;
+	}
+
 	// Handle array modify nodes (add/remove/clear) that output their result array.
 	// These nodes store their result in CachedOutput rather than a variable field.
 	if (IsArrayModifyNode(SourceNode->Type))
@@ -1463,6 +1590,146 @@ TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateCharacterArrayInput(FStor
 TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateAudioArrayInput(FStoryFlowNode* Node, const FString& HandleSuffix)
 {
 	return EvaluateArrayInputGeneric(Node, HandleSuffix, EStoryFlowNodeType::GetAudioArray);
+}
+
+// ============================================================================
+// Map Evaluation
+// ============================================================================
+
+TArray<FStoryFlowMapEntry>* FStoryFlowEvaluator::EvaluateMapInput(FStoryFlowNode* Node, const FString& OptionId)
+{
+	if (!Context || !Node)
+	{
+		return nullptr;
+	}
+
+	// Map handles bake the key/value types into the handle ID:
+	// "target-{nodeId}-map-{keyType}-{valueType}-{optionId}". Catalog map op
+	// nodes carry K/V in NODE DATA — without them the input handle cannot be
+	// built, so resolution fails to defaults (warn once per node).
+	if (Node->Data.KeyType.IsEmpty() || Node->Data.ValueType.IsEmpty())
+	{
+		MaybeWarnMissingMapTypes(Node);
+		return nullptr;
+	}
+
+	const FString HandleSuffix = StoryFlowHandles::In_Map(Node->Data.KeyType, Node->Data.ValueType, OptionId);
+	const FStoryFlowConnection* Edge = Context->FindInputEdge(Node->Id, HandleSuffix);
+	if (!Edge)
+	{
+		return nullptr;
+	}
+
+	FStoryFlowNode* SourceNode = Context->GetNode(Edge->Source);
+	if (!SourceNode)
+	{
+		return nullptr;
+	}
+
+	// Forward-compat: warn (once) and fall through to unresolved if the source
+	// node is a type the plugin does not understand.
+	MaybeWarnUnknownNode(SourceNode);
+
+	switch (SourceNode->Type)
+	{
+	case EStoryFlowNodeType::GetMap:
+	case EStoryFlowNodeType::SetMap:
+	{
+		// Resolve the bound variable and return its LIVE map storage. Maps alias:
+		// mutators (Task 4) write through this pointer and every later read must
+		// observe the change, so never return a copy here.
+		FStoryFlowVariable* Var = Context->FindVariable(SourceNode->Data.Variable, SourceNode->Data.bIsGlobal);
+		if (Var && Var->Type == EStoryFlowVariableType::Map)
+		{
+			if (!Var->Value.IsMap())
+			{
+				// Variable imported without an initial value — establish the map
+				// type so the returned storage is correctly typed for mutation.
+				Var->Value.SetMap(TArray<FStoryFlowMapEntry>());
+			}
+			return &Var->Value.GetMapMutable();
+		}
+		return nullptr;
+	}
+
+	case EStoryFlowNodeType::SetMapValue:
+	case EStoryFlowNodeType::RemoveMapKey:
+	case EStoryFlowNodeType::ClearMap:
+	{
+		// Map mutator nodes expose the map they mutated on their map output.
+		// Task 4 populates CachedOutput when the mutator executes.
+		FNodeRuntimeState& State = Context->GetNodeState(SourceNode->Id);
+		if (State.bHasCachedOutput && State.CachedOutput.IsMap())
+		{
+			return &State.CachedOutput.GetMapMutable();
+		}
+		return nullptr;
+	}
+
+	case EStoryFlowNodeType::GetCharacterVar:
+	case EStoryFlowNodeType::SetCharacterVar:
+		// TODO(Task 6): resolve map-typed character variables here (mirror the
+		// CharacterPath + VariableName lookup the scalar evaluators use).
+		return nullptr;
+
+	default:
+		return nullptr;
+	}
+}
+
+FStoryFlowVariant FStoryFlowEvaluator::EvaluateMapOpKeyInput(FStoryFlowNode* Node, const FString& OptionId)
+{
+	// Key inputs are typed by the node's keyType: "target-{nodeId}-{keyType}-{optionId}".
+	// Wired input wins; inline Data.MapKey (coerced off the declared keyType at
+	// import) is the fallback.
+	FStoryFlowVariant Key;
+	if (!Context || !Node)
+	{
+		return Key;
+	}
+
+	const FString HandleSuffix = FString::Printf(TEXT("%s-%s"), *Node->Data.KeyType, *OptionId);
+	if (Node->Data.KeyType == TEXT("integer"))
+	{
+		Key.SetInt(EvaluateIntegerInput(Node, HandleSuffix, Node->Data.MapKey.GetInt(0)));
+	}
+	else
+	{
+		// string and enum keys both flow through the string evaluator
+		Key.SetString(EvaluateStringInput(Node, HandleSuffix, Node->Data.MapKey.GetString()));
+	}
+	return Key;
+}
+
+const FStoryFlowMapEntry* FStoryFlowEvaluator::FindMapEntryByKey(const TArray<FStoryFlowMapEntry>& Entries, const FString& KeyType, const FStoryFlowVariant& Key)
+{
+	// Integer keys compare as Int32; string/enum keys as exact (case-sensitive) strings
+	if (KeyType == TEXT("integer"))
+	{
+		const int32 KeyInt = Key.GetInt(0);
+		return Entries.FindByPredicate([KeyInt](const FStoryFlowMapEntry& Entry) { return Entry.Key.GetInt() == KeyInt; });
+	}
+	const FString KeyString = Key.GetString();
+	return Entries.FindByPredicate([&KeyString](const FStoryFlowMapEntry& Entry) { return Entry.Key.GetString().Equals(KeyString); });
+}
+
+bool FStoryFlowEvaluator::ComputeGetMapValue(FStoryFlowNode* Node, FStoryFlowVariant& OutValue)
+{
+	// Mirrors the HTML runtime's computeGetMapValue: resolve the map (input "1"),
+	// resolve the key (input "2" / inline fallback), report whether the key was
+	// found. Miss/unresolved leaves OutValue untouched and returns IsValid=false.
+	const TArray<FStoryFlowMapEntry>* Map = EvaluateMapInput(Node, TEXT("1"));
+	if (!Map)
+	{
+		return false;
+	}
+	const FStoryFlowVariant Key = EvaluateMapOpKeyInput(Node, TEXT("2"));
+	if (const FStoryFlowMapEntry* Entry = FindMapEntryByKey(*Map, Node->Data.KeyType, Key))
+	{
+		OutValue = Entry->Value;
+		return true;
+	}
+	return false;
 }
 
 // ============================================================================

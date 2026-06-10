@@ -80,6 +80,35 @@ public:
 	/** Evaluate audio array from a connected input */
 	TArray<FStoryFlowVariant> EvaluateAudioArrayInput(FStoryFlowNode* Node, const FString& HandleSuffix);
 
+	// === Map Evaluation ===
+
+	/**
+	 * Resolve the map wired into one of Node's map inputs and return a pointer
+	 * to the LIVE entry storage (nullptr = unresolved). Maps alias: mutators
+	 * (setMapValue/removeMapKey/clearMap) write through this pointer and every
+	 * later read must observe the change, so this never returns a copy.
+	 *
+	 * The full target handle is "target-{nodeId}-map-{keyType}-{valueType}-{optionId}";
+	 * K/V come from Node's own Data.KeyType/Data.ValueType (catalog map op nodes carry
+	 * them in node data), the caller passes only the OptionId ("1" pure reads,
+	 * "2" mutators, "map" forEachMap).
+	 */
+	TArray<FStoryFlowMapEntry>* EvaluateMapInput(FStoryFlowNode* Node, const FString& OptionId);
+
+	/**
+	 * Resolve a map op's key: wired key input first ("target-{nodeId}-{keyType}-{optionId}"),
+	 * else the inline Data.MapKey fallback. The returned variant is normalized per the
+	 * node's KeyType string (Int32 for integer keys, string otherwise).
+	 */
+	FStoryFlowVariant EvaluateMapOpKeyInput(FStoryFlowNode* Node, const FString& OptionId);
+
+	/**
+	 * Find a map entry by key. Integer keys compare as Int32; string/enum keys
+	 * as exact (case-sensitive) strings. KeyType is the node/variable's key type
+	 * string ("integer", "string", "enum").
+	 */
+	static const FStoryFlowMapEntry* FindMapEntryByKey(const TArray<FStoryFlowMapEntry>& Entries, const FString& KeyType, const FStoryFlowVariant& Key);
+
 	// === Boolean Chain Processing ===
 
 	/** Pre-process boolean chain to cache results */
@@ -113,6 +142,21 @@ private:
 
 	/** Generic array input evaluator — all typed array evaluators delegate to this */
 	TArray<FStoryFlowVariant> EvaluateArrayInputGeneric(FStoryFlowNode* Node, const FString& HandleSuffix, EStoryFlowNodeType ExpectedGetArrayType);
+
+	/**
+	 * Compute a getMapValue lookup: resolve the map (input "1") and key (input "2"
+	 * / inline fallback) and report whether the key was found. OutValue receives
+	 * the stored value on a hit and is left untouched on a miss — callers return
+	 * their own type defaults.
+	 */
+	bool ComputeGetMapValue(FStoryFlowNode* Node, FStoryFlowVariant& OutValue);
+
+	/**
+	 * Log a one-time warning when a map node is missing its keyType/valueType
+	 * node data (the map input handle cannot be built without them). Same
+	 * dedup pattern as MaybeWarnUnknownNode, via Context->WarnedMapNodes.
+	 */
+	void MaybeWarnMissingMapTypes(const FStoryFlowNode* Node);
 
 	/**
 	 * Log a one-time warning if the source node's type is Unknown. The default

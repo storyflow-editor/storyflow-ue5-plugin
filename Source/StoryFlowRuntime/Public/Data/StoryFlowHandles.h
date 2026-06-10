@@ -109,4 +109,20 @@ namespace StoryFlowHandles
 	inline constexpr const TCHAR* In_ImageInput = TEXT("image-image-input");
 	inline constexpr const TCHAR* In_AudioInput = TEXT("audio-audio-input");
 	inline constexpr const TCHAR* In_CharacterInput = TEXT("character-character-input");
+
+	// ========================================================================
+	// Map Handles
+	// ========================================================================
+	// Map handles bake the key/value types into the handle ID itself:
+	//   Source: "source-{nodeId}-map-{keyType}-{valueType}"             (no optionId)
+	//   Target: "target-{nodeId}-map-{keyType}-{valueType}-{optionId}"
+	// Target optionIds: "1" (pure map reads: getMapValue/hasMapKey/mapSize/
+	// mapKeys/mapValues), "2" (setMap + mutators: setMapValue/removeMapKey/
+	// clearMap), "map" (forEachMap) — optionIds are NOT always digits.
+
+	/** Build a map input handle suffix: "map-{KeyType}-{ValueType}-{OptionId}" */
+	inline FString In_Map(const FString& KeyType, const FString& ValueType, const FString& OptionId)
+	{
+		return FString::Printf(TEXT("map-%s-%s-%s"), *KeyType, *ValueType, *OptionId);
+	}
 }

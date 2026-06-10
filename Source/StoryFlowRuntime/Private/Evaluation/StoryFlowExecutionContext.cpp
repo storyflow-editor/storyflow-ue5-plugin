@@ -69,6 +69,7 @@ void FStoryFlowExecutionContext::Reset()
 	ProcessingDepth = 0;
 	NodeRuntimeStates.Empty();
 	WarnedUnknownNodes.Empty();
+	WarnedMapNodes.Empty();
 	ExternalGlobalVariables = nullptr;
 	ExternalCharacters = nullptr;
 }
