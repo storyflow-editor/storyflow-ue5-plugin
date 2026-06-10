@@ -1690,21 +1690,14 @@ TArray<FStoryFlowMapEntry>* FStoryFlowEvaluator::EvaluateMapInput(FStoryFlowNode
 	return Var ? &Var->Value.GetMapMutable() : nullptr;
 }
 
-FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariable(FStoryFlowNode* Node, const FString& OptionId, bool* bOutIsGlobal, bool* bOutIsCharacterSource)
+FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariable(FStoryFlowNode* Node, const FString& OptionId, EMapSourceKind* OutSourceKind)
 {
-	// Reset both out-flags up front so they are deterministic even on null return
-	// (symmetric — callers must not read stale values from either flag).
-	if (bOutIsGlobal)
-	{
-		*bOutIsGlobal = false;
-	}
-	if (bOutIsCharacterSource)
-	{
-		*bOutIsCharacterSource = false;
-	}
-
 	if (!Context || !Node)
 	{
+		if (OutSourceKind)
+		{
+			*OutSourceKind = EMapSourceKind::Unresolved;
+		}
 		return nullptr;
 	}
 
@@ -1715,10 +1708,30 @@ FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariable(FStoryFlowNode*
 	if (Node->Data.KeyType.IsEmpty() || Node->Data.ValueType.IsEmpty())
 	{
 		MaybeWarnMissingMapTypes(Node);
+		if (OutSourceKind)
+		{
+			*OutSourceKind = EMapSourceKind::Unresolved;
+		}
 		return nullptr;
 	}
 
-	const FString HandleSuffix = StoryFlowHandles::In_Map(Node->Data.KeyType, Node->Data.ValueType, OptionId);
+	return ResolveMapInputVariableByHandle(Node, StoryFlowHandles::In_Map(Node->Data.KeyType, Node->Data.ValueType, OptionId), OutSourceKind);
+}
+
+FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariableByHandle(FStoryFlowNode* Node, const FString& HandleSuffix, EMapSourceKind* OutSourceKind)
+{
+	// Reset the out-kind up front so it is deterministic even on null return
+	// (callers must not read a stale value).
+	if (OutSourceKind)
+	{
+		*OutSourceKind = EMapSourceKind::Unresolved;
+	}
+
+	if (!Context || !Node)
+	{
+		return nullptr;
+	}
+
 	const FStoryFlowConnection* Edge = Context->FindInputEdge(Node->Id, HandleSuffix);
 	if (!Edge)
 	{
@@ -1754,6 +1767,7 @@ FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariable(FStoryFlowNode*
 		{
 			return nullptr;
 		}
+		Edge = UpstreamEdge; // keep the terminal edge — its SourceHandle carries the runScript "-out-" UUID
 		SourceNode = Context->GetNode(UpstreamEdge->Source);
 	}
 
@@ -1783,9 +1797,9 @@ FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariable(FStoryFlowNode*
 				// type so the returned storage is correctly typed for mutation.
 				Var->Value.SetMap(TArray<FStoryFlowMapEntry>());
 			}
-			if (bOutIsGlobal)
+			if (OutSourceKind)
 			{
-				*bOutIsGlobal = SourceNode->Data.bIsGlobal;
+				*OutSourceKind = SourceNode->Data.bIsGlobal ? EMapSourceKind::GlobalVariable : EMapSourceKind::ScriptVariable;
 			}
 			return Var;
 		}
@@ -1800,7 +1814,7 @@ FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariable(FStoryFlowNode*
 		// are observably identical on live vs copy and stay zero-copy. But the
 		// cross-runtime contract makes charvar-sourced chains READ-ONLY (the
 		// HTML runtime hands mutators a throwaway snapshot; setMap snapshots
-		// rather than aliases), so bOutIsCharacterSource flags the arm and
+		// rather than aliases), so the CharacterVariable kind flags the arm and
 		// mutating/aliasing callers must honor it. Same CharacterPath +
 		// VariableName lookup the scalar charvar evaluators use: wired
 		// character input wins over the inline dropdown path.
@@ -1823,16 +1837,12 @@ FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariable(FStoryFlowNode*
 			{
 				// Variable imported without an initial value — establish the map
 				// type so the returned storage is correctly typed for reads
-				// (charvar chains are read-only; see bOutIsCharacterSource above).
+				// (charvar chains are read-only; see the CharacterVariable kind above).
 				Var->Value.SetMap(TArray<FStoryFlowMapEntry>());
 			}
-			if (bOutIsGlobal)
+			if (OutSourceKind)
 			{
-				*bOutIsGlobal = false; // character variables are never script-globals
-			}
-			if (bOutIsCharacterSource)
-			{
-				*bOutIsCharacterSource = true;
+				*OutSourceKind = EMapSourceKind::CharacterVariable;
 			}
 			return Var;
 		}
@@ -1840,10 +1850,59 @@ FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariable(FStoryFlowNode*
 	}
 
 	case EStoryFlowNodeType::RunScript:
-		// TODO(Task 8): runScript map outputs — HTML resolves _outputValues maps;
-		// until then this is unresolved. NOTE: HandleSetMap's wired-but-unresolved
-		// branch wipes the target to empty — T8 must also revisit that interaction.
+	{
+		// runScript map outputs: the HTML runtime's evaluateMapFromNode reads
+		// _outputValues[uuid] and CONVERTS entry arrays to a fresh Map at the
+		// read site — observable semantics are a DETACHED snapshot crossing the
+		// boundary. HandleEnd stores map-typed outputs as DETACHED variables in
+		// MapOutputVariables (keyed by Name), so this arm resolves against that
+		// and flags the source READ-ONLY like charvar chains (mutating a dead
+		// invocation's output is meaningless — HTML mutations land on the
+		// converted fresh Map and are lost). Missing outputs resolve to nullptr,
+		// which readers treat as empty and HandleSetMap wipes to a fresh empty
+		// map — both match HTML's "missing _outputValues returns empty Map" pin.
+		FNodeRuntimeState& RSState = Context->GetNodeState(SourceNode->Id);
+		if (!RSState.bHasOutputValues || Edge->SourceHandle.IsEmpty())
+		{
+			return nullptr;
+		}
+		const int32 OutIdx = Edge->SourceHandle.Find(TEXT("-out-"));
+		if (OutIdx == INDEX_NONE)
+		{
+			return nullptr;
+		}
+		const FString VarId = Edge->SourceHandle.Mid(OutIdx + 5); // UUID from handle
+		// Map UUID to variable Name via ScriptOutputs (MapOutputVariables is keyed by Name)
+		FString VarName;
+		for (const auto& Output : SourceNode->Data.ScriptOutputs)
+		{
+			if (Output.Id == VarId)
+			{
+				VarName = Output.Name;
+				break;
+			}
+		}
+		if (VarName.IsEmpty())
+		{
+			return nullptr;
+		}
+		FStoryFlowVariable* Var = RSState.MapOutputVariables.Find(VarName);
+		if (Var && Var->Type == EStoryFlowVariableType::Map)
+		{
+			if (!Var->Value.IsMap())
+			{
+				// Output captured without established storage — type it for reads
+				// (runScript-output chains are read-only; see above).
+				Var->Value.SetMap(TArray<FStoryFlowMapEntry>());
+			}
+			if (OutSourceKind)
+			{
+				*OutSourceKind = EMapSourceKind::RunScriptOutput;
+			}
+			return Var;
+		}
 		return nullptr;
+	}
 
 	default:
 		return nullptr;

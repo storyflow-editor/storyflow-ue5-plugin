@@ -56,6 +56,17 @@ struct FNodeRuntimeState
 	/** Output values from a completed RunScript call (keyed by variable ID) */
 	TMap<FString, FStoryFlowVariant> OutputValues;
 	bool bHasOutputValues = false;
+
+	/**
+	 * Map-typed output variables from a completed RunScript call (keyed by
+	 * variable Name). Kept as full variables (not variants) so the map resolver
+	 * can hand out stable FStoryFlowVariable* storage with type metadata. The
+	 * map storage is DETACHED from the dead invocation at capture (HandleEnd) —
+	 * the HTML runtime converts _outputValues to a fresh Map at the read site,
+	 * so the boundary is observably a snapshot. Read-only by contract (see
+	 * EMapSourceKind::RunScriptOutput).
+	 */
+	TMap<FString, FStoryFlowVariable> MapOutputVariables;
 };
 
 /**

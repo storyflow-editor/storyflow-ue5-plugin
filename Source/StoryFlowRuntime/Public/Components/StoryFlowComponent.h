@@ -272,6 +272,20 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
 	TArray<FStoryFlowVariant> GetArrayVariable(const FString& VariableName, bool bGlobal = false);
 
+	/**
+	 * Read a map variable by display name.
+	 *
+	 * Entries are projected as two parallel arrays — Keys[i] pairs with Values[i], in the
+	 * map's entry order — because the entry struct holds variants recursively and cannot
+	 * cross into Blueprint. Elements are FStoryFlowVariant copies so callers can use the
+	 * typed getters (GetBool, GetInt, GetFloat, GetString). String and enum VALUES are
+	 * routed through the string table so callers receive localized text; KEYS are raw
+	 * identifiers and never resolve. Image, audio, and character values pass through
+	 * unchanged (asset keys / paths). Empty arrays if the variable is missing or not a map.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	void GetMapVariable(const FString& VariableName, TArray<FStoryFlowVariant>& Keys, TArray<FStoryFlowVariant>& Values, bool bGlobal = false);
+
 	// ========================================================================
 	// Character Variable Access (by path — legacy)
 	// ========================================================================

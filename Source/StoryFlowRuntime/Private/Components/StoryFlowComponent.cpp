@@ -612,6 +612,54 @@ TArray<FStoryFlowVariant> UStoryFlowComponent::GetArrayVariable(const FString& V
 	return Out;
 }
 
+void UStoryFlowComponent::GetMapVariable(const FString& VariableName, TArray<FStoryFlowVariant>& Keys, TArray<FStoryFlowVariant>& Values, bool bGlobal)
+{
+	Keys.Reset();
+	Values.Reset();
+
+	// Scoping mirrors GetArrayVariable: when bGlobal is false, search locals
+	// (during dialogue) then fall back to globals; when true, globals only.
+	FStoryFlowVariable* Var = nullptr;
+	if (!bGlobal && ExecutionContext.bIsExecuting)
+	{
+		Var = ExecutionContext.FindVariableByName(VariableName, /*bIsGlobal=*/false);
+	}
+	if (!Var)
+	{
+		Var = FindVariableByName(VariableName, /*bGlobal=*/true);
+	}
+	if (!Var)
+	{
+		return;
+	}
+
+	if (Var->Type != EStoryFlowVariableType::Map)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Variable '%s' is not a map"), *VariableName);
+		return;
+	}
+
+	// Return resolved copies so callers see localized text for string and enum
+	// VALUE types — keys are raw identifiers and never resolve (the runtime-wide
+	// map rule: values resolve via the strings table, keys never do). Image,
+	// audio, and character values pass through unchanged because their values
+	// are asset keys / paths, not string-table keys.
+	for (const FStoryFlowMapEntry& Entry : Var->Value.GetMap())
+	{
+		Keys.Add(Entry.Key);
+		FStoryFlowVariant ValueCopy = Entry.Value;
+		if (Entry.Value.GetType() == EStoryFlowVariableType::String)
+		{
+			ValueCopy.SetString(ResolveString(Entry.Value.GetString()));
+		}
+		else if (Entry.Value.GetType() == EStoryFlowVariableType::Enum)
+		{
+			ValueCopy.SetEnum(ResolveString(Entry.Value.GetString()));
+		}
+		Values.Add(ValueCopy);
+	}
+}
+
 FStoryFlowVariant UStoryFlowComponent::GetCharacterVariable(const FString& CharacterPath, const FString& VariableName)
 {
 	FStoryFlowCharacterDef* CharDef = FindCharacter(CharacterPath);
@@ -1379,12 +1427,26 @@ void UStoryFlowComponent::HandleEnd(FStoryFlowNode* Node)
 
 		// Gather output variable values BEFORE popping (still in called script)
 		// Key by variable Name so evaluators can match via ScriptOutputs name lookup
-		// TODO(Task 8): a map-typed output variant copy SHARES the dead invocation's
-		// storage (TSharedPtr) — decide alias-vs-detach when map runScript outputs land.
 		TMap<FString, FStoryFlowVariant> OutputValues;
+		TMap<FString, FStoryFlowVariable> MapOutputVariables;
 		for (const auto& VarPair : ExecutionContext.LocalVariables)
 		{
-			if (VarPair.Value.bIsOutput)
+			if (!VarPair.Value.bIsOutput)
+			{
+				continue;
+			}
+			if (VarPair.Value.Type == EStoryFlowVariableType::Map)
+			{
+				// Map outputs DETACH (a plain variant copy would share the dead
+				// invocation's TSharedPtr storage) — the HTML runtime converts
+				// _outputValues to a fresh Map at the read site, so the boundary
+				// is observably a snapshot. Stored as full variables so the map
+				// resolver can hand out stable storage with type metadata.
+				FStoryFlowVariable OutVar = VarPair.Value;
+				OutVar.Value.DeepCopyMap();
+				MapOutputVariables.Add(OutVar.Name, MoveTemp(OutVar));
+			}
+			else
 			{
 				OutputValues.Add(VarPair.Value.Name, VarPair.Value.Value);
 			}
@@ -1412,10 +1474,11 @@ void UStoryFlowComponent::HandleEnd(FStoryFlowNode* Node)
 			}
 
 			// Store output values on the RunScript node's runtime state
-			if (OutputValues.Num() > 0)
+			if (OutputValues.Num() > 0 || MapOutputVariables.Num() > 0)
 			{
 				FNodeRuntimeState& RSState = ExecutionContext.GetNodeState(Frame.ReturnNodeId);
 				RSState.OutputValues = MoveTemp(OutputValues);
+				RSState.MapOutputVariables = MoveTemp(MapOutputVariables);
 				RSState.bHasOutputValues = true;
 			}
 
@@ -1659,6 +1722,28 @@ void UStoryFlowComponent::HandleRunScript(FStoryFlowNode* Node)
 					{
 						float Val = Evaluator->EvaluateFloatInput(Node, HandleSuffix, 0.0f);
 						ParamValues.Add(Param.Name, FStoryFlowVariant::FromFloat(Val));
+					}
+				}
+				else if (Param.Type == TEXT("map"))
+				{
+					// Map parameters use "map-param-{id}" — the editor's scriptInterface
+					// carries no key/value types for map params, so unlike map op handles
+					// none are baked into the handle ID (resolve by explicit handle).
+					// Maps cross the call boundary BY VALUE: SetMap allocates fresh
+					// storage for the entries, so the callee's variable never aliases the
+					// caller's (and entry values are scalar, so the copy is a full
+					// snapshot). Wired-but-unresolved passes an empty map (the eventual
+					// HTML getMapInput empty-Map fallback).
+					if (ExecutionContext.FindInputEdge(Node->Id, HandleSuffix))
+					{
+						TArray<FStoryFlowMapEntry> Entries;
+						if (FStoryFlowVariable* SourceVar = Evaluator->ResolveMapInputVariableByHandle(Node, HandleSuffix))
+						{
+							Entries = SourceVar->Value.GetMap();
+						}
+						FStoryFlowVariant MapVariant;
+						MapVariant.SetMap(Entries);
+						ParamValues.Add(Param.Name, MoveTemp(MapVariant));
 					}
 				}
 				else // string, enum, image, character, audio - all string-valued
@@ -2239,18 +2324,19 @@ void UStoryFlowComponent::HandleSetMap(FStoryFlowNode* Node)
 		const FString HandleSuffix = StoryFlowHandles::In_Map(Node->Data.KeyType, Node->Data.ValueType, TEXT("2"));
 		if (ExecutionContext.FindInputEdge(Node->Id, HandleSuffix))
 		{
-			bool bSourceIsGlobal = false;
-			bool bSourceIsCharacter = false;
-			if (FStoryFlowVariable* SourceVar = Evaluator->ResolveMapInputVariable(Node, TEXT("2"), &bSourceIsGlobal, &bSourceIsCharacter))
+			EMapSourceKind SourceKind = EMapSourceKind::Unresolved;
+			if (FStoryFlowVariable* SourceVar = Evaluator->ResolveMapInputVariable(Node, TEXT("2"), &SourceKind))
 			{
-				if (bSourceIsCharacter)
+				if (SourceKind == EMapSourceKind::CharacterVariable || SourceKind == EMapSourceKind::RunScriptOutput)
 				{
-					// Charvar-terminal chain: HTML's setMap SNAPSHOTS the charvar
-					// entries into fresh objects (runtime-variables.js builds a new
-					// Map from the charvar's entries) — it does NOT alias the
-					// character's live storage. SetMap allocates fresh storage, and
-					// entry values are scalar (no nested maps), so this copy is the
-					// full deep-copy snapshot.
+					// Read-only-terminal chain (charvar or runScript output):
+					// HTML's setMap SNAPSHOTS the entries into fresh objects —
+					// charvars get a throwaway snapshot (runtime-variables.js
+					// builds a new Map from the charvar's entries) and runScript
+					// _outputValues are converted to a fresh Map at the read site.
+					// Neither aliases live storage. SetMap allocates fresh storage,
+					// and entry values are scalar (no nested maps), so this copy is
+					// the full deep-copy snapshot.
 					Var->Value.SetMap(SourceVar->Value.GetMap());
 				}
 				else
@@ -2307,9 +2393,8 @@ void UStoryFlowComponent::HandleMapModify(FStoryFlowNode* Node)
 	}
 
 	// THEN resolve the live map (input "2") and mutate immediately
-	bool bIsGlobal = false;
-	bool bIsCharacterSource = false;
-	FStoryFlowVariable* Var = Evaluator->ResolveMapInputVariable(Node, TEXT("2"), &bIsGlobal, &bIsCharacterSource);
+	EMapSourceKind SourceKind = EMapSourceKind::Unresolved;
+	FStoryFlowVariable* Var = Evaluator->ResolveMapInputVariable(Node, TEXT("2"), &SourceKind);
 	if (!Var)
 	{
 		// Unresolved map: HTML mutates a throwaway empty Map — no effect, no dispatch.
@@ -2319,14 +2404,15 @@ void UStoryFlowComponent::HandleMapModify(FStoryFlowNode* Node)
 		return;
 	}
 
-	if (bIsCharacterSource)
+	if (SourceKind == EMapSourceKind::CharacterVariable || SourceKind == EMapSourceKind::RunScriptOutput)
 	{
-		// Charvar-terminal chain: HTML hands the mutator a THROWAWAY fresh Map of
-		// the charvar entries — the character's stored variable is observably
-		// unchanged and no variable-change dispatch fires. Skip the mutation AND
-		// the notify (observable no-op): charvar-sourced map chains are read-only
-		// per contract — use setCharacterVar to write.
-		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Map mutator node %s resolves to a character variable - mutation skipped (charvar-sourced map chains are read-only per contract - use setCharacterVar to write)"), *Node->Id);
+		// Read-only-terminal chain (charvar or runScript output): HTML hands the
+		// mutator a THROWAWAY fresh Map — the charvar's stored variable / the
+		// dead invocation's output is observably unchanged and no variable-change
+		// dispatch fires. Skip the mutation AND the notify (observable no-op):
+		// these sources are read-only per contract — use setCharacterVar to
+		// write charvars; runScript outputs are a snapshot of a dead invocation.
+		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Map mutator node %s resolves to a read-only map source (character variable or runScript output) - mutation skipped"), *Node->Id);
 		HandleSetNodeEnd(Node, FlowHandle);
 		return;
 	}
@@ -2372,7 +2458,7 @@ void UStoryFlowComponent::HandleMapModify(FStoryFlowNode* Node)
 		break;
 	}
 
-	NotifyVariableChanged(*Var, bIsGlobal);
+	NotifyVariableChanged(*Var, SourceKind == EMapSourceKind::GlobalVariable);
 	HandleSetNodeEnd(Node, FlowHandle);
 }
 
