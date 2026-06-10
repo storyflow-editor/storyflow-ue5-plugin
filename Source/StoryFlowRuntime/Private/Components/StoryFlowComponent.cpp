@@ -2240,10 +2240,24 @@ void UStoryFlowComponent::HandleSetMap(FStoryFlowNode* Node)
 		if (ExecutionContext.FindInputEdge(Node->Id, HandleSuffix))
 		{
 			bool bSourceIsGlobal = false;
-			if (FStoryFlowVariable* SourceVar = Evaluator->ResolveMapInputVariable(Node, TEXT("2"), &bSourceIsGlobal))
+			bool bSourceIsCharacter = false;
+			if (FStoryFlowVariable* SourceVar = Evaluator->ResolveMapInputVariable(Node, TEXT("2"), &bSourceIsGlobal, &bSourceIsCharacter))
 			{
-				// Wired and resolved: share the origin variable's live map storage
-				Var->Value.AliasMap(SourceVar->Value);
+				if (bSourceIsCharacter)
+				{
+					// Charvar-terminal chain: HTML's setMap SNAPSHOTS the charvar
+					// entries into fresh objects (runtime-variables.js builds a new
+					// Map from the charvar's entries) — it does NOT alias the
+					// character's live storage. SetMap allocates fresh storage, and
+					// entry values are scalar (no nested maps), so this copy is the
+					// full deep-copy snapshot.
+					Var->Value.SetMap(SourceVar->Value.GetMap());
+				}
+				else
+				{
+					// Wired and resolved: share the origin variable's live map storage
+					Var->Value.AliasMap(SourceVar->Value);
+				}
 			}
 			else
 			{
@@ -2294,12 +2308,25 @@ void UStoryFlowComponent::HandleMapModify(FStoryFlowNode* Node)
 
 	// THEN resolve the live map (input "2") and mutate immediately
 	bool bIsGlobal = false;
-	FStoryFlowVariable* Var = Evaluator->ResolveMapInputVariable(Node, TEXT("2"), &bIsGlobal);
+	bool bIsCharacterSource = false;
+	FStoryFlowVariable* Var = Evaluator->ResolveMapInputVariable(Node, TEXT("2"), &bIsGlobal, &bIsCharacterSource);
 	if (!Var)
 	{
 		// Unresolved map: HTML mutates a throwaway empty Map — no effect, no dispatch.
 		// Silent no-op is HTML parity, but leave a breadcrumb for authors at Verbose.
 		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Map mutator node %s could not resolve its map input - mutation skipped"), *Node->Id);
+		HandleSetNodeEnd(Node, FlowHandle);
+		return;
+	}
+
+	if (bIsCharacterSource)
+	{
+		// Charvar-terminal chain: HTML hands the mutator a THROWAWAY fresh Map of
+		// the charvar entries — the character's stored variable is observably
+		// unchanged and no variable-change dispatch fires. Skip the mutation AND
+		// the notify (observable no-op): charvar-sourced map chains are read-only
+		// per contract — use setCharacterVar to write.
+		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Map mutator node %s resolves to a character variable - mutation skipped (charvar-sourced map chains are read-only per contract - use setCharacterVar to write)"), *Node->Id);
 		HandleSetNodeEnd(Node, FlowHandle);
 		return;
 	}

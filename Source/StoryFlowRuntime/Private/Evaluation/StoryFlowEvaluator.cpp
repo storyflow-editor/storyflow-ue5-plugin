@@ -1690,8 +1690,13 @@ TArray<FStoryFlowMapEntry>* FStoryFlowEvaluator::EvaluateMapInput(FStoryFlowNode
 	return Var ? &Var->Value.GetMapMutable() : nullptr;
 }
 
-FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariable(FStoryFlowNode* Node, const FString& OptionId, bool* bOutIsGlobal)
+FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariable(FStoryFlowNode* Node, const FString& OptionId, bool* bOutIsGlobal, bool* bOutIsCharacterSource)
 {
+	if (bOutIsCharacterSource)
+	{
+		*bOutIsCharacterSource = false;
+	}
+
 	if (!Context || !Node)
 	{
 		return nullptr;
@@ -1785,9 +1790,14 @@ FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariable(FStoryFlowNode*
 	case EStoryFlowNodeType::SetCharacterVar:
 	{
 		// Map-typed character variables resolve to the character's LIVE runtime
-		// variable (the subsystem's mutable copy), mirroring the getMap arm above.
-		// Same CharacterPath + VariableName lookup the scalar charvar evaluators
-		// use: wired character input wins over the inline dropdown path.
+		// variable (the subsystem's mutable copy) — fine for pure reads, which
+		// are observably identical on live vs copy and stay zero-copy. But the
+		// cross-runtime contract makes charvar-sourced chains READ-ONLY (the
+		// HTML runtime hands mutators a throwaway snapshot; setMap snapshots
+		// rather than aliases), so bOutIsCharacterSource flags the arm and
+		// mutating/aliasing callers must honor it. Same CharacterPath +
+		// VariableName lookup the scalar charvar evaluators use: wired
+		// character input wins over the inline dropdown path.
 		if (SourceNode->Data.VariableType != TEXT("map"))
 		{
 			return nullptr;
@@ -1812,6 +1822,10 @@ FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariable(FStoryFlowNode*
 			if (bOutIsGlobal)
 			{
 				*bOutIsGlobal = false; // character variables are never script-globals
+			}
+			if (bOutIsCharacterSource)
+			{
+				*bOutIsCharacterSource = true;
 			}
 			return Var;
 		}

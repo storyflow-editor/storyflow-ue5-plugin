@@ -98,6 +98,12 @@ public:
 	 * a variable's shared map allocation. Still: resolve all other inputs FIRST,
 	 * then resolve the map and consume it immediately — never hold the pointer
 	 * across another evaluation.
+	 *
+	 * Charvar-source read-only rule: chains terminating at getCharacterVar/
+	 * setCharacterVar may be READ through this pointer but never written — the
+	 * HTML runtime mutates a throwaway snapshot for charvar-sourced mutator
+	 * chains (use setCharacterVar to write); see ResolveMapInputVariable's
+	 * bOutIsCharacterSource flag.
 	 */
 	TArray<FStoryFlowMapEntry>* EvaluateMapInput(FStoryFlowNode* Node, const FString& OptionId);
 
@@ -112,8 +118,16 @@ public:
 	 *
 	 * On success the variable's map storage is established (Type + allocation)
 	 * and bOutIsGlobal (optional) reports the terminal node's scope flag.
+	 *
+	 * bOutIsCharacterSource (optional) is set true when the chain terminates at
+	 * a getCharacterVar/setCharacterVar node. Charvar-sourced chains are
+	 * READ-ONLY per the cross-runtime contract: the HTML runtime hands mutators
+	 * a throwaway snapshot of the charvar entries (mutations never persist) and
+	 * setMap SNAPSHOTS rather than aliases. Callers that mutate or alias MUST
+	 * check this flag; pure reads may ignore it (live vs copy is observably
+	 * identical for reads, so returning the live variable stays zero-copy).
 	 */
-	FStoryFlowVariable* ResolveMapInputVariable(FStoryFlowNode* Node, const FString& OptionId, bool* bOutIsGlobal = nullptr);
+	FStoryFlowVariable* ResolveMapInputVariable(FStoryFlowNode* Node, const FString& OptionId, bool* bOutIsGlobal = nullptr, bool* bOutIsCharacterSource = nullptr);
 
 	/**
 	 * Resolve a map op's key: wired key input first ("target-{nodeId}-{keyType}-{optionId}"),
