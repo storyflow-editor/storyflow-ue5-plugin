@@ -2073,8 +2073,11 @@ void UStoryFlowComponent::HandleArraySet(FStoryFlowNode* Node)
 
 	if (bIsSetElement && Evaluator)
 	{
-		// Set element at index (editor handles: array "<type>-array-2", index "integer-3", value "<type>-4")
-		int32 Index = Evaluator->EvaluateIntegerInput(Node, TEXT("integer-3"), Node->Data.Value.GetInt(0));
+		// Set element at index (editor handles: array "<type>-array-2", index "integer-3", value "<type>-4").
+		// The export dialect renames the inline fallbacks: the .sfe "index" is exported as
+		// "value1" and "value" as "value2" on set*ArrayElement (json-export-strategy.ts);
+		// add/remove ops use plain "value".
+		int32 Index = Evaluator->EvaluateIntegerInput(Node, TEXT("integer-3"), Node->Data.Value1.GetInt(0));
 		TArray<FStoryFlowVariant>& Arr = Var->Value.GetArrayMutable();
 		if (Index >= 0 && Index < Arr.Num())
 		{
@@ -2082,28 +2085,28 @@ void UStoryFlowComponent::HandleArraySet(FStoryFlowNode* Node)
 			switch (Node->Type)
 			{
 			case EStoryFlowNodeType::SetBoolArrayElement:
-				Arr[Index].SetBool(Evaluator->EvaluateBooleanInput(Node, TEXT("boolean-4"), Node->Data.Value.GetBool(false)));
+				Arr[Index].SetBool(Evaluator->EvaluateBooleanInput(Node, TEXT("boolean-4"), Node->Data.Value2.GetBool(false)));
 				break;
 			case EStoryFlowNodeType::SetIntArrayElement:
-				Arr[Index].SetInt(Evaluator->EvaluateIntegerInput(Node, TEXT("integer-4"), Node->Data.Value.GetInt(0)));
+				Arr[Index].SetInt(Evaluator->EvaluateIntegerInput(Node, TEXT("integer-4"), Node->Data.Value2.GetInt(0)));
 				break;
 			case EStoryFlowNodeType::SetFloatArrayElement:
-				Arr[Index].SetFloat(Evaluator->EvaluateFloatInput(Node, TEXT("float-4"), Node->Data.Value.GetFloat(0.0f)));
+				Arr[Index].SetFloat(Evaluator->EvaluateFloatInput(Node, TEXT("float-4"), Node->Data.Value2.GetFloat(0.0f)));
 				break;
 			case EStoryFlowNodeType::SetStringArrayElement:
 			{
-				FString ResolvedFallback = ExecutionContext.GetString(Node->Data.Value.GetString(), LanguageCode);
+				FString ResolvedFallback = ExecutionContext.GetString(Node->Data.Value2.GetString(), LanguageCode);
 				Arr[Index].SetString(Evaluator->EvaluateStringInput(Node, TEXT("string-4"), ResolvedFallback));
 				break;
 			}
 			case EStoryFlowNodeType::SetImageArrayElement:
-				Arr[Index].SetString(Evaluator->EvaluateStringInput(Node, TEXT("image-4"), Node->Data.Value.GetString()));
+				Arr[Index].SetString(Evaluator->EvaluateStringInput(Node, TEXT("image-4"), Node->Data.Value2.GetString()));
 				break;
 			case EStoryFlowNodeType::SetCharacterArrayElement:
-				Arr[Index].SetString(Evaluator->EvaluateStringInput(Node, TEXT("character-4"), Node->Data.Value.GetString()));
+				Arr[Index].SetString(Evaluator->EvaluateStringInput(Node, TEXT("character-4"), Node->Data.Value2.GetString()));
 				break;
 			case EStoryFlowNodeType::SetAudioArrayElement:
-				Arr[Index].SetString(Evaluator->EvaluateStringInput(Node, TEXT("audio-4"), Node->Data.Value.GetString()));
+				Arr[Index].SetString(Evaluator->EvaluateStringInput(Node, TEXT("audio-4"), Node->Data.Value2.GetString()));
 				break;
 			default:
 				break;
