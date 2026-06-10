@@ -757,6 +757,10 @@ struct STORYFLOWRUNTIME_API FStoryFlowNodeData
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString EnumVariable;
 
+	/** Enum value list (for intToEnum/stringToEnum conversions and enum variable nodes) */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	TArray<FString> EnumValues;
+
 	// === Character Variable Fields (for getCharacterVar/setCharacterVar) ===
 
 	/** Character path for character variable nodes */

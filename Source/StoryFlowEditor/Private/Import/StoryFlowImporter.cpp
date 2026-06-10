@@ -569,6 +569,13 @@ FStoryFlowNodeData UStoryFlowImporter::ParseNodeData(const TSharedPtr<FJsonObjec
 	{
 		Data.EnumVariable = NodeObject->GetStringField(TEXT("enumVariable"));
 	}
+	if (NodeObject->HasField(TEXT("enumValues")))
+	{
+		for (const TSharedPtr<FJsonValue>& EnumValue : NodeObject->GetArrayField(TEXT("enumValues")))
+		{
+			Data.EnumValues.Add(EnumValue->AsString());
+		}
+	}
 
 	// Random Branch options
 	if (NodeObject->HasField(TEXT("options")))
