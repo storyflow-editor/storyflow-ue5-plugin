@@ -567,6 +567,99 @@ void UStoryFlowComponent::SetEnumVariable(const FString& VariableName, const FSt
 	}
 }
 
+void UStoryFlowComponent::ApplyArrayVariable(const FString& VariableName, bool bGlobal, TArray<FStoryFlowVariant>&& Items)
+{
+	if (FStoryFlowVariable* Var = FindVariableByName(VariableName, bGlobal))
+	{
+		// Replace only the element storage: the variant's scalar fields and
+		// type stay untouched, matching the Unity plugin's Set*ArrayVariable.
+		Var->Value.GetArrayMutable() = MoveTemp(Items);
+		NotifyVariableChanged(*Var, bGlobal);
+	}
+}
+
+void UStoryFlowComponent::SetBoolArrayVariable(const FString& VariableName, const TArray<bool>& Values, bool bGlobal)
+{
+	TArray<FStoryFlowVariant> Items;
+	Items.Reserve(Values.Num());
+	for (bool bValue : Values)
+	{
+		FStoryFlowVariant Item;
+		Item.SetBool(bValue);
+		Items.Add(Item);
+	}
+	ApplyArrayVariable(VariableName, bGlobal, MoveTemp(Items));
+}
+
+void UStoryFlowComponent::SetIntArrayVariable(const FString& VariableName, const TArray<int32>& Values, bool bGlobal)
+{
+	TArray<FStoryFlowVariant> Items;
+	Items.Reserve(Values.Num());
+	for (int32 Value : Values)
+	{
+		FStoryFlowVariant Item;
+		Item.SetInt(Value);
+		Items.Add(Item);
+	}
+	ApplyArrayVariable(VariableName, bGlobal, MoveTemp(Items));
+}
+
+void UStoryFlowComponent::SetFloatArrayVariable(const FString& VariableName, const TArray<float>& Values, bool bGlobal)
+{
+	TArray<FStoryFlowVariant> Items;
+	Items.Reserve(Values.Num());
+	for (float Value : Values)
+	{
+		FStoryFlowVariant Item;
+		Item.SetFloat(Value);
+		Items.Add(Item);
+	}
+	ApplyArrayVariable(VariableName, bGlobal, MoveTemp(Items));
+}
+
+void UStoryFlowComponent::SetStringArrayVariable(const FString& VariableName, const TArray<FString>& Values, bool bGlobal)
+{
+	TArray<FStoryFlowVariant> Items;
+	Items.Reserve(Values.Num());
+	for (const FString& Value : Values)
+	{
+		FStoryFlowVariant Item;
+		Item.SetString(Value);
+		Items.Add(Item);
+	}
+	ApplyArrayVariable(VariableName, bGlobal, MoveTemp(Items));
+}
+
+void UStoryFlowComponent::SetEnumArrayVariable(const FString& VariableName, const TArray<FString>& Values, bool bGlobal)
+{
+	TArray<FStoryFlowVariant> Items;
+	Items.Reserve(Values.Num());
+	for (const FString& Value : Values)
+	{
+		FStoryFlowVariant Item;
+		Item.SetEnum(Value);
+		Items.Add(Item);
+	}
+	ApplyArrayVariable(VariableName, bGlobal, MoveTemp(Items));
+}
+
+void UStoryFlowComponent::SetImageArrayVariable(const FString& VariableName, const TArray<FString>& AssetKeys, bool bGlobal)
+{
+	// Asset keys are stored as plain strings, matching how ParseVariant imports
+	// image/audio/character array elements (GetString accepts them either way).
+	SetStringArrayVariable(VariableName, AssetKeys, bGlobal);
+}
+
+void UStoryFlowComponent::SetAudioArrayVariable(const FString& VariableName, const TArray<FString>& AssetKeys, bool bGlobal)
+{
+	SetStringArrayVariable(VariableName, AssetKeys, bGlobal);
+}
+
+void UStoryFlowComponent::SetCharacterArrayVariable(const FString& VariableName, const TArray<FString>& CharacterPaths, bool bGlobal)
+{
+	SetStringArrayVariable(VariableName, CharacterPaths, bGlobal);
+}
+
 TArray<FStoryFlowVariant> UStoryFlowComponent::GetArrayVariable(const FString& VariableName, bool bGlobal)
 {
 	TArray<FStoryFlowVariant> Out;
