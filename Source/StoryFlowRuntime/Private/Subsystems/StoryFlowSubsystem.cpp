@@ -37,8 +37,11 @@ void UStoryFlowSubsystem::SetProject(UStoryFlowProjectAsset* NewProject)
 
 	if (ProjectAsset)
 	{
-		// Initialize global variables from project
+		// Initialize global variables from project. Detach shared map storage so
+		// runtime map mutations never write into the project asset (HTML inflates
+		// fresh maps from project data on LOAD_CONTENT).
 		GlobalVariables = ProjectAsset->GlobalVariables;
+		DeepCopyMapVariables(GlobalVariables);
 		ResolveStringVariableValues(GlobalVariables);
 
 		// Initialize runtime characters from character assets (mutable copies)
@@ -95,6 +98,7 @@ void UStoryFlowSubsystem::ResetGlobalVariables()
 	if (ProjectAsset)
 	{
 		GlobalVariables = ProjectAsset->GlobalVariables;
+		DeepCopyMapVariables(GlobalVariables); // detach shared map storage from the asset
 		ResolveStringVariableValues(GlobalVariables);
 		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Global variables reset to defaults"));
 	}
@@ -113,6 +117,7 @@ void UStoryFlowSubsystem::ResetRuntimeCharacters()
 				CharDef.Name = CharPair.Value->Name;
 				CharDef.Image = CharPair.Value->Image;
 				CharDef.Variables = CharPair.Value->Variables;
+				DeepCopyMapVariables(CharDef.Variables); // detach shared map storage from the asset
 				ResolveStringVariableValues(CharDef.Variables);
 				RuntimeCharacters.Add(CharPair.Key, CharDef);
 			}
@@ -149,6 +154,26 @@ void UStoryFlowSubsystem::ResolveStringVariableValues(TMap<FString, FStoryFlowVa
 				if (!Key.IsEmpty())
 				{
 					VarPair.Value.Value.SetString(ProjectAsset->GetGlobalString(Key));
+				}
+			}
+		}
+		else if (VarPair.Value.Type == EStoryFlowVariableType::Map &&
+			VarPair.Value.ValueType == EStoryFlowVariableType::String)
+		{
+			// Map entry VALUES of string valueType store exported strings-table keys
+			// verbatim (importer ParseMapEntries) — resolve them at this load boundary,
+			// the identical path/timing scalar string variables use. KEYS are raw
+			// identifiers and must NEVER resolve, regardless of keyType. In-place
+			// value rewrite preserves entry order.
+			if (VarPair.Value.Value.IsMap())
+			{
+				for (FStoryFlowMapEntry& Entry : VarPair.Value.Value.GetMapMutable())
+				{
+					FString Key = Entry.Value.GetString();
+					if (!Key.IsEmpty())
+					{
+						Entry.Value.SetString(ProjectAsset->GetGlobalString(Key));
+					}
 				}
 			}
 		}

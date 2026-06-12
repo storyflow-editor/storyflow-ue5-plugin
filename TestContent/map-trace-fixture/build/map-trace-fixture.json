@@ -1,0 +1,589 @@
+{
+  "startNode": "0",
+  "nodes": {
+    "0": {
+      "type": "start",
+      "id": "0"
+    },
+    "10": {
+      "type": "getMap",
+      "id": "10",
+      "variable": "var_545f7f57",
+      "keyType": "string",
+      "valueType": "integer"
+    },
+    "11": {
+      "type": "setMapValue",
+      "id": "11",
+      "keyType": "string",
+      "valueType": "integer",
+      "key": "silver",
+      "value": 2
+    },
+    "12": {
+      "type": "removeMapKey",
+      "id": "12",
+      "keyType": "string",
+      "valueType": "integer",
+      "key": "gold"
+    },
+    "13": {
+      "type": "setMap",
+      "id": "13",
+      "variable": "var_4b782cf7",
+      "keyType": "string",
+      "valueType": "integer"
+    },
+    "14": {
+      "type": "setMapValue",
+      "id": "14",
+      "keyType": "string",
+      "valueType": "integer",
+      "key": "copper",
+      "value": 9
+    },
+    "20": {
+      "type": "getMap",
+      "id": "20",
+      "variable": "var_4b782cf7",
+      "keyType": "string",
+      "valueType": "integer"
+    },
+    "21": {
+      "type": "mapSize",
+      "id": "21",
+      "keyType": "string",
+      "valueType": "integer"
+    },
+    "22": {
+      "type": "hasMapKey",
+      "id": "22",
+      "keyType": "string",
+      "valueType": "integer",
+      "key": "silver"
+    },
+    "23": {
+      "type": "getMapValue",
+      "id": "23",
+      "keyType": "string",
+      "valueType": "integer",
+      "key": "silver"
+    },
+    "24": {
+      "type": "getMapValue",
+      "id": "24",
+      "keyType": "string",
+      "valueType": "integer",
+      "key": "gold"
+    },
+    "25": {
+      "type": "mapKeys",
+      "id": "25",
+      "keyType": "string",
+      "valueType": "integer"
+    },
+    "26": {
+      "type": "mapValues",
+      "id": "26",
+      "keyType": "string",
+      "valueType": "integer"
+    },
+    "27": {
+      "type": "arrayLengthString",
+      "id": "27"
+    },
+    "28": {
+      "type": "arrayLengthInt",
+      "id": "28"
+    },
+    "30": {
+      "type": "setInt",
+      "id": "30",
+      "variable": "var_f7bd60b7"
+    },
+    "31": {
+      "type": "setBool",
+      "id": "31",
+      "variable": "var_6cfe6169"
+    },
+    "32": {
+      "type": "setInt",
+      "id": "32",
+      "variable": "var_9a6c2ec5"
+    },
+    "33": {
+      "type": "setInt",
+      "id": "33",
+      "variable": "var_7dc35b97"
+    },
+    "34": {
+      "type": "setBool",
+      "id": "34",
+      "variable": "var_d96c72dc"
+    },
+    "35": {
+      "type": "setInt",
+      "id": "35",
+      "variable": "var_6c0ac2bb"
+    },
+    "36": {
+      "type": "setInt",
+      "id": "36",
+      "variable": "var_8296cf9b"
+    },
+    "37": {
+      "type": "setString",
+      "id": "37",
+      "variable": "var_0a803cfe"
+    },
+    "38": {
+      "type": "setInt",
+      "id": "38",
+      "variable": "var_7a52ab77"
+    },
+    "40": {
+      "type": "forEachMap",
+      "id": "40",
+      "keyType": "string",
+      "valueType": "integer"
+    },
+    "41": {
+      "type": "getInt",
+      "id": "41",
+      "variable": "var_e494457f"
+    },
+    "42": {
+      "type": "plus",
+      "id": "42"
+    },
+    "43": {
+      "type": "setInt",
+      "id": "43",
+      "variable": "var_e494457f"
+    },
+    "50": {
+      "type": "clearMap",
+      "id": "50",
+      "keyType": "string",
+      "valueType": "integer"
+    },
+    "99": {
+      "type": "end",
+      "id": "99"
+    },
+    "29A": {
+      "type": "getStringArrayElement",
+      "id": "29A",
+      "value": 0
+    },
+    "29B": {
+      "type": "getIntArrayElement",
+      "id": "29B",
+      "value": 1
+    }
+  },
+  "connections": [
+    {
+      "id": "e1",
+      "source": "0",
+      "target": "11",
+      "sourceHandle": "source-0-",
+      "targetHandle": "target-11-0"
+    },
+    {
+      "id": "e2",
+      "source": "11",
+      "target": "12",
+      "sourceHandle": "source-11-1",
+      "targetHandle": "target-12-0"
+    },
+    {
+      "id": "e3",
+      "source": "12",
+      "target": "13",
+      "sourceHandle": "source-12-1",
+      "targetHandle": "target-13-0"
+    },
+    {
+      "id": "e4",
+      "source": "13",
+      "target": "14",
+      "sourceHandle": "source-13-1",
+      "targetHandle": "target-14-0"
+    },
+    {
+      "id": "e5",
+      "source": "14",
+      "target": "30",
+      "sourceHandle": "source-14-1",
+      "targetHandle": "target-30-0"
+    },
+    {
+      "id": "e6",
+      "source": "30",
+      "target": "31",
+      "sourceHandle": "source-30-1",
+      "targetHandle": "target-31-0"
+    },
+    {
+      "id": "e7",
+      "source": "31",
+      "target": "32",
+      "sourceHandle": "source-31-1",
+      "targetHandle": "target-32-0"
+    },
+    {
+      "id": "e8",
+      "source": "32",
+      "target": "33",
+      "sourceHandle": "source-32-1",
+      "targetHandle": "target-33-0"
+    },
+    {
+      "id": "e9",
+      "source": "33",
+      "target": "34",
+      "sourceHandle": "source-33-1",
+      "targetHandle": "target-34-0"
+    },
+    {
+      "id": "e10",
+      "source": "34",
+      "target": "35",
+      "sourceHandle": "source-34-1",
+      "targetHandle": "target-35-0"
+    },
+    {
+      "id": "e11",
+      "source": "35",
+      "target": "36",
+      "sourceHandle": "source-35-1",
+      "targetHandle": "target-36-0"
+    },
+    {
+      "id": "e12",
+      "source": "36",
+      "target": "37",
+      "sourceHandle": "source-36-1",
+      "targetHandle": "target-37-0"
+    },
+    {
+      "id": "e13",
+      "source": "40",
+      "target": "43",
+      "sourceHandle": "source-40-loopBody",
+      "targetHandle": "target-43-0"
+    },
+    {
+      "id": "e14",
+      "source": "40",
+      "target": "50",
+      "sourceHandle": "source-40-completed",
+      "targetHandle": "target-50-0"
+    },
+    {
+      "id": "e15",
+      "source": "50",
+      "target": "99",
+      "sourceHandle": "source-50-1",
+      "targetHandle": "target-99-"
+    },
+    {
+      "id": "e16",
+      "source": "37",
+      "target": "38",
+      "sourceHandle": "source-37-1",
+      "targetHandle": "target-38-0"
+    },
+    {
+      "id": "e17",
+      "source": "38",
+      "target": "40",
+      "sourceHandle": "source-38-1",
+      "targetHandle": "target-40-0"
+    },
+    {
+      "id": "e20",
+      "source": "10",
+      "target": "11",
+      "sourceHandle": "source-10-map-string-integer",
+      "targetHandle": "target-11-map-string-integer-2"
+    },
+    {
+      "id": "e21",
+      "source": "11",
+      "target": "12",
+      "sourceHandle": "source-11-map-string-integer",
+      "targetHandle": "target-12-map-string-integer-2"
+    },
+    {
+      "id": "e22",
+      "source": "12",
+      "target": "13",
+      "sourceHandle": "source-12-map-string-integer",
+      "targetHandle": "target-13-map-string-integer-2"
+    },
+    {
+      "id": "e23",
+      "source": "20",
+      "target": "14",
+      "sourceHandle": "source-20-map-string-integer",
+      "targetHandle": "target-14-map-string-integer-2"
+    },
+    {
+      "id": "e24",
+      "source": "20",
+      "target": "21",
+      "sourceHandle": "source-20-map-string-integer",
+      "targetHandle": "target-21-map-string-integer-1"
+    },
+    {
+      "id": "e25",
+      "source": "20",
+      "target": "22",
+      "sourceHandle": "source-20-map-string-integer",
+      "targetHandle": "target-22-map-string-integer-1"
+    },
+    {
+      "id": "e26",
+      "source": "20",
+      "target": "23",
+      "sourceHandle": "source-20-map-string-integer",
+      "targetHandle": "target-23-map-string-integer-1"
+    },
+    {
+      "id": "e27",
+      "source": "20",
+      "target": "24",
+      "sourceHandle": "source-20-map-string-integer",
+      "targetHandle": "target-24-map-string-integer-1"
+    },
+    {
+      "id": "e28",
+      "source": "20",
+      "target": "25",
+      "sourceHandle": "source-20-map-string-integer",
+      "targetHandle": "target-25-map-string-integer-1"
+    },
+    {
+      "id": "e29",
+      "source": "20",
+      "target": "26",
+      "sourceHandle": "source-20-map-string-integer",
+      "targetHandle": "target-26-map-string-integer-1"
+    },
+    {
+      "id": "e30",
+      "source": "20",
+      "target": "40",
+      "sourceHandle": "source-20-map-string-integer",
+      "targetHandle": "target-40-map-string-integer-map"
+    },
+    {
+      "id": "e31",
+      "source": "21",
+      "target": "30",
+      "sourceHandle": "source-21-integer-",
+      "targetHandle": "target-30-integer-2"
+    },
+    {
+      "id": "e32",
+      "source": "22",
+      "target": "31",
+      "sourceHandle": "source-22-boolean-",
+      "targetHandle": "target-31-boolean-2"
+    },
+    {
+      "id": "e33",
+      "source": "23",
+      "target": "32",
+      "sourceHandle": "source-23-integer-value",
+      "targetHandle": "target-32-integer-2"
+    },
+    {
+      "id": "e34",
+      "source": "24",
+      "target": "33",
+      "sourceHandle": "source-24-integer-value",
+      "targetHandle": "target-33-integer-2"
+    },
+    {
+      "id": "e35",
+      "source": "24",
+      "target": "34",
+      "sourceHandle": "source-24-boolean-isValid",
+      "targetHandle": "target-34-boolean-2"
+    },
+    {
+      "id": "e36",
+      "source": "25",
+      "target": "27",
+      "sourceHandle": "source-25-string-array-",
+      "targetHandle": "target-27-string-array-1"
+    },
+    {
+      "id": "e37",
+      "source": "26",
+      "target": "28",
+      "sourceHandle": "source-26-integer-array-",
+      "targetHandle": "target-28-integer-array-1"
+    },
+    {
+      "id": "e38",
+      "source": "27",
+      "target": "35",
+      "sourceHandle": "source-27-integer-",
+      "targetHandle": "target-35-integer-2"
+    },
+    {
+      "id": "e39",
+      "source": "28",
+      "target": "36",
+      "sourceHandle": "source-28-integer-",
+      "targetHandle": "target-36-integer-2"
+    },
+    {
+      "id": "e40",
+      "source": "41",
+      "target": "42",
+      "sourceHandle": "source-41-integer-",
+      "targetHandle": "target-42-integer-1"
+    },
+    {
+      "id": "e41",
+      "source": "40",
+      "target": "42",
+      "sourceHandle": "source-40-integer-value",
+      "targetHandle": "target-42-integer-2"
+    },
+    {
+      "id": "e42",
+      "source": "42",
+      "target": "43",
+      "sourceHandle": "source-42-integer-",
+      "targetHandle": "target-43-integer-2"
+    },
+    {
+      "id": "e43",
+      "source": "10",
+      "target": "50",
+      "sourceHandle": "source-10-map-string-integer",
+      "targetHandle": "target-50-map-string-integer-2"
+    },
+    {
+      "id": "e44",
+      "source": "25",
+      "target": "29A",
+      "sourceHandle": "source-25-string-array-",
+      "targetHandle": "target-29A-string-array-1"
+    },
+    {
+      "id": "e45",
+      "source": "26",
+      "target": "29B",
+      "sourceHandle": "source-26-integer-array-",
+      "targetHandle": "target-29B-integer-array-1"
+    },
+    {
+      "id": "e46",
+      "source": "29A",
+      "target": "37",
+      "sourceHandle": "source-29A-string-",
+      "targetHandle": "target-37-string-2"
+    },
+    {
+      "id": "e47",
+      "source": "29B",
+      "target": "38",
+      "sourceHandle": "source-29B-integer-",
+      "targetHandle": "target-38-integer-2"
+    }
+  ],
+  "variables": {
+    "var_545f7f57": {
+      "id": "var_545f7f57",
+      "name": "inv",
+      "type": "map",
+      "value": [
+        {
+          "key": "gold",
+          "value": 5
+        }
+      ],
+      "keyType": "string",
+      "valueType": "integer"
+    },
+    "var_4b782cf7": {
+      "id": "var_4b782cf7",
+      "name": "inv2",
+      "type": "map",
+      "value": [],
+      "keyType": "string",
+      "valueType": "integer"
+    },
+    "var_f7bd60b7": {
+      "id": "var_f7bd60b7",
+      "name": "size",
+      "type": "integer",
+      "value": 0
+    },
+    "var_6cfe6169": {
+      "id": "var_6cfe6169",
+      "name": "found",
+      "type": "boolean",
+      "value": false
+    },
+    "var_e494457f": {
+      "id": "var_e494457f",
+      "name": "looted",
+      "type": "integer",
+      "value": 0
+    },
+    "var_6c0ac2bb": {
+      "id": "var_6c0ac2bb",
+      "name": "keyCount",
+      "type": "integer",
+      "value": 0
+    },
+    "var_8296cf9b": {
+      "id": "var_8296cf9b",
+      "name": "valCount",
+      "type": "integer",
+      "value": 0
+    },
+    "var_0a803cfe": {
+      "id": "var_0a803cfe",
+      "name": "firstKey",
+      "type": "string",
+      "value": ""
+    },
+    "var_7a52ab77": {
+      "id": "var_7a52ab77",
+      "name": "secondVal",
+      "type": "integer",
+      "value": 0
+    },
+    "var_9a6c2ec5": {
+      "id": "var_9a6c2ec5",
+      "name": "silverVal",
+      "type": "integer",
+      "value": 0
+    },
+    "var_7dc35b97": {
+      "id": "var_7dc35b97",
+      "name": "goldVal",
+      "type": "integer",
+      "value": 7
+    },
+    "var_d96c72dc": {
+      "id": "var_d96c72dc",
+      "name": "goldOk",
+      "type": "boolean",
+      "value": true
+    }
+  },
+  "strings": {
+    "en": {}
+  },
+  "assets": {}
+}

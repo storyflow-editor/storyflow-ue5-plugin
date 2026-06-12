@@ -103,6 +103,20 @@ void FStoryFlowEvaluator::MaybeWarnUnknownNode(const FStoryFlowNode* Node)
 	UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Unsupported node type '%s' at node %s, returning default value"), *Node->TypeString, *Node->Id);
 }
 
+void FStoryFlowEvaluator::MaybeWarnMissingMapTypes(const FStoryFlowNode* Node)
+{
+	if (!Node || !Context)
+	{
+		return;
+	}
+	if (Context->WarnedMapNodes.Contains(Node->Id))
+	{
+		return;
+	}
+	Context->WarnedMapNodes.Add(Node->Id);
+	UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map node '%s' at node %s is missing keyType/valueType data, returning default value"), *Node->TypeString, *Node->Id);
+}
+
 // ============================================================================
 // Boolean Evaluation
 // ============================================================================
@@ -147,9 +161,14 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 	// node is a type the plugin does not understand.
 	MaybeWarnUnknownNode(Node);
 
+	// Map reads are never memoized: maps resolve to LIVE variable storage and
+	// in-place mutations (setMapValue/removeMapKey/clearMap) must be observable
+	// on the next read. The HTML runtime recomputes map reads inline the same way.
+	const bool bIsMapRead = (Node->Type == EStoryFlowNodeType::GetMapValue || Node->Type == EStoryFlowNodeType::HasMapKey);
+
 	// Check cache first
 	FNodeRuntimeState& NodeState = Context->GetNodeState(Node->Id);
-	if (NodeState.bHasCachedOutput && NodeState.CachedOutput.GetType() == EStoryFlowVariableType::Boolean)
+	if (!bIsMapRead && NodeState.bHasCachedOutput && NodeState.CachedOutput.GetType() == EStoryFlowVariableType::Boolean)
 	{
 		return NodeState.CachedOutput.GetBool();
 	}
@@ -163,6 +182,12 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
 		Result = Var ? Var->Value.GetBool() : false;
+		// HTML parity: the evaluator's get/set arm emits VAR GET on every data
+		// pull (runtime-evaluators.js), before the EVAL line below.
+		if (Var)
+		{
+			SF_EVAL_TRACE("VAR GET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Var->Value.ToString());
+		}
 		break;
 	}
 
@@ -328,6 +353,63 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 		break;
 	}
 
+	// Map op arms branch on the node's OWN Data.KeyType/Data.ValueType strings —
+	// a NEW pattern for this evaluator: catalog map ops carry K/V in node data,
+	// unlike array ops which encode the element type in the node type itself.
+	case EStoryFlowNodeType::GetMapValue:
+	{
+		// getMapValue exposes two outputs sharing one node:
+		//   "source-{id}-{valueType}-value" and "source-{id}-boolean-isValid".
+		// Discriminate by SourceHandle suffix (precedent: runScript "-out-" parsing).
+		FStoryFlowVariant Value;
+		const bool bFound = ComputeGetMapValue(Node, Value);
+		if (SourceHandle.EndsWith(TEXT("-isValid")))
+		{
+			// IsValid is always boolean, regardless of the node's ValueType
+			Result = bFound;
+		}
+		else if (Node->Data.ValueType == TEXT("boolean"))
+		{
+			Result = Value.GetBool(false);
+		}
+		break;
+	}
+
+	case EStoryFlowNodeType::HasMapKey:
+	{
+		// Key FIRST: the map pointer may alias node-state storage that any
+		// further evaluation (GetNodeState/FindOrAdd) can relocate, so resolve
+		// the map last and consume it immediately.
+		const FStoryFlowVariant Key = EvaluateMapOpKeyInput(Node, TEXT("2"));
+		if (const TArray<FStoryFlowMapEntry>* Map = EvaluateMapInput(Node, TEXT("1")))
+		{
+			Result = FindMapEntryByKey(*Map, Node->Data.KeyType, Key) != INDEX_NONE;
+		}
+		break;
+	}
+
+	// forEachMap Key/Value — two outputs share one node:
+	//   "source-{id}-{keyType}-key" and "source-{id}-{valueType}-value".
+	// Discriminate by SourceHandle suffix (precedent: getMapValue "-isValid").
+	// Reads come from the iteration SNAPSHOT (LoopKey/LoopValue), not the live
+	// map, so this is NOT a map read for the bIsMapRead cache bypass: within an
+	// iteration the value is constant (caching correct), and the per-iteration
+	// ClearEvaluationCache drops it before the next entry — exactly the array
+	// loop element precedent. keyType can't be "boolean" per spec — the key
+	// branch is unreachable, included for symmetry with the HTML evaluators.
+	case EStoryFlowNodeType::ForEachMap:
+	{
+		if (SourceHandle.EndsWith(TEXT("-key")) && Node->Data.KeyType == TEXT("boolean"))
+		{
+			Result = NodeState.LoopKey.GetBool(false);
+		}
+		else if (SourceHandle.EndsWith(TEXT("-value")) && Node->Data.ValueType == TEXT("boolean"))
+		{
+			Result = NodeState.LoopValue.GetBool(false);
+		}
+		break;
+	}
+
 	case EStoryFlowNodeType::RunScript:
 	{
 		if (NodeState.bHasOutputValues && !SourceHandle.IsEmpty())
@@ -381,9 +463,12 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 
 	SF_EVAL_TRACE("EVAL %s %s result=%s", *Node->Id, *Node->TypeString, Result ? TEXT("true") : TEXT("false"));
 
-	// Cache result
-	NodeState.CachedOutput.SetBool(Result);
-	NodeState.bHasCachedOutput = true;
+	// Cache result (map reads excluded — see bIsMapRead above)
+	if (!bIsMapRead)
+	{
+		NodeState.CachedOutput.SetBool(Result);
+		NodeState.bHasCachedOutput = true;
+	}
 
 	return Result;
 }
@@ -477,6 +562,13 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
 		Result = Var ? Var->Value.GetInt() : 0;
+		// HTML parity: VAR GET on every data pull, before the EVAL line (see the
+		// boolean evaluator's arm). Pinned by the map-trace-fixture snapshot
+		// (getInt "looted" inside the forEachMap body).
+		if (Var)
+		{
+			SF_EVAL_TRACE("VAR GET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Var->Value.ToString());
+		}
 		break;
 	}
 
@@ -509,6 +601,14 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 		int32 Input1 = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer1, Node->Data.Value1.GetInt(0));
 		int32 Input2 = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer2, Node->Data.Value2.GetInt(1));
 		Result = (Input2 != 0) ? (Input1 / Input2) : 0;
+		break;
+	}
+
+	case EStoryFlowNodeType::Modulo:
+	{
+		int32 Input1 = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer1, Node->Data.Value1.GetInt(0));
+		int32 Input2 = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer2, Node->Data.Value2.GetInt(0));
+		Result = (Input2 != 0) ? (Input1 % Input2) : 0;
 		break;
 	}
 
@@ -626,6 +726,23 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 		break;
 	}
 
+	// forEachMap Key/Value (integer) — discriminate by SourceHandle suffix
+	// ("-key"/"-value"); reads come from the iteration snapshot, see the
+	// boolean evaluator's ForEachMap arm for the full pattern note
+	case EStoryFlowNodeType::ForEachMap:
+	{
+		FNodeRuntimeState& LoopState = Context->GetNodeState(Node->Id);
+		if (SourceHandle.EndsWith(TEXT("-key")) && Node->Data.KeyType == TEXT("integer"))
+		{
+			Result = LoopState.LoopKey.GetInt(0);
+		}
+		else if (SourceHandle.EndsWith(TEXT("-value")) && Node->Data.ValueType == TEXT("integer"))
+		{
+			Result = LoopState.LoopValue.GetInt(0);
+		}
+		break;
+	}
+
 	case EStoryFlowNodeType::GetIntArrayElement:
 	{
 		TArray<FStoryFlowVariant> Array = EvaluateIntArrayInput(Node, StoryFlowHandles::In_IntArray);
@@ -643,6 +760,27 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 		if (Array.Num() > 0)
 		{
 			Result = Array[FMath::RandRange(0, Array.Num() - 1)].GetInt();
+		}
+		break;
+	}
+
+	// Map ops branch on the node's Data.KeyType/Data.ValueType (K/V in node data
+	// — see the boolean evaluator's map arms for the pattern note)
+	case EStoryFlowNodeType::MapSize:
+	{
+		// Unresolved/missing-K-V map input falls through to 0 (HTML runtime parity)
+		const TArray<FStoryFlowMapEntry>* Map = EvaluateMapInput(Node, TEXT("1"));
+		Result = Map ? Map->Num() : 0;
+		break;
+	}
+
+	case EStoryFlowNodeType::GetMapValue:
+	{
+		if (Node->Data.ValueType == TEXT("integer"))
+		{
+			FStoryFlowVariant Value;
+			ComputeGetMapValue(Node, Value);
+			Result = Value.GetInt(0);
 		}
 		break;
 	}
@@ -811,6 +949,11 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
 		Result = Var ? Var->Value.GetFloat() : 0.0f;
+		// HTML parity: VAR GET on every data pull (see the boolean evaluator's arm)
+		if (Var)
+		{
+			SF_EVAL_TRACE("VAR GET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Var->Value.ToString());
+		}
 		break;
 	}
 
@@ -843,6 +986,14 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 		float Input1 = EvaluateFloatInput(Node, StoryFlowHandles::In_Float1, Node->Data.Value1.GetFloat(0.0f));
 		float Input2 = EvaluateFloatInput(Node, StoryFlowHandles::In_Float2, Node->Data.Value2.GetFloat(1.0f));
 		Result = !FMath::IsNearlyZero(Input2) ? (Input1 / Input2) : 0.0f;
+		break;
+	}
+
+	case EStoryFlowNodeType::ModuloFloat:
+	{
+		float Input1 = EvaluateFloatInput(Node, StoryFlowHandles::In_Float1, Node->Data.Value1.GetFloat(0.0f));
+		float Input2 = EvaluateFloatInput(Node, StoryFlowHandles::In_Float2, Node->Data.Value2.GetFloat(0.0f));
+		Result = !FMath::IsNearlyZero(Input2) ? FMath::Fmod(Input1, Input2) : 0.0f;
 		break;
 	}
 
@@ -900,6 +1051,19 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 		break;
 	}
 
+	// Map op branches on the node's Data.ValueType (K/V in node data — see the
+	// boolean evaluator's map arms for the pattern note)
+	case EStoryFlowNodeType::GetMapValue:
+	{
+		if (Node->Data.ValueType == TEXT("float"))
+		{
+			FStoryFlowVariant Value;
+			ComputeGetMapValue(Node, Value);
+			Result = Value.GetFloat(0.0f);
+		}
+		break;
+	}
+
 	case EStoryFlowNodeType::ForEachFloatLoop:
 	{
 		// Return current element value
@@ -907,6 +1071,24 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 		if (LoopState.bHasCachedOutput)
 		{
 			Result = LoopState.CachedOutput.GetFloat();
+		}
+		break;
+	}
+
+	// forEachMap Key/Value (float) — discriminate by SourceHandle suffix
+	// ("-key"/"-value"); reads come from the iteration snapshot, see the
+	// boolean evaluator's ForEachMap arm for the full pattern note. keyType
+	// can't be "float" per spec — key branch included for symmetry.
+	case EStoryFlowNodeType::ForEachMap:
+	{
+		FNodeRuntimeState& LoopState = Context->GetNodeState(Node->Id);
+		if (SourceHandle.EndsWith(TEXT("-key")) && Node->Data.KeyType == TEXT("float"))
+		{
+			Result = LoopState.LoopKey.GetFloat(0.0f);
+		}
+		else if (SourceHandle.EndsWith(TEXT("-value")) && Node->Data.ValueType == TEXT("float"))
+		{
+			Result = LoopState.LoopValue.GetFloat(0.0f);
 		}
 		break;
 	}
@@ -1023,6 +1205,11 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
 		Result = Var ? Var->Value.GetString() : TEXT("");
+		// HTML parity: VAR GET on every data pull (see the boolean evaluator's arm)
+		if (Var)
+		{
+			SF_EVAL_TRACE("VAR GET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Var->Value.ToString());
+		}
 		break;
 	}
 
@@ -1067,6 +1254,11 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
 		Result = Var ? Var->Value.GetString() : TEXT("");
+		// HTML parity: VAR GET on every data pull (see the boolean evaluator's arm)
+		if (Var)
+		{
+			SF_EVAL_TRACE("VAR GET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Var->Value.ToString());
+		}
 		break;
 	}
 
@@ -1095,6 +1287,11 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
 		Result = Var ? Var->Value.GetString() : TEXT("");
+		// HTML parity: VAR GET on every data pull (see the boolean evaluator's arm)
+		if (Var)
+		{
+			SF_EVAL_TRACE("VAR GET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Var->Value.ToString());
+		}
 		break;
 	}
 
@@ -1111,6 +1308,11 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
 		Result = Var ? Var->Value.GetString() : TEXT("");
+		// HTML parity: VAR GET on every data pull (see the boolean evaluator's arm)
+		if (Var)
+		{
+			SF_EVAL_TRACE("VAR GET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Var->Value.ToString());
+		}
 		break;
 	}
 
@@ -1119,6 +1321,11 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
 		Result = Var ? Var->Value.GetString() : TEXT("");
+		// HTML parity: VAR GET on every data pull (see the boolean evaluator's arm)
+		if (Var)
+		{
+			SF_EVAL_TRACE("VAR GET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Var->Value.ToString());
+		}
 		break;
 	}
 
@@ -1139,6 +1346,25 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 		if (Array.Num() > 0)
 		{
 			Result = Array[FMath::RandRange(0, Array.Num() - 1)].GetString();
+		}
+		break;
+	}
+
+	// Map op branches on the node's Data.ValueType (K/V in node data — see the
+	// boolean evaluator's map arms for the pattern note). All string-family value
+	// types (string/enum/image/character/audio) read through this evaluator —
+	// enums included, mirroring scalar enum reads (EvaluateEnumInput delegates
+	// here). Stored strings are returned VERBATIM; strings-table resolution for
+	// string-typed map values is Task 7.
+	case EStoryFlowNodeType::GetMapValue:
+	{
+		const FString& MapValueType = Node->Data.ValueType;
+		if (MapValueType == TEXT("string") || MapValueType == TEXT("enum") || MapValueType == TEXT("image") ||
+			MapValueType == TEXT("character") || MapValueType == TEXT("audio"))
+		{
+			FStoryFlowVariant Value;
+			ComputeGetMapValue(Node, Value);
+			Result = Value.GetString();
 		}
 		break;
 	}
@@ -1216,6 +1442,34 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 		if (LoopState.bHasCachedOutput)
 		{
 			Result = LoopState.CachedOutput.GetString();
+		}
+		break;
+	}
+
+	// forEachMap Key/Value (string-family) — discriminate by SourceHandle suffix
+	// ("-key"/"-value"); reads come from the iteration snapshot, see the boolean
+	// evaluator's ForEachMap arm for the full pattern note. All string-family
+	// types read through this evaluator (enums delegate here via
+	// EvaluateEnumInput, like the GetMapValue string arm above): keys cover
+	// string/enum, values the full string/enum/image/character/audio family.
+	// Stored strings returned VERBATIM here too — strings-table resolution for
+	// string-typed map values is Task 7 (same treatment as the GetMapValue
+	// string arm).
+	case EStoryFlowNodeType::ForEachMap:
+	{
+		FNodeRuntimeState& LoopState = Context->GetNodeState(Node->Id);
+		const FString& MapKeyType = Node->Data.KeyType;
+		const FString& MapValueType = Node->Data.ValueType;
+		if (SourceHandle.EndsWith(TEXT("-key")) &&
+			(MapKeyType == TEXT("string") || MapKeyType == TEXT("enum")))
+		{
+			Result = LoopState.LoopKey.GetString();
+		}
+		else if (SourceHandle.EndsWith(TEXT("-value")) &&
+			(MapValueType == TEXT("string") || MapValueType == TEXT("enum") || MapValueType == TEXT("image") ||
+			 MapValueType == TEXT("character") || MapValueType == TEXT("audio")))
+		{
+			Result = LoopState.LoopValue.GetString();
 		}
 		break;
 	}
@@ -1404,6 +1658,26 @@ TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateArrayInputGeneric(FStoryF
 		return CharVal.GetArray();
 	}
 
+	// mapKeys / mapValues: pure ops that project a map into an array. Recomputed
+	// fresh on every pull — maps mutate in place, so a cached output would go
+	// stale (the HTML runtime recomputes these inline too). Entries are already
+	// typed variants (Int32 or string keys; per-ValueType values), so they copy
+	// straight into the result regardless of which typed wrapper the consumer
+	// used (int array for integer keys, string array for string/enum keys, etc.).
+	if (SourceNode->Type == EStoryFlowNodeType::MapKeys || SourceNode->Type == EStoryFlowNodeType::MapValues)
+	{
+		TArray<FStoryFlowVariant> Result;
+		if (const TArray<FStoryFlowMapEntry>* Map = EvaluateMapInput(SourceNode, TEXT("1")))
+		{
+			Result.Reserve(Map->Num());
+			for (const FStoryFlowMapEntry& Entry : *Map)
+			{
+				Result.Add(SourceNode->Type == EStoryFlowNodeType::MapKeys ? Entry.Key : Entry.Value);
+			}
+		}
+		return Result;
+	}
+
 	// Handle array modify nodes (add/remove/clear) that output their result array.
 	// These nodes store their result in CachedOutput rather than a variable field.
 	if (IsArrayModifyNode(SourceNode->Type))
@@ -1463,6 +1737,331 @@ TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateCharacterArrayInput(FStor
 TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateAudioArrayInput(FStoryFlowNode* Node, const FString& HandleSuffix)
 {
 	return EvaluateArrayInputGeneric(Node, HandleSuffix, EStoryFlowNodeType::GetAudioArray);
+}
+
+// ============================================================================
+// Map Evaluation
+// ============================================================================
+
+TArray<FStoryFlowMapEntry>* FStoryFlowEvaluator::EvaluateMapInput(FStoryFlowNode* Node, const FString& OptionId)
+{
+	FStoryFlowVariable* Var = ResolveMapInputVariable(Node, OptionId);
+	return Var ? &Var->Value.GetMapMutable() : nullptr;
+}
+
+FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariable(FStoryFlowNode* Node, const FString& OptionId, EMapSourceKind* OutSourceKind)
+{
+	if (!Context || !Node)
+	{
+		if (OutSourceKind)
+		{
+			*OutSourceKind = EMapSourceKind::Unresolved;
+		}
+		return nullptr;
+	}
+
+	// Map handles bake the key/value types into the handle ID:
+	// "target-{nodeId}-map-{keyType}-{valueType}-{optionId}". Catalog map op
+	// nodes carry K/V in NODE DATA — without them the input handle cannot be
+	// built, so resolution fails to defaults (warn once per node).
+	if (Node->Data.KeyType.IsEmpty() || Node->Data.ValueType.IsEmpty())
+	{
+		MaybeWarnMissingMapTypes(Node);
+		if (OutSourceKind)
+		{
+			*OutSourceKind = EMapSourceKind::Unresolved;
+		}
+		return nullptr;
+	}
+
+	return ResolveMapInputVariableByHandle(Node, StoryFlowHandles::In_Map(Node->Data.KeyType, Node->Data.ValueType, OptionId), OutSourceKind);
+}
+
+FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariableByHandle(FStoryFlowNode* Node, const FString& HandleSuffix, EMapSourceKind* OutSourceKind)
+{
+	// Reset the out-kind up front so it is deterministic even on null return
+	// (callers must not read a stale value).
+	if (OutSourceKind)
+	{
+		*OutSourceKind = EMapSourceKind::Unresolved;
+	}
+
+	if (!Context || !Node)
+	{
+		return nullptr;
+	}
+
+	const FStoryFlowConnection* Edge = Context->FindInputEdge(Node->Id, HandleSuffix);
+	if (!Edge)
+	{
+		return nullptr;
+	}
+
+	FStoryFlowNode* SourceNode = Context->GetNode(Edge->Source);
+
+	// Walk upstream through chained mutators (mirrors the HTML runtime's
+	// evaluateMapFromNode chain arm): a mutator mutates the origin variable's
+	// live storage in place, so its map output IS its own map input ("2") —
+	// follow that edge until a terminal variable-bound node. Bounded to defend
+	// against cyclic graphs (HTML recursion has no guard; we fail to unresolved).
+	int32 Hops = 0;
+	while (SourceNode &&
+		(SourceNode->Type == EStoryFlowNodeType::SetMapValue ||
+		 SourceNode->Type == EStoryFlowNodeType::RemoveMapKey ||
+		 SourceNode->Type == EStoryFlowNodeType::ClearMap))
+	{
+		if (++Hops > STORYFLOW_MAX_EVALUATION_DEPTH)
+		{
+			UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map mutator chain too deep at node %s - possible cycle"), *SourceNode->Id);
+			return nullptr;
+		}
+		if (SourceNode->Data.KeyType.IsEmpty() || SourceNode->Data.ValueType.IsEmpty())
+		{
+			MaybeWarnMissingMapTypes(SourceNode);
+			return nullptr;
+		}
+		const FString UpstreamSuffix = StoryFlowHandles::In_Map(SourceNode->Data.KeyType, SourceNode->Data.ValueType, TEXT("2"));
+		const FStoryFlowConnection* UpstreamEdge = Context->FindInputEdge(SourceNode->Id, UpstreamSuffix);
+		if (!UpstreamEdge)
+		{
+			return nullptr;
+		}
+		Edge = UpstreamEdge; // keep the terminal edge — its SourceHandle carries the runScript "-out-" UUID
+		SourceNode = Context->GetNode(UpstreamEdge->Source);
+	}
+
+	if (!SourceNode)
+	{
+		return nullptr;
+	}
+
+	// Forward-compat: warn (once) and fall through to unresolved if the terminal
+	// node is a type the plugin does not understand.
+	MaybeWarnUnknownNode(SourceNode);
+
+	switch (SourceNode->Type)
+	{
+	case EStoryFlowNodeType::GetMap:
+	case EStoryFlowNodeType::SetMap:
+	{
+		// Resolve the bound variable and return it with LIVE map storage
+		// established. Maps alias: mutators write through this storage and every
+		// later read must observe the change, so never hand out a copy here.
+		FStoryFlowVariable* Var = Context->FindVariable(SourceNode->Data.Variable, SourceNode->Data.bIsGlobal);
+		if (Var && Var->Type == EStoryFlowVariableType::Map)
+		{
+			if (!Var->Value.IsMap())
+			{
+				// Variable imported without an initial value — establish the map
+				// type so the returned storage is correctly typed for mutation.
+				Var->Value.SetMap(TArray<FStoryFlowMapEntry>());
+			}
+			if (OutSourceKind)
+			{
+				*OutSourceKind = SourceNode->Data.bIsGlobal ? EMapSourceKind::GlobalVariable : EMapSourceKind::ScriptVariable;
+			}
+			return Var;
+		}
+		return nullptr;
+	}
+
+	case EStoryFlowNodeType::GetCharacterVar:
+	case EStoryFlowNodeType::SetCharacterVar:
+	{
+		// Map-typed character variables resolve to the character's LIVE runtime
+		// variable (the subsystem's mutable copy) — fine for pure reads, which
+		// are observably identical on live vs copy and stay zero-copy. But the
+		// cross-runtime contract makes charvar-sourced chains READ-ONLY (the
+		// HTML runtime hands mutators a throwaway snapshot; setMap snapshots
+		// rather than aliases), so the CharacterVariable kind flags the arm and
+		// mutating/aliasing callers must honor it. Same CharacterPath +
+		// VariableName lookup the scalar charvar evaluators use: wired
+		// character input wins over the inline dropdown path.
+		if (SourceNode->Data.VariableType != TEXT("map"))
+		{
+			return nullptr;
+		}
+		FString CharPath = SourceNode->Data.CharacterPath;
+		if (const FStoryFlowConnection* CharEdge = Context->FindInputEdge(SourceNode->Id, StoryFlowHandles::In_CharacterInput))
+		{
+			if (FStoryFlowNode* CharNode = Context->GetNode(CharEdge->Source))
+			{
+				CharPath = EvaluateStringFromNode(CharNode, SourceNode->Id, CharEdge->SourceHandle);
+			}
+		}
+		FStoryFlowVariable* Var = Context->FindCharacterVariable(CharPath, SourceNode->Data.VariableName);
+		if (Var && Var->Type == EStoryFlowVariableType::Map)
+		{
+			if (!Var->Value.IsMap())
+			{
+				// Variable imported without an initial value — establish the map
+				// type so the returned storage is correctly typed for reads
+				// (charvar chains are read-only; see the CharacterVariable kind above).
+				Var->Value.SetMap(TArray<FStoryFlowMapEntry>());
+			}
+			if (OutSourceKind)
+			{
+				*OutSourceKind = EMapSourceKind::CharacterVariable;
+			}
+			return Var;
+		}
+		return nullptr;
+	}
+
+	case EStoryFlowNodeType::RunScript:
+	{
+		// runScript map outputs: the HTML runtime's evaluateMapFromNode reads
+		// _outputValues[uuid] and CONVERTS entry arrays to a fresh Map at the
+		// read site — observable semantics are a DETACHED snapshot crossing the
+		// boundary. HandleEnd stores map-typed outputs as DETACHED variables in
+		// MapOutputVariables (keyed by Name), so this arm resolves against that
+		// and flags the source READ-ONLY like charvar chains (mutating a dead
+		// invocation's output is meaningless — HTML mutations land on the
+		// converted fresh Map and are lost). Missing outputs resolve to nullptr,
+		// which readers treat as empty and HandleSetMap wipes to a fresh empty
+		// map — both match HTML's "missing _outputValues returns empty Map" pin.
+		FNodeRuntimeState& RSState = Context->GetNodeState(SourceNode->Id);
+		if (!RSState.bHasOutputValues || Edge->SourceHandle.IsEmpty())
+		{
+			return nullptr;
+		}
+		const int32 OutIdx = Edge->SourceHandle.Find(TEXT("-out-"));
+		if (OutIdx == INDEX_NONE)
+		{
+			return nullptr;
+		}
+		const FString VarId = Edge->SourceHandle.Mid(OutIdx + 5); // UUID from handle
+		// Map UUID to variable Name via ScriptOutputs (MapOutputVariables is keyed by Name)
+		FString VarName;
+		for (const auto& Output : SourceNode->Data.ScriptOutputs)
+		{
+			if (Output.Id == VarId)
+			{
+				VarName = Output.Name;
+				break;
+			}
+		}
+		if (VarName.IsEmpty())
+		{
+			return nullptr;
+		}
+		FStoryFlowVariable* Var = RSState.MapOutputVariables.Find(VarName);
+		if (Var && Var->Type == EStoryFlowVariableType::Map)
+		{
+			if (!Var->Value.IsMap())
+			{
+				// Output captured without established storage — type it for reads
+				// (runScript-output chains are read-only; see above).
+				Var->Value.SetMap(TArray<FStoryFlowMapEntry>());
+			}
+			if (OutSourceKind)
+			{
+				*OutSourceKind = EMapSourceKind::RunScriptOutput;
+			}
+			return Var;
+		}
+		return nullptr;
+	}
+
+	default:
+		return nullptr;
+	}
+}
+
+FStoryFlowVariant FStoryFlowEvaluator::EvaluateMapOpKeyInput(FStoryFlowNode* Node, const FString& OptionId)
+{
+	// Key inputs are typed by the node's keyType: "target-{nodeId}-{keyType}-{optionId}".
+	// Wired input wins; inline Data.MapKey (coerced off the declared keyType at
+	// import) is the fallback.
+	FStoryFlowVariant Key;
+	if (!Context || !Node)
+	{
+		return Key;
+	}
+
+	const FString HandleSuffix = FString::Printf(TEXT("%s-%s"), *Node->Data.KeyType, *OptionId);
+	if (Node->Data.KeyType == TEXT("integer"))
+	{
+		Key.SetInt(EvaluateIntegerInput(Node, HandleSuffix, Node->Data.MapKey.GetInt(0)));
+	}
+	else
+	{
+		// string and enum keys both flow through the string evaluator
+		Key.SetString(EvaluateStringInput(Node, HandleSuffix, Node->Data.MapKey.GetString()));
+	}
+	return Key;
+}
+
+FStoryFlowVariant FStoryFlowEvaluator::EvaluateMapOpValueInput(FStoryFlowNode* Node, const FString& OptionId)
+{
+	// Value inputs are typed by the node's valueType: "target-{nodeId}-{valueType}-{optionId}".
+	// Wired input wins; inline Data.MapInlineValue (typed off the declared valueType
+	// at import) is the fallback. Mirrors the HTML runtime's getMapOpValueInput.
+	FStoryFlowVariant Value;
+	if (!Context || !Node)
+	{
+		return Value;
+	}
+
+	const FString& ValueType = Node->Data.ValueType;
+	const FString HandleSuffix = FString::Printf(TEXT("%s-%s"), *ValueType, *OptionId);
+	if (ValueType == TEXT("boolean"))
+	{
+		Value.SetBool(EvaluateBooleanInput(Node, HandleSuffix, Node->Data.MapInlineValue.GetBool(false)));
+	}
+	else if (ValueType == TEXT("integer"))
+	{
+		Value.SetInt(EvaluateIntegerInput(Node, HandleSuffix, Node->Data.MapInlineValue.GetInt(0)));
+	}
+	else if (ValueType == TEXT("float"))
+	{
+		Value.SetFloat(EvaluateFloatInput(Node, HandleSuffix, Node->Data.MapInlineValue.GetFloat(0.0f)));
+	}
+	else if (ValueType == TEXT("enum"))
+	{
+		Value.SetEnum(EvaluateEnumInput(Node, HandleSuffix, Node->Data.MapInlineValue.GetString()));
+	}
+	else
+	{
+		// string, image, character, and audio values all flow through the string
+		// evaluator (matches the scalar Set* handler precedent)
+		Value.SetString(EvaluateStringInput(Node, HandleSuffix, Node->Data.MapInlineValue.GetString()));
+	}
+	return Value;
+}
+
+int32 FStoryFlowEvaluator::FindMapEntryByKey(const TArray<FStoryFlowMapEntry>& Entries, const FString& KeyType, const FStoryFlowVariant& Key)
+{
+	// Integer keys compare as Int32; string/enum keys as exact (case-sensitive) strings
+	if (KeyType == TEXT("integer"))
+	{
+		const int32 KeyInt = Key.GetInt(0);
+		return Entries.IndexOfByPredicate([KeyInt](const FStoryFlowMapEntry& Entry) { return Entry.Key.GetInt(0) == KeyInt; });
+	}
+	const FString KeyString = Key.GetString();
+	return Entries.IndexOfByPredicate([&KeyString](const FStoryFlowMapEntry& Entry) { return Entry.Key.GetString().Equals(KeyString); });
+}
+
+bool FStoryFlowEvaluator::ComputeGetMapValue(FStoryFlowNode* Node, FStoryFlowVariant& OutValue)
+{
+	// Mirrors the HTML runtime's computeGetMapValue: resolve the key (input "2"
+	// / inline fallback) FIRST — the map pointer may alias node-state storage
+	// that any further evaluation can relocate — then resolve the map (input
+	// "1") and consume it immediately. Miss/unresolved leaves OutValue
+	// untouched and returns IsValid=false.
+	const FStoryFlowVariant Key = EvaluateMapOpKeyInput(Node, TEXT("2"));
+	const TArray<FStoryFlowMapEntry>* Map = EvaluateMapInput(Node, TEXT("1"));
+	if (!Map)
+	{
+		return false;
+	}
+	const int32 EntryIndex = FindMapEntryByKey(*Map, Node->Data.KeyType, Key);
+	if (EntryIndex != INDEX_NONE)
+	{
+		OutValue = (*Map)[EntryIndex].Value;
+		return true;
+	}
+	return false;
 }
 
 // ============================================================================
@@ -1547,6 +2146,16 @@ void FStoryFlowEvaluator::ProcessBooleanChain(FStoryFlowNode* Node)
 		// the correct SourceHandle from EvaluateBooleanInput) gets a fresh evaluation.
 		NodeState.bHasCachedOutput = false;
 		NodeState.CachedOutput.Reset();
+		break;
+	}
+
+	case EStoryFlowNodeType::ForEachMap:
+	{
+		// ForEachMap needs the real SourceHandle to discriminate "-key"/"-value" —
+		// the default arm's empty-handle evaluation would cache false and poison
+		// the real read. No-op: the subsequent EvaluateBooleanFromNode (with the
+		// correct SourceHandle) evaluates fresh — the loop handler clears the
+		// evaluation cache at the start of every iteration.
 		break;
 	}
 

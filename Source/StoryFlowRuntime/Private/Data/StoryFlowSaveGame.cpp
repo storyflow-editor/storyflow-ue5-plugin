@@ -32,6 +32,7 @@ FString VariableTypeToString(EStoryFlowVariableType Type)
 	case EStoryFlowVariableType::Image:     return TEXT("Image");
 	case EStoryFlowVariableType::Audio:     return TEXT("Audio");
 	case EStoryFlowVariableType::Character: return TEXT("Character");
+	case EStoryFlowVariableType::Map:       return TEXT("Map");
 	default:                                return TEXT("None");
 	}
 }
@@ -46,6 +47,7 @@ EStoryFlowVariableType StringToVariableType(const FString& Str)
 	if (Str == TEXT("Image"))     return EStoryFlowVariableType::Image;
 	if (Str == TEXT("Audio"))     return EStoryFlowVariableType::Audio;
 	if (Str == TEXT("Character")) return EStoryFlowVariableType::Character;
+	if (Str == TEXT("Map"))       return EStoryFlowVariableType::Map;
 	return EStoryFlowVariableType::None;
 }
 
@@ -128,7 +130,28 @@ TSharedPtr<FJsonObject> VariableToJson(const FStoryFlowVariable& Variable)
 	Obj->SetStringField(TEXT("type"), VariableTypeToString(Variable.Type));
 	Obj->SetBoolField(TEXT("isArray"), Variable.bIsArray);
 
-	if (Variable.bIsArray)
+	if (Variable.Type == EStoryFlowVariableType::Map)
+	{
+		// Map shape mirrors the importer's: keyType/valueType plus an ordered
+		// [{key, value}, ...] entry array, each variant typed per K/V. Entry
+		// VALUES are whatever is in memory at save time — i.e. already RESOLVED
+		// runtime strings (resolution happens once at the asset->runtime load
+		// boundary), matching what scalar string variables persist. KEYS are raw
+		// identifiers and are never strings-table-resolved.
+		Obj->SetStringField(TEXT("keyType"), VariableTypeToString(Variable.KeyType));
+		Obj->SetStringField(TEXT("valueType"), VariableTypeToString(Variable.ValueType));
+
+		TArray<TSharedPtr<FJsonValue>> Entries;
+		for (const FStoryFlowMapEntry& Entry : Variable.Value.GetMap())
+		{
+			TSharedPtr<FJsonObject> EntryObj = MakeShared<FJsonObject>();
+			EntryObj->SetField(TEXT("key"), VariantToJson(Entry.Key));
+			EntryObj->SetField(TEXT("value"), VariantToJson(Entry.Value));
+			Entries.Add(MakeShared<FJsonValueObject>(EntryObj));
+		}
+		Obj->SetArrayField(TEXT("value"), Entries);
+	}
+	else if (Variable.bIsArray)
 	{
 		TArray<TSharedPtr<FJsonValue>> ArrayValues;
 		for (const FStoryFlowVariant& Element : Variable.Value.GetArray())
@@ -152,6 +175,26 @@ TSharedPtr<FJsonObject> VariableToJson(const FStoryFlowVariable& Variable)
 		Obj->SetArrayField(TEXT("enumValues"), EnumVals);
 	}
 
+	// Map K/V enum value lists (mirrors the scalar enumValues handling above)
+	if (Variable.KeyEnumValues.Num() > 0)
+	{
+		TArray<TSharedPtr<FJsonValue>> KeyEnumVals;
+		for (const FString& EnumVal : Variable.KeyEnumValues)
+		{
+			KeyEnumVals.Add(MakeShared<FJsonValueString>(EnumVal));
+		}
+		Obj->SetArrayField(TEXT("keyEnumValues"), KeyEnumVals);
+	}
+	if (Variable.ValueEnumValues.Num() > 0)
+	{
+		TArray<TSharedPtr<FJsonValue>> ValueEnumVals;
+		for (const FString& EnumVal : Variable.ValueEnumValues)
+		{
+			ValueEnumVals.Add(MakeShared<FJsonValueString>(EnumVal));
+		}
+		Obj->SetArrayField(TEXT("valueEnumValues"), ValueEnumVals);
+	}
+
 	return Obj;
 }
 
@@ -169,7 +212,56 @@ FStoryFlowVariable VariableFromJson(const TSharedPtr<FJsonObject>& Obj)
 	Variable.Type = StringToVariableType(Obj->GetStringField(TEXT("type")));
 	Variable.bIsArray = Obj->GetBoolField(TEXT("isArray"));
 
-	if (Variable.bIsArray)
+	if (Variable.Type == EStoryFlowVariableType::Map)
+	{
+		// Tolerant K/V type parse — absent/unknown strings keep the struct defaults (String)
+		FString KVTypeStr;
+		if (Obj->TryGetStringField(TEXT("keyType"), KVTypeStr))
+		{
+			const EStoryFlowVariableType Parsed = StringToVariableType(KVTypeStr);
+			if (Parsed != EStoryFlowVariableType::None)
+			{
+				Variable.KeyType = Parsed;
+			}
+		}
+		if (Obj->TryGetStringField(TEXT("valueType"), KVTypeStr))
+		{
+			const EStoryFlowVariableType Parsed = StringToVariableType(KVTypeStr);
+			if (Parsed != EStoryFlowVariableType::None)
+			{
+				Variable.ValueType = Parsed;
+			}
+		}
+
+		// Entry array: absent or malformed degrades to an empty map with Type
+		// preserved. Saved values were resolved at load time, so they round-trip
+		// as-is — no strings-table resolution on the load path.
+		TArray<FStoryFlowMapEntry> Entries;
+		const TArray<TSharedPtr<FJsonValue>>* EntryValues;
+		if (Obj->TryGetArrayField(TEXT("value"), EntryValues))
+		{
+			for (const TSharedPtr<FJsonValue>& EntryValue : *EntryValues)
+			{
+				const TSharedPtr<FJsonObject>* EntryObj;
+				if (!EntryValue->TryGetObject(EntryObj))
+				{
+					continue;
+				}
+				// An entry without a key is unaddressable — skip it (matches the importer)
+				const TSharedPtr<FJsonValue> KeyField = (*EntryObj)->TryGetField(TEXT("key"));
+				if (!KeyField.IsValid())
+				{
+					continue;
+				}
+				FStoryFlowMapEntry Entry;
+				Entry.Key = VariantFromJson(KeyField, Variable.KeyType);
+				Entry.Value = VariantFromJson((*EntryObj)->TryGetField(TEXT("value")), Variable.ValueType);
+				Entries.Add(Entry);
+			}
+		}
+		Variable.Value.SetMap(Entries);
+	}
+	else if (Variable.bIsArray)
 	{
 		TArray<FStoryFlowVariant> ArrayElements;
 		const TArray<TSharedPtr<FJsonValue>>* ArrayValues;
@@ -193,6 +285,23 @@ FStoryFlowVariable VariableFromJson(const TSharedPtr<FJsonObject>& Obj)
 		for (const TSharedPtr<FJsonValue>& Val : *EnumVals)
 		{
 			Variable.EnumValues.Add(Val->AsString());
+		}
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* KeyEnumVals;
+	if (Obj->TryGetArrayField(TEXT("keyEnumValues"), KeyEnumVals))
+	{
+		for (const TSharedPtr<FJsonValue>& Val : *KeyEnumVals)
+		{
+			Variable.KeyEnumValues.Add(Val->AsString());
+		}
+	}
+	const TArray<TSharedPtr<FJsonValue>>* ValueEnumVals;
+	if (Obj->TryGetArrayField(TEXT("valueEnumValues"), ValueEnumVals))
+	{
+		for (const TSharedPtr<FJsonValue>& Val : *ValueEnumVals)
+		{
+			Variable.ValueEnumValues.Add(Val->AsString());
 		}
 	}
 

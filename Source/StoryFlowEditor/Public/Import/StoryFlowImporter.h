@@ -81,6 +81,9 @@ private:
 	/** Parse a single variable from JSON */
 	static FStoryFlowVariable ParseVariable(const FString& VariableId, const TSharedPtr<FJsonObject>& VariableObject);
 
+	/** Parse map entries from a JSON array of {key, value} objects, preserving entry order. VariableContext names the owning map variable in warnings. */
+	static void ParseMapEntries(const TArray<TSharedPtr<FJsonValue>>& EntriesArray, EStoryFlowVariableType KeyType, EStoryFlowVariableType ValueType, const FString& VariableContext, TArray<FStoryFlowMapEntry>& OutEntries);
+
 	/** Parse string table from JSON object */
 	static void ParseStrings(const TSharedPtr<FJsonObject>& StringsObject, TMap<FString, FString>& OutStrings);
 

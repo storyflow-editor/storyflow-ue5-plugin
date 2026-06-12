@@ -164,7 +164,7 @@ public:
 	/** Default content path for auto-loading project */
 	static const FString DefaultProjectPath;
 
-	/** Resolve string table keys in string-type variable initial values using global string table */
+	/** Resolve string table keys in string-type variable initial values (scalar + array + string-valued map entries; map keys never resolve) using global string table */
 	void ResolveStringVariableValues(TMap<FString, FStoryFlowVariable>& Variables);
 
 private:

@@ -46,6 +46,7 @@ enum class EStoryFlowNodeType : uint8
 	Minus,
 	Multiply,
 	Divide,
+	Modulo,
 	Random,
 
 	// Integer Comparison
@@ -62,6 +63,7 @@ enum class EStoryFlowNodeType : uint8
 	MinusFloat,
 	MultiplyFloat,
 	DivideFloat,
+	ModuloFloat,
 	RandomFloat,
 
 	// Float Comparison
@@ -217,6 +219,19 @@ enum class EStoryFlowNodeType : uint8
 	GetCharacterVar,
 	SetCharacterVar,
 
+	// Map Variables
+	GetMap,
+	SetMap,
+	GetMapValue,
+	SetMapValue,
+	HasMapKey,
+	MapSize,
+	MapKeys,
+	MapValues,
+	RemoveMapKey,
+	ClearMap,
+	ForEachMap,
+
 	// Unknown/Custom
 	Unknown UMETA(Hidden)
 };
@@ -235,7 +250,8 @@ enum class EStoryFlowVariableType : uint8
 	Enum,
 	Image,
 	Audio,
-	Character
+	Character,
+	Map
 };
 
 /**
@@ -261,6 +277,10 @@ enum class EStoryFlowLoopType : uint8
 // ============================================================================
 // Variant Type (Type-safe value container)
 // ============================================================================
+
+// Forward declaration — defined below FStoryFlowVariant (an entry holds variants by value,
+// so the entry struct needs the complete variant type)
+struct FStoryFlowMapEntry;
 
 /**
  * Type-safe value container for StoryFlow variables
@@ -289,6 +309,20 @@ private:
 	// Note: Not a UPROPERTY because UHT doesn't support recursive struct arrays
 	// Still usable in C++ code, just not reflected to Blueprint
 	TArray<FStoryFlowVariant> ArrayValue;
+
+	// Note: Not a UPROPERTY for the same reason as ArrayValue (entries hold variants
+	// recursively). Ordered entry array, NOT a TMap — entry order is observable through
+	// mapKeys/mapValues/forEachMap and must match the editor's serialized order.
+	// Persisted through SerializedArrayData alongside ArrayValue.
+	//
+	// Stored behind a shared pointer so AliasMap can make two variables observe the
+	// SAME live entry storage — the HTML runtime's setMap assigns the _runtimeMap
+	// REFERENCE (runtime-variables.js updateMapVariable), so after setMap(b ← a)
+	// a later clearMap(a) must also empty b. A plain variant copy shares storage
+	// (matches HTML call-frame save/restore, which keeps live references);
+	// DeepCopyMap detaches at asset→runtime copy boundaries where HTML re-inflates
+	// fresh maps from script data.
+	TSharedPtr<TArray<FStoryFlowMapEntry>> MapValue;
 
 public:
 	// Type checking
@@ -331,12 +365,34 @@ public:
 	void SetArray(const TArray<FStoryFlowVariant>& Value)
 	{
 		ArrayValue = Value;
+		MapValue.Reset(); // a variant holds either array or map data, never both
 		// Infer type from first element, or keep current type
 		if (Value.Num() > 0)
 		{
 			Type = Value[0].GetType();
 		}
 	}
+
+	// Defined below FStoryFlowMapEntry (assigning the entry array needs the complete type)
+	void SetMap(const TArray<FStoryFlowMapEntry>& Value);
+
+	/**
+	 * Share Source's live map storage (defined below FStoryFlowMapEntry).
+	 * After aliasing, mutations through either variant are observed by both —
+	 * mirrors the HTML runtime's updateMapVariable assigning the _runtimeMap
+	 * reference. Non-const: establishes Source's storage if not yet allocated
+	 * so the alias holds even when the source map is still empty.
+	 */
+	void AliasMap(FStoryFlowVariant& Source);
+
+	/**
+	 * Reallocate this variant's map storage so it no longer shares entries with
+	 * any alias (defined below FStoryFlowMapEntry). Called at asset→runtime copy
+	 * boundaries (script locals, subsystem globals/characters) where the HTML
+	 * runtime re-inflates fresh maps from serialized data. Map values are scalar
+	 * types (no nested maps), so one level is a full deep copy.
+	 */
+	void DeepCopyMap();
 
 	// Getters with default fallbacks
 	bool GetBool(bool Default = false) const
@@ -351,6 +407,13 @@ public:
 
 	float GetFloat(float Default = 0.0f) const
 	{
+		// Whole-number JSON values ("value2": 2) carry no fractional hint and
+		// parse as Integer variants, so coerce integers instead of falling
+		// through to the default — float nodes must read 2 as 2.0f, not 0.
+		if (Type == EStoryFlowVariableType::Integer)
+		{
+			return static_cast<float>(IntValue);
+		}
 		return Type == EStoryFlowVariableType::Float ? FloatValue : Default;
 	}
 
@@ -376,6 +439,22 @@ public:
 		return ArrayValue;
 	}
 
+	bool IsMap() const
+	{
+		return Type == EStoryFlowVariableType::Map;
+	}
+
+	// Defined below FStoryFlowMapEntry (dereferencing the shared storage needs the
+	// complete type). Returns a static empty array when storage is unallocated.
+	const TArray<FStoryFlowMapEntry>& GetMap() const;
+
+	// Caller must have established Type via SetMap first (mirrors GetArrayMutable's
+	// contract). Lazily allocates the shared storage — a Type=Map variant can have
+	// null storage after deserializing an empty map (Pack skips empty blobs).
+	// Lazy allocation does not set Type — misuse on a non-map variant creates
+	// orphan storage.
+	TArray<FStoryFlowMapEntry>& GetMapMutable();
+
 	// Conversion to string for display
 	FString ToString() const
 	{
@@ -393,22 +472,17 @@ public:
 		case EStoryFlowVariableType::Audio:
 		case EStoryFlowVariableType::Character:
 			return StringValue;
+		case EStoryFlowVariableType::Map:
+			// Map display formatting is deliberately deferred — interpolation of maps
+			// is suppressed contract-wide, so maps render as empty string
+			return TEXT("");
 		default:
 			return TEXT("");
 		}
 	}
 
-	// Reset
-	void Reset()
-	{
-		Type = EStoryFlowVariableType::None;
-		bBoolValue = false;
-		IntValue = 0;
-		FloatValue = 0.0f;
-		StringValue.Empty();
-		ArrayValue.Empty();
-		SerializedArrayData.Empty();
-	}
+	// Reset — defined below FStoryFlowMapEntry (clearing the entry array needs the complete type)
+	void Reset();
 
 	// Static factory methods
 	static FStoryFlowVariant FromBool(bool Value)
@@ -440,7 +514,7 @@ public:
 	}
 
 	/**
-	 * Serialize the non-UPROPERTY ArrayValue into/from SerializedArrayData.
+	 * Serialize the non-UPROPERTY ArrayValue and MapValue into/from SerializedArrayData.
 	 * Must be called before saving (PreSave) and after loading (PostLoad).
 	 */
 	void PackArrayForSerialization();
@@ -448,13 +522,76 @@ public:
 
 private:
 	/**
-	 * Flat binary blob that persists the recursive ArrayValue through Unreal's serialization.
-	 * ArrayValue cannot be a UPROPERTY (UHT doesn't support recursive struct arrays),
-	 * so we serialize it into this byte array before saving and restore it after loading.
+	 * Flat binary blob that persists the recursive ArrayValue and MapValue through Unreal's
+	 * serialization. Neither can be a UPROPERTY (UHT doesn't support recursive struct arrays),
+	 * so we serialize them into this byte array before saving and restore them after loading.
 	 */
 	UPROPERTY()
 	TArray<uint8> SerializedArrayData;
 };
+
+/** One map entry. Entry ORDER is observable through mapKeys/mapValues/forEachMap
+ *  and must match the editor's serialized order — which is why map storage is an
+ *  ordered array of entries, not a TMap (unspecified iteration order). */
+struct FStoryFlowMapEntry
+{
+	FStoryFlowVariant Key;
+	FStoryFlowVariant Value;
+};
+
+// FStoryFlowVariant members that need the complete FStoryFlowMapEntry type
+// (declaring TArray<FStoryFlowMapEntry> only needs the forward declaration,
+// but assigning/clearing the entry array does not)
+
+inline void FStoryFlowVariant::SetMap(const TArray<FStoryFlowMapEntry>& Value)
+{
+	Type = EStoryFlowVariableType::Map;
+	MapValue = MakeShared<TArray<FStoryFlowMapEntry>>(Value); // fresh storage — never aliases
+	ArrayValue.Empty(); // a variant holds either array or map data, never both
+}
+
+inline const TArray<FStoryFlowMapEntry>& FStoryFlowVariant::GetMap() const
+{
+	static const TArray<FStoryFlowMapEntry> EmptyEntries;
+	return MapValue.IsValid() ? *MapValue : EmptyEntries;
+}
+
+inline TArray<FStoryFlowMapEntry>& FStoryFlowVariant::GetMapMutable()
+{
+	if (!MapValue.IsValid())
+	{
+		MapValue = MakeShared<TArray<FStoryFlowMapEntry>>();
+	}
+	return *MapValue;
+}
+
+inline void FStoryFlowVariant::AliasMap(FStoryFlowVariant& Source)
+{
+	Source.GetMapMutable(); // ensure Source has storage so the alias holds while empty
+	Type = EStoryFlowVariableType::Map;
+	MapValue = Source.MapValue; // SHARE the live storage (see MapValue doc)
+	ArrayValue.Empty(); // a variant holds either array or map data, never both
+}
+
+inline void FStoryFlowVariant::DeepCopyMap()
+{
+	if (MapValue.IsValid())
+	{
+		MapValue = MakeShared<TArray<FStoryFlowMapEntry>>(*MapValue);
+	}
+}
+
+inline void FStoryFlowVariant::Reset()
+{
+	Type = EStoryFlowVariableType::None;
+	bBoolValue = false;
+	IntValue = 0;
+	FloatValue = 0.0f;
+	StringValue.Empty();
+	ArrayValue.Empty();
+	MapValue.Reset();
+	SerializedArrayData.Empty();
+}
 
 // ============================================================================
 // Variable Definition
@@ -492,6 +629,22 @@ struct STORYFLOWRUNTIME_API FStoryFlowVariable
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TArray<FString> EnumValues;
 
+	/** Key type (for map type: String, Integer, or Enum) */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	EStoryFlowVariableType KeyType = EStoryFlowVariableType::String;
+
+	/** Value type (for map type) */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	EStoryFlowVariableType ValueType = EStoryFlowVariableType::String;
+
+	/** Key enum values (for map type with enum keys) */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	TArray<FString> KeyEnumValues;
+
+	/** Value enum values (for map type with enum values) */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	TArray<FString> ValueEnumValues;
+
 	/** When true, this variable is exposed as an input on Run Script nodes calling this script */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bIsInput = false;
@@ -502,12 +655,22 @@ struct STORYFLOWRUNTIME_API FStoryFlowVariable
 };
 
 /**
- * Pack/unpack all FStoryFlowVariant array values in a variable map.
- * Use these helpers in asset PreSave/PostLoad to persist array data
- * that lives in the non-UPROPERTY FStoryFlowVariant::ArrayValue field.
+ * Pack/unpack all FStoryFlowVariant array values or map entries in a variable map.
+ * Use these helpers in asset PreSave/PostLoad to persist array/map data that lives
+ * in the non-UPROPERTY FStoryFlowVariant::ArrayValue and MapValue fields.
  */
 STORYFLOWRUNTIME_API void PackVariablesForSerialization(TMap<FString, FStoryFlowVariable>& Variables);
 STORYFLOWRUNTIME_API void UnpackVariablesFromSerialization(TMap<FString, FStoryFlowVariable>& Variables);
+
+/**
+ * Detach every map variable's shared entry storage in a variable map (see
+ * FStoryFlowVariant::DeepCopyMap). Call right after copying variables out of an
+ * asset (script locals, subsystem globals, runtime characters) so runtime map
+ * mutations never write into the asset and never alias a previous run — the HTML
+ * runtime re-inflates fresh maps from script data at these boundaries
+ * (runtime-state.js SWITCH_SCRIPT / LOAD_CONTENT).
+ */
+STORYFLOWRUNTIME_API void DeepCopyMapVariables(TMap<FString, FStoryFlowVariable>& Variables);
 
 // ============================================================================
 // Text Block
@@ -778,6 +941,26 @@ struct STORYFLOWRUNTIME_API FStoryFlowNodeData
 	/** Array flag for character variable nodes */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bIsArray = false;
+
+	// === Map Fields (for map variable nodes) ===
+
+	/** Key type for map nodes (string, integer, enum) */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	FString KeyType;
+
+	/** Value type for map nodes */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	FString ValueType;
+
+	/** Inline key fallback (when the key input has no connection) */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	FStoryFlowVariant MapKey;
+
+	/** Inline value fallback (when the value input has no connection).
+	 *  For map op nodes read this, NOT Data.Value — Data.Value is parsed without
+	 *  type context and mis-types integral floats and enums. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	FStoryFlowVariant MapInlineValue;
 
 	// === Random Branch Fields ===
 

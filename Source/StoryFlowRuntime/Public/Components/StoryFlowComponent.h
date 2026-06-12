@@ -272,6 +272,71 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
 	TArray<FStoryFlowVariant> GetArrayVariable(const FString& VariableName, bool bGlobal = false);
 
+	/**
+	 * Write a boolean array variable by display name.
+	 *
+	 * Replaces the variable's elements and fires OnVariableChanged, like the scalar
+	 * setters. Local variables are only reachable while a dialogue is executing
+	 * (same rule as the scalar setters). Mirrors the Unity plugin's
+	 * Set*ArrayVariable API.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	void SetBoolArrayVariable(const FString& VariableName, const TArray<bool>& Values, bool bGlobal = false);
+
+	/** Write an integer array variable by display name. See SetBoolArrayVariable for the shared rules. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	void SetIntArrayVariable(const FString& VariableName, const TArray<int32>& Values, bool bGlobal = false);
+
+	/** Write a float array variable by display name. See SetBoolArrayVariable for the shared rules. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	void SetFloatArrayVariable(const FString& VariableName, const TArray<float>& Values, bool bGlobal = false);
+
+	/**
+	 * Write a string array variable by display name. Elements are stored verbatim —
+	 * no string-table key is created, so they are language-locked and bypass
+	 * localization. See SetBoolArrayVariable for the shared rules.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	void SetStringArrayVariable(const FString& VariableName, const TArray<FString>& Values, bool bGlobal = false);
+
+	/**
+	 * Write an enum array variable by display name. Values are enum option strings;
+	 * they are stored verbatim without validation against the variable's option
+	 * list. See SetBoolArrayVariable for the shared rules.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	void SetEnumArrayVariable(const FString& VariableName, const TArray<FString>& Values, bool bGlobal = false);
+
+	/**
+	 * Write an image array variable by display name. Each entry is an asset key
+	 * resolvable through the standard asset pools. See SetBoolArrayVariable for
+	 * the shared rules.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	void SetImageArrayVariable(const FString& VariableName, const TArray<FString>& AssetKeys, bool bGlobal = false);
+
+	/** Write an audio array variable by display name. Each entry is an asset key. See SetBoolArrayVariable for the shared rules. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	void SetAudioArrayVariable(const FString& VariableName, const TArray<FString>& AssetKeys, bool bGlobal = false);
+
+	/** Write a character array variable by display name. Each entry is a character path. See SetBoolArrayVariable for the shared rules. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	void SetCharacterArrayVariable(const FString& VariableName, const TArray<FString>& CharacterPaths, bool bGlobal = false);
+
+	/**
+	 * Read a map variable by display name.
+	 *
+	 * Entries are projected as two parallel arrays — Keys[i] pairs with Values[i], in the
+	 * map's entry order — because the entry struct holds variants recursively and cannot
+	 * cross into Blueprint. Elements are FStoryFlowVariant copies so callers can use the
+	 * typed getters (GetBool, GetInt, GetFloat, GetString). String and enum VALUES are
+	 * routed through the string table so callers receive localized text; KEYS are raw
+	 * identifiers and never resolve. Image, audio, and character values pass through
+	 * unchanged (asset keys / paths). Empty arrays if the variable is missing or not a map.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	void GetMapVariable(const FString& VariableName, TArray<FStoryFlowVariant>& Keys, TArray<FStoryFlowVariant>& Values, bool bGlobal = false);
+
 	// ========================================================================
 	// Character Variable Access (by path — legacy)
 	// ========================================================================
@@ -432,6 +497,7 @@ protected:
 
 	// Loop Handlers
 	void HandleForEachLoop(FStoryFlowNode* Node);
+	void HandleForEachMap(FStoryFlowNode* Node);
 	void ContinueForEachLoop(const FString& NodeId);
 
 	// Enum Handlers
@@ -449,6 +515,11 @@ protected:
 	void HandleGetCharacterVar(FStoryFlowNode* Node);
 	void HandleSetCharacterVar(FStoryFlowNode* Node);
 
+	// Map Variable Handlers
+	void HandleSetMap(FStoryFlowNode* Node);
+	void HandleMapModify(FStoryFlowNode* Node);
+	void HandleMapPureNode(FStoryFlowNode* Node);
+
 	/**
 	 * Evaluate the wired array input of a setCharacterVar node, dispatching to the
 	 * evaluator's typed array reader for the variable's element type. TArray value
@@ -462,6 +533,13 @@ protected:
 
 	/** Find a variable by display name, falling back to subsystem globals/characters when outside dialogue */
 	FStoryFlowVariable* FindVariableByName(const FString& VariableName, bool bGlobal);
+
+	/**
+	 * Shared tail of the Set*ArrayVariable family: find the variable, replace its
+	 * element storage, and broadcast the change. Assigns ArrayValue only — the
+	 * variant's scalar fields and type stay untouched, matching the Unity plugin.
+	 */
+	void ApplyArrayVariable(const FString& VariableName, bool bGlobal, TArray<FStoryFlowVariant>&& Items);
 
 	/** Find a character def, falling back to subsystem when outside dialogue */
 	FStoryFlowCharacterDef* FindCharacter(const FString& CharacterPath);

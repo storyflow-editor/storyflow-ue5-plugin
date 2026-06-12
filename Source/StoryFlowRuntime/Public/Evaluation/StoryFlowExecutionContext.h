@@ -40,9 +40,33 @@ struct FNodeRuntimeState
 	TArray<FStoryFlowVariant> LoopArray;
 	bool bLoopInitialized = false;
 
+	/**
+	 * Map loop state (forEachMap). LoopEntries is a SNAPSHOT taken once at loop
+	 * init — body mutations land on the live map but never affect iteration.
+	 * LoopKey/LoopValue expose the current entry to the typed evaluators (read
+	 * via the "-key"/"-value" source handle suffixes). They live in dedicated
+	 * fields rather than CachedOutput so ClearEvaluationCache (which wipes
+	 * CachedOutput per iteration) leaves them intact — outer map loops then
+	 * need no restore step in the nested-loop restore pass.
+	 */
+	TArray<FStoryFlowMapEntry> LoopEntries;
+	FStoryFlowVariant LoopKey;
+	FStoryFlowVariant LoopValue;
+
 	/** Output values from a completed RunScript call (keyed by variable ID) */
 	TMap<FString, FStoryFlowVariant> OutputValues;
 	bool bHasOutputValues = false;
+
+	/**
+	 * Map-typed output variables from a completed RunScript call (keyed by
+	 * variable Name). Kept as full variables (not variants) so the map resolver
+	 * can hand out stable FStoryFlowVariable* storage with type metadata. The
+	 * map storage is DETACHED from the dead invocation at capture (HandleEnd) —
+	 * the HTML runtime converts _outputValues to a fresh Map at the read site,
+	 * so the boundary is observably a snapshot. Read-only by contract (see
+	 * EMapSourceKind::RunScriptOutput).
+	 */
+	TMap<FString, FStoryFlowVariable> MapOutputVariables;
 };
 
 /**
@@ -182,6 +206,13 @@ public:
 	 */
 	TSet<FString> WarnedUnknownNodes;
 
+	/**
+	 * Tracks map node ids for which a "missing keyType/valueType" warning has
+	 * already been logged from the evaluator. Same dedup pattern as
+	 * WarnedUnknownNodes — map reads are pulled repeatedly, warn once per node.
+	 */
+	TSet<FString> WarnedMapNodes;
+
 public:
 	// === Node Accessors ===
 
@@ -255,7 +286,7 @@ public:
 	/** Interpolate variables in text */
 	FString InterpolateVariables(const FString& Text) const;
 
-	/** Resolve string table keys in string-type variable initial values (scalar + array) */
+	/** Resolve string table keys in string-type variable initial values (scalar + array + string-valued map entries; map keys never resolve) */
 	void ResolveStringVariableValues(TMap<FString, FStoryFlowVariable>& Variables) const;
 
 	// === Validation ===

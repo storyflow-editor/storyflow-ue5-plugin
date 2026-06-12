@@ -10,6 +10,23 @@ struct FStoryFlowNode;
 class UStoryFlowScriptAsset;
 
 /**
+ * Where a resolved map input chain terminated (see ResolveMapInputVariable).
+ * CharacterVariable and RunScriptOutput sources are READ-ONLY per the
+ * cross-runtime contract: the HTML runtime hands mutators a throwaway/converted
+ * Map for both (mutations never persist), and setMap SNAPSHOTS rather than
+ * aliases. ScriptVariable vs GlobalVariable carries the terminal node's scope
+ * flag for variable-change notifications.
+ */
+enum class EMapSourceKind : uint8
+{
+	Unresolved,
+	ScriptVariable,
+	GlobalVariable,
+	CharacterVariable,
+	RunScriptOutput
+};
+
+/**
  * Evaluator for StoryFlow node graph expressions
  *
  * Evaluators retrieve data from nodes WITHOUT executing them.
@@ -80,6 +97,88 @@ public:
 	/** Evaluate audio array from a connected input */
 	TArray<FStoryFlowVariant> EvaluateAudioArrayInput(FStoryFlowNode* Node, const FString& HandleSuffix);
 
+	// === Map Evaluation ===
+
+	/**
+	 * Resolve the map wired into one of Node's map inputs and return a pointer
+	 * to the LIVE entry storage (nullptr = unresolved). Maps alias: mutators
+	 * (setMapValue/removeMapKey/clearMap) write through this pointer and every
+	 * later read must observe the change, so this never returns a copy.
+	 *
+	 * The full target handle is "target-{nodeId}-map-{keyType}-{valueType}-{optionId}";
+	 * K/V come from Node's own Data.KeyType/Data.ValueType (catalog map op nodes carry
+	 * them in node data), the caller passes only the OptionId ("1" pure reads,
+	 * "2" mutators, "map" forEachMap).
+	 *
+	 * Resolution walks upstream through chained mutators to the origin variable
+	 * (see ResolveMapInputVariable), so the returned storage always lives behind
+	 * a variable's shared map allocation. Still: resolve all other inputs FIRST,
+	 * then resolve the map and consume it immediately — never hold the pointer
+	 * across another evaluation.
+	 *
+	 * Read-only-source rule: chains terminating at getCharacterVar/
+	 * setCharacterVar or at a runScript map output may be READ through this
+	 * pointer but never written — the HTML runtime mutates a throwaway/converted
+	 * Map for those sources (use setCharacterVar to write charvars); see
+	 * ResolveMapInputVariable's source-kind out-param.
+	 */
+	TArray<FStoryFlowMapEntry>* EvaluateMapInput(FStoryFlowNode* Node, const FString& OptionId);
+
+	/**
+	 * Resolve the ORIGIN variable behind one of Node's map inputs: follow the
+	 * input edge, walk upstream through chained mutators (each mutator's map
+	 * output is the SAME live storage as its own map input "2" — mirrors the
+	 * HTML runtime's evaluateMapFromNode chain arm), and resolve the terminal
+	 * getMap/setMap node's bound variable. Returns nullptr when the chain does
+	 * not terminate at a resolvable map variable (HTML falls back to a throwaway
+	 * empty Map, i.e. mutations no-op and reads return defaults).
+	 *
+	 * On success the variable's map storage is established (Type + allocation)
+	 * and OutSourceKind (optional) reports where the chain terminated:
+	 * ScriptVariable/GlobalVariable carry the terminal getMap/setMap node's
+	 * scope flag; CharacterVariable and RunScriptOutput are READ-ONLY sources
+	 * per the cross-runtime contract — the HTML runtime hands mutators a
+	 * throwaway snapshot (charvars) or a Map converted fresh at the read site
+	 * (runScript _outputValues), so mutations never persist and setMap
+	 * SNAPSHOTS rather than aliases. Callers that mutate or alias MUST check
+	 * the kind; pure reads may ignore it (live vs copy is observably identical
+	 * for reads, so returning the live variable stays zero-copy).
+	 */
+	FStoryFlowVariable* ResolveMapInputVariable(FStoryFlowNode* Node, const FString& OptionId, EMapSourceKind* OutSourceKind = nullptr);
+
+	/**
+	 * Same resolution as ResolveMapInputVariable but for an explicit input
+	 * handle suffix instead of one built from Node's own KeyType/ValueType.
+	 * Needed for runScript map parameters, whose handle is
+	 * "map-param-{id}" — the editor bakes no key/value types into it (and the
+	 * runScript node's data carries none).
+	 */
+	FStoryFlowVariable* ResolveMapInputVariableByHandle(FStoryFlowNode* Node, const FString& HandleSuffix, EMapSourceKind* OutSourceKind = nullptr);
+
+	/**
+	 * Resolve a map op's key: wired key input first ("target-{nodeId}-{keyType}-{optionId}"),
+	 * else the inline Data.MapKey fallback. The returned variant is normalized per the
+	 * node's KeyType string (Int32 for integer keys, string otherwise).
+	 */
+	FStoryFlowVariant EvaluateMapOpKeyInput(FStoryFlowNode* Node, const FString& OptionId);
+
+	/**
+	 * Resolve a map op's value: wired value input first ("target-{nodeId}-{valueType}-{optionId}"),
+	 * else the inline Data.MapInlineValue fallback (typed off the declared valueType at
+	 * import — NOT Data.Value, see the MapInlineValue doc). The returned variant is
+	 * typed per the node's ValueType string; image/character/audio values flow through
+	 * the string evaluator like the scalar Set* handlers.
+	 */
+	FStoryFlowVariant EvaluateMapOpValueInput(FStoryFlowNode* Node, const FString& OptionId);
+
+	/**
+	 * Find a map entry's index by key (INDEX_NONE on miss). Integer keys compare
+	 * as Int32; string/enum keys as exact (case-sensitive) strings. KeyType is
+	 * the node/variable's key type string ("integer", "string", "enum").
+	 * Returns an index (not a pointer) so mutators can write entries in place.
+	 */
+	static int32 FindMapEntryByKey(const TArray<FStoryFlowMapEntry>& Entries, const FString& KeyType, const FStoryFlowVariant& Key);
+
 	// === Boolean Chain Processing ===
 
 	/** Pre-process boolean chain to cache results */
@@ -113,6 +212,21 @@ private:
 
 	/** Generic array input evaluator — all typed array evaluators delegate to this */
 	TArray<FStoryFlowVariant> EvaluateArrayInputGeneric(FStoryFlowNode* Node, const FString& HandleSuffix, EStoryFlowNodeType ExpectedGetArrayType);
+
+	/**
+	 * Compute a getMapValue lookup: resolve the map (input "1") and key (input "2"
+	 * / inline fallback) and report whether the key was found. OutValue receives
+	 * the stored value on a hit and is left untouched on a miss — callers return
+	 * their own type defaults.
+	 */
+	bool ComputeGetMapValue(FStoryFlowNode* Node, FStoryFlowVariant& OutValue);
+
+	/**
+	 * Log a one-time warning when a map node is missing its keyType/valueType
+	 * node data (the map input handle cannot be built without them). Same
+	 * dedup pattern as MaybeWarnUnknownNode, via Context->WarnedMapNodes.
+	 */
+	void MaybeWarnMissingMapTypes(const FStoryFlowNode* Node);
 
 	/**
 	 * Log a one-time warning if the source node's type is Unknown. The default
