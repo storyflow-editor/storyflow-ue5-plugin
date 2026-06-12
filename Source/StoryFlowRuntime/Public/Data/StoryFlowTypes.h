@@ -407,6 +407,13 @@ public:
 
 	float GetFloat(float Default = 0.0f) const
 	{
+		// Whole-number JSON values ("value2": 2) carry no fractional hint and
+		// parse as Integer variants, so coerce integers instead of falling
+		// through to the default — float nodes must read 2 as 2.0f, not 0.
+		if (Type == EStoryFlowVariableType::Integer)
+		{
+			return static_cast<float>(IntValue);
+		}
 		return Type == EStoryFlowVariableType::Float ? FloatValue : Default;
 	}
 
