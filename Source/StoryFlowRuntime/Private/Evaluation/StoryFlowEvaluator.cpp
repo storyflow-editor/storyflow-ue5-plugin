@@ -604,6 +604,14 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 		break;
 	}
 
+	case EStoryFlowNodeType::Modulo:
+	{
+		int32 Input1 = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer1, Node->Data.Value1.GetInt(0));
+		int32 Input2 = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer2, Node->Data.Value2.GetInt(0));
+		Result = (Input2 != 0) ? (Input1 % Input2) : 0;
+		break;
+	}
+
 	case EStoryFlowNodeType::Random:
 	{
 		int32 Min = EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer1, Node->Data.Value1.GetInt(0));
@@ -978,6 +986,14 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 		float Input1 = EvaluateFloatInput(Node, StoryFlowHandles::In_Float1, Node->Data.Value1.GetFloat(0.0f));
 		float Input2 = EvaluateFloatInput(Node, StoryFlowHandles::In_Float2, Node->Data.Value2.GetFloat(1.0f));
 		Result = !FMath::IsNearlyZero(Input2) ? (Input1 / Input2) : 0.0f;
+		break;
+	}
+
+	case EStoryFlowNodeType::ModuloFloat:
+	{
+		float Input1 = EvaluateFloatInput(Node, StoryFlowHandles::In_Float1, Node->Data.Value1.GetFloat(0.0f));
+		float Input2 = EvaluateFloatInput(Node, StoryFlowHandles::In_Float2, Node->Data.Value2.GetFloat(0.0f));
+		Result = !FMath::IsNearlyZero(Input2) ? FMath::Fmod(Input1, Input2) : 0.0f;
 		break;
 	}
 

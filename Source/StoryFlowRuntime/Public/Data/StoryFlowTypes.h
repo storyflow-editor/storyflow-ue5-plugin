@@ -46,6 +46,7 @@ enum class EStoryFlowNodeType : uint8
 	Minus,
 	Multiply,
 	Divide,
+	Modulo,
 	Random,
 
 	// Integer Comparison
@@ -62,6 +63,7 @@ enum class EStoryFlowNodeType : uint8
 	MinusFloat,
 	MultiplyFloat,
 	DivideFloat,
+	ModuloFloat,
 	RandomFloat,
 
 	// Float Comparison

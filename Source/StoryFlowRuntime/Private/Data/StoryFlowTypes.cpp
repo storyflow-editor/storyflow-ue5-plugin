@@ -303,6 +303,7 @@ EStoryFlowNodeType ParseNodeType(const FString& TypeString)
 		{ TEXT("minus"), EStoryFlowNodeType::Minus },
 		{ TEXT("multiply"), EStoryFlowNodeType::Multiply },
 		{ TEXT("divide"), EStoryFlowNodeType::Divide },
+		{ TEXT("modulo"), EStoryFlowNodeType::Modulo },
 		{ TEXT("random"), EStoryFlowNodeType::Random },
 
 		// Integer Comparison
@@ -319,6 +320,7 @@ EStoryFlowNodeType ParseNodeType(const FString& TypeString)
 		{ TEXT("minusFloat"), EStoryFlowNodeType::MinusFloat },
 		{ TEXT("multiplyFloat"), EStoryFlowNodeType::MultiplyFloat },
 		{ TEXT("divideFloat"), EStoryFlowNodeType::DivideFloat },
+		{ TEXT("moduloFloat"), EStoryFlowNodeType::ModuloFloat },
 		{ TEXT("randomFloat"), EStoryFlowNodeType::RandomFloat },
 
 		// Float Comparison
