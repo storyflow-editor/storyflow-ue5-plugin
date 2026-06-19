@@ -27,7 +27,7 @@ jobs:
           # installed. Fix: remove any JSON record whose TargetPath DLL doesn't exist on disk.
           # See: CompileScriptModules.cs Build() method, lines ~317-356 in UE source.
           $engines = "C:\Program Files\Epic Games"
-          foreach ($ue in @("5.3", "5.4", "5.5", "5.6", "5.7")) {
+          foreach ($ue in @("5.3", "5.4", "5.5", "5.6", "5.7", "5.8")) {
             $dir = "$engines\UE_$ue\Engine\Intermediate\ScriptModules"
             if (!(Test-Path $dir)) { continue }
             Get-ChildItem "$dir\*.json" | ForEach-Object {
@@ -46,6 +46,23 @@ jobs:
             }
           }
 
+      - name: Configure build executor
+        shell: powershell
+        run: |
+          $cfgDir = "$env:APPDATA\Unreal Engine\UnrealBuildTool"
+          $cfg = Join-Path $cfgDir "BuildConfiguration.xml"
+          $bak = Join-Path $cfgDir "BuildConfiguration.ci-backup.xml"
+          New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
+          if (Test-Path $cfg) { Copy-Item $cfg $bak -Force }
+          Set-Content -Path $cfg -Encoding utf8 -Value @(
+            '<?xml version="1.0" encoding="utf-8" ?>',
+            '<Configuration xmlns="https://www.unrealengine.com/BuildConfiguration">',
+            '  <BuildConfiguration>',
+            '    <bAllowUBAExecutor>false</bAllowUBAExecutor>',
+            '  </BuildConfiguration>',
+            '</Configuration>'
+          )
+
       - name: Build plugin for all UE versions
         shell: cmd
         run: |
@@ -53,7 +70,7 @@ jobs:
           set OUTPUT=%GITHUB_WORKSPACE%\BuildOutput
           set ENGINES=C:\Program Files\Epic Games
 
-          for %%V in (5.3 5.4 5.5 5.6 5.7) do (
+          for %%V in (5.3 5.4 5.5 5.6 5.7 5.8) do (
             echo Building for UE %%V...
             if exist "%OUTPUT%\StoryFlowPlugin_%%V" rmdir /s /q "%OUTPUT%\StoryFlowPlugin_%%V"
             call "%ENGINES%\UE_%%V\Engine\Build\BatchFiles\RunUAT.bat" BuildPlugin -Plugin="%PLUGIN%" -Package="%OUTPUT%\StoryFlowPlugin_%%V" -TargetPlatforms=Win64 -Rocket
@@ -64,11 +81,20 @@ jobs:
             echo [OK] UE %%V build succeeded.
           )
 
+      - name: Restore build executor setting
+        if: always()
+        shell: powershell
+        run: |
+          $cfgDir = "$env:APPDATA\Unreal Engine\UnrealBuildTool"
+          $cfg = Join-Path $cfgDir "BuildConfiguration.xml"
+          $bak = Join-Path $cfgDir "BuildConfiguration.ci-backup.xml"
+          if (Test-Path $bak) { Move-Item $bak $cfg -Force } else { Remove-Item $cfg -Force -ErrorAction SilentlyContinue }
+
       - name: Zip builds
         shell: powershell
         run: |
           $version = "${{ steps.version.outputs.version }}"
-          foreach ($ue in @("5.3", "5.4", "5.5", "5.6", "5.7")) {
+          foreach ($ue in @("5.3", "5.4", "5.5", "5.6", "5.7", "5.8")) {
             $src = "BuildOutput\StoryFlowPlugin_$ue"
             $zip = "StoryFlow-Plugin-v$version-UE$ue.zip"
             if (Test-Path $src) {
@@ -89,7 +115,7 @@ jobs:
         shell: powershell
         run: |
           $version = "${{ steps.version.outputs.version }}"
-          foreach ($ue in @("5.3", "5.4", "5.5", "5.6", "5.7")) {
+          foreach ($ue in @("5.3", "5.4", "5.5", "5.6", "5.7", "5.8")) {
             $zip = "StoryFlow-Plugin-v$version-UE$ue.zip"
             aws s3 cp $zip "s3://${{ secrets.R2_BUCKET_NAME }}/ue5/$version/$zip" --endpoint-url "https://${{ secrets.CLOUDFLARE_ACCOUNT_ID }}.r2.cloudflarestorage.com"
           }
@@ -101,7 +127,7 @@ jobs:
         shell: powershell
         run: |
           $version = "${{ steps.version.outputs.version }}"
-          foreach ($ue in @("5.3", "5.4", "5.5", "5.6", "5.7")) {
+          foreach ($ue in @("5.3", "5.4", "5.5", "5.6", "5.7", "5.8")) {
             gh release upload ${{ github.ref_name }} "StoryFlow-Plugin-v$version-UE$ue.zip" --clobber
           }
         env:
