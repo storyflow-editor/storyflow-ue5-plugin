@@ -258,4 +258,165 @@ bool FStoryFlowSetArrayVariableMissingTest::RunTest(const FString& Parameters)
 	return true;
 }
 
+// ============================================================================
+// Typed array getters — read back as native Blueprint arrays
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowGetNumericArrayVariableTest,
+	"StoryFlow.ArrayVariables.GetBoolIntFloatArrays",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowGetNumericArrayVariableTest::RunTest(const FString& Parameters)
+{
+	StoryFlowArrayVariableTestHelpers::FScopedStoryFlowWorld Fixture;
+	if (!TestTrue(TEXT("fixture initialized"), Fixture.Init()))
+	{
+		return false;
+	}
+
+	// Add all variables first, then populate element storage by map lookup: holding a
+	// FStoryFlowVariable& across a later Add() could be invalidated by a TMap rehash.
+	Fixture.AddGlobalArrayVariable(TEXT("var_b"), TEXT("Flags"), EStoryFlowVariableType::Boolean);
+	Fixture.AddGlobalArrayVariable(TEXT("var_i"), TEXT("Scores"), EStoryFlowVariableType::Integer);
+	Fixture.AddGlobalArrayVariable(TEXT("var_f"), TEXT("Weights"), EStoryFlowVariableType::Float);
+
+	// Populate directly so the test exercises the getter, not the setter.
+	Fixture.Subsystem->GetGlobalVariables()[TEXT("var_b")].Value.GetArrayMutable() =
+		{ FStoryFlowVariant::FromBool(true), FStoryFlowVariant::FromBool(false), FStoryFlowVariant::FromBool(true) };
+	Fixture.Subsystem->GetGlobalVariables()[TEXT("var_i")].Value.GetArrayMutable() =
+		{ FStoryFlowVariant::FromInt(10), FStoryFlowVariant::FromInt(20), FStoryFlowVariant::FromInt(30) };
+	Fixture.Subsystem->GetGlobalVariables()[TEXT("var_f")].Value.GetArrayMutable() =
+		{ FStoryFlowVariant::FromFloat(0.5f), FStoryFlowVariant::FromFloat(2.25f) };
+
+	const TArray<bool> BoolOut = Fixture.Component->GetBoolArrayVariable(TEXT("Flags"), true);
+	TestEqual(TEXT("bool count"), BoolOut.Num(), 3);
+	if (BoolOut.Num() == 3)
+	{
+		TestTrue(TEXT("bool[0]"), BoolOut[0]);
+		TestFalse(TEXT("bool[1]"), BoolOut[1]);
+		TestTrue(TEXT("bool[2]"), BoolOut[2]);
+	}
+
+	const TArray<int32> IntOut = Fixture.Component->GetIntArrayVariable(TEXT("Scores"), true);
+	TestEqual(TEXT("int count"), IntOut.Num(), 3);
+	if (IntOut.Num() == 3)
+	{
+		TestEqual(TEXT("int[0]"), IntOut[0], 10);
+		TestEqual(TEXT("int[2]"), IntOut[2], 30);
+	}
+
+	const TArray<float> FloatOut = Fixture.Component->GetFloatArrayVariable(TEXT("Weights"), true);
+	TestEqual(TEXT("float count"), FloatOut.Num(), 2);
+	if (FloatOut.Num() == 2)
+	{
+		TestEqual(TEXT("float[1]"), FloatOut[1], 2.25f);
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowGetStringEnumArrayVariableTest,
+	"StoryFlow.ArrayVariables.GetStringAndEnumArrays",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowGetStringEnumArrayVariableTest::RunTest(const FString& Parameters)
+{
+	StoryFlowArrayVariableTestHelpers::FScopedStoryFlowWorld Fixture;
+	if (!TestTrue(TEXT("fixture initialized"), Fixture.Init()))
+	{
+		return false;
+	}
+
+	Fixture.AddGlobalArrayVariable(TEXT("var_s"), TEXT("Inventory"), EStoryFlowVariableType::String);
+	Fixture.AddGlobalArrayVariable(TEXT("var_e"), TEXT("Moods"), EStoryFlowVariableType::Enum);
+
+	Fixture.Subsystem->GetGlobalVariables()[TEXT("var_s")].Value.GetArrayMutable() =
+		{ FStoryFlowVariant::FromString(TEXT("sword")), FStoryFlowVariant::FromString(TEXT("axe")) };
+
+	// Enum elements carry Enum type (SetEnum), matching the importer and SetEnumArrayVariable.
+	FStoryFlowVariant Happy; Happy.SetEnum(TEXT("happy"));
+	FStoryFlowVariant Angry; Angry.SetEnum(TEXT("angry"));
+	Fixture.Subsystem->GetGlobalVariables()[TEXT("var_e")].Value.GetArrayMutable() = { Happy, Angry };
+
+	const TArray<FString> StringOut = Fixture.Component->GetStringArrayVariable(TEXT("Inventory"), true);
+	TestEqual(TEXT("string count"), StringOut.Num(), 2);
+	if (StringOut.Num() == 2)
+	{
+		TestEqual(TEXT("string[0]"), StringOut[0], FString(TEXT("sword")));
+		TestEqual(TEXT("string[1]"), StringOut[1], FString(TEXT("axe")));
+	}
+
+	const TArray<FString> EnumOut = Fixture.Component->GetEnumArrayVariable(TEXT("Moods"), true);
+	TestEqual(TEXT("enum count"), EnumOut.Num(), 2);
+	if (EnumOut.Num() == 2)
+	{
+		TestEqual(TEXT("enum[0]"), EnumOut[0], FString(TEXT("happy")));
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowGetImageAudioArrayVariableTest,
+	"StoryFlow.ArrayVariables.GetImageAndAudioArraysReturnAssetKeys",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowGetImageAudioArrayVariableTest::RunTest(const FString& Parameters)
+{
+	StoryFlowArrayVariableTestHelpers::FScopedStoryFlowWorld Fixture;
+	if (!TestTrue(TEXT("fixture initialized"), Fixture.Init()))
+	{
+		return false;
+	}
+
+	// Image and audio elements are stored as plain strings; the variable type distinguishes
+	// them. Both getters return the asset keys raw (no string-table resolution).
+	Fixture.AddGlobalArrayVariable(TEXT("var_img"), TEXT("Gallery"), EStoryFlowVariableType::Image);
+	Fixture.AddGlobalArrayVariable(TEXT("var_aud"), TEXT("Tracks"), EStoryFlowVariableType::Audio);
+
+	Fixture.Subsystem->GetGlobalVariables()[TEXT("var_img")].Value.GetArrayMutable() =
+		{ FStoryFlowVariant::FromString(TEXT("asset_image_1")), FStoryFlowVariant::FromString(TEXT("asset_image_2")) };
+	Fixture.Subsystem->GetGlobalVariables()[TEXT("var_aud")].Value.GetArrayMutable() =
+		{ FStoryFlowVariant::FromString(TEXT("asset_audio_1")) };
+
+	const TArray<FString> Images = Fixture.Component->GetImageArrayVariable(TEXT("Gallery"), true);
+	TestEqual(TEXT("image count"), Images.Num(), 2);
+	if (Images.Num() == 2)
+	{
+		TestEqual(TEXT("image[1]"), Images[1], FString(TEXT("asset_image_2")));
+	}
+
+	const TArray<FString> Tracks = Fixture.Component->GetAudioArrayVariable(TEXT("Tracks"), true);
+	TestEqual(TEXT("audio count"), Tracks.Num(), 1);
+	if (Tracks.Num() == 1)
+	{
+		TestEqual(TEXT("audio[0]"), Tracks[0], FString(TEXT("asset_audio_1")));
+	}
+
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowGetArrayVariableWrongTypeTest,
+	"StoryFlow.ArrayVariables.GetWrongElementTypeReturnsEmpty",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowGetArrayVariableWrongTypeTest::RunTest(const FString& Parameters)
+{
+	StoryFlowArrayVariableTestHelpers::FScopedStoryFlowWorld Fixture;
+	if (!TestTrue(TEXT("fixture initialized"), Fixture.Init()))
+	{
+		return false;
+	}
+
+	// A string array read through the int getter must refuse and warn, not coerce to zeros.
+	Fixture.AddGlobalArrayVariable(TEXT("var_s2"), TEXT("Labels"), EStoryFlowVariableType::String);
+	Fixture.Subsystem->GetGlobalVariables()[TEXT("var_s2")].Value.GetArrayMutable() =
+		{ FStoryFlowVariant::FromString(TEXT("one")) };
+
+	AddExpectedError(TEXT("is not a integer array"), EAutomationExpectedErrorFlags::Contains, 1);
+	const TArray<int32> Ints = Fixture.Component->GetIntArrayVariable(TEXT("Labels"), true);
+	TestEqual(TEXT("wrong-type read yields empty"), Ints.Num(), 0);
+
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

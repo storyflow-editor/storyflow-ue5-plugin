@@ -705,6 +705,142 @@ TArray<FStoryFlowVariant> UStoryFlowComponent::GetArrayVariable(const FString& V
 	return Out;
 }
 
+FStoryFlowVariable* UStoryFlowComponent::FindArrayVariableForRead(const FString& VariableName, bool bGlobal, EStoryFlowVariableType ExpectedType, const TCHAR* TypeLabel)
+{
+	// Scoping mirrors GetArrayVariable: locals during dialogue, then globals.
+	FStoryFlowVariable* Var = nullptr;
+	if (!bGlobal && ExecutionContext.bIsExecuting)
+	{
+		Var = ExecutionContext.FindVariableByName(VariableName, /*bIsGlobal=*/false);
+	}
+	if (!Var)
+	{
+		Var = FindVariableByName(VariableName, /*bGlobal=*/true);
+	}
+	if (!Var)
+	{
+		return nullptr;
+	}
+	if (!Var->bIsArray)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Variable '%s' is not an array"), *VariableName);
+		return nullptr;
+	}
+	if (Var->Type != ExpectedType)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Variable '%s' is not a %s array"), *VariableName, TypeLabel);
+		return nullptr;
+	}
+	return Var;
+}
+
+TArray<bool> UStoryFlowComponent::GetBoolArrayVariable(const FString& VariableName, bool bGlobal)
+{
+	TArray<bool> Out;
+	if (const FStoryFlowVariable* Var = FindArrayVariableForRead(VariableName, bGlobal, EStoryFlowVariableType::Boolean, TEXT("boolean")))
+	{
+		const TArray<FStoryFlowVariant>& Elems = Var->Value.GetArray();
+		Out.Reserve(Elems.Num());
+		for (const FStoryFlowVariant& Elem : Elems)
+		{
+			Out.Add(Elem.GetBool());
+		}
+	}
+	return Out;
+}
+
+TArray<int32> UStoryFlowComponent::GetIntArrayVariable(const FString& VariableName, bool bGlobal)
+{
+	TArray<int32> Out;
+	if (const FStoryFlowVariable* Var = FindArrayVariableForRead(VariableName, bGlobal, EStoryFlowVariableType::Integer, TEXT("integer")))
+	{
+		const TArray<FStoryFlowVariant>& Elems = Var->Value.GetArray();
+		Out.Reserve(Elems.Num());
+		for (const FStoryFlowVariant& Elem : Elems)
+		{
+			Out.Add(Elem.GetInt());
+		}
+	}
+	return Out;
+}
+
+TArray<float> UStoryFlowComponent::GetFloatArrayVariable(const FString& VariableName, bool bGlobal)
+{
+	TArray<float> Out;
+	if (const FStoryFlowVariable* Var = FindArrayVariableForRead(VariableName, bGlobal, EStoryFlowVariableType::Float, TEXT("float")))
+	{
+		const TArray<FStoryFlowVariant>& Elems = Var->Value.GetArray();
+		Out.Reserve(Elems.Num());
+		for (const FStoryFlowVariant& Elem : Elems)
+		{
+			Out.Add(Elem.GetFloat());
+		}
+	}
+	return Out;
+}
+
+TArray<FString> UStoryFlowComponent::GetStringArrayVariable(const FString& VariableName, bool bGlobal)
+{
+	TArray<FString> Out;
+	if (const FStoryFlowVariable* Var = FindArrayVariableForRead(VariableName, bGlobal, EStoryFlowVariableType::String, TEXT("string")))
+	{
+		// Resolve through the string table so callers get localized text, like GetStringVariable.
+		const TArray<FStoryFlowVariant>& Elems = Var->Value.GetArray();
+		Out.Reserve(Elems.Num());
+		for (const FStoryFlowVariant& Elem : Elems)
+		{
+			Out.Add(ResolveString(Elem.GetString()));
+		}
+	}
+	return Out;
+}
+
+TArray<FString> UStoryFlowComponent::GetEnumArrayVariable(const FString& VariableName, bool bGlobal)
+{
+	TArray<FString> Out;
+	if (const FStoryFlowVariable* Var = FindArrayVariableForRead(VariableName, bGlobal, EStoryFlowVariableType::Enum, TEXT("enum")))
+	{
+		const TArray<FStoryFlowVariant>& Elems = Var->Value.GetArray();
+		Out.Reserve(Elems.Num());
+		for (const FStoryFlowVariant& Elem : Elems)
+		{
+			Out.Add(ResolveString(Elem.GetString()));
+		}
+	}
+	return Out;
+}
+
+TArray<FString> UStoryFlowComponent::GetImageArrayVariable(const FString& VariableName, bool bGlobal)
+{
+	TArray<FString> Out;
+	if (const FStoryFlowVariable* Var = FindArrayVariableForRead(VariableName, bGlobal, EStoryFlowVariableType::Image, TEXT("image")))
+	{
+		// Asset keys pass through raw (not string-table resolved), matching GetCharacterArrayVariable.
+		const TArray<FStoryFlowVariant>& Elems = Var->Value.GetArray();
+		Out.Reserve(Elems.Num());
+		for (const FStoryFlowVariant& Elem : Elems)
+		{
+			Out.Add(Elem.GetString());
+		}
+	}
+	return Out;
+}
+
+TArray<FString> UStoryFlowComponent::GetAudioArrayVariable(const FString& VariableName, bool bGlobal)
+{
+	TArray<FString> Out;
+	if (const FStoryFlowVariable* Var = FindArrayVariableForRead(VariableName, bGlobal, EStoryFlowVariableType::Audio, TEXT("audio")))
+	{
+		const TArray<FStoryFlowVariant>& Elems = Var->Value.GetArray();
+		Out.Reserve(Elems.Num());
+		for (const FStoryFlowVariant& Elem : Elems)
+		{
+			Out.Add(Elem.GetString());
+		}
+	}
+	return Out;
+}
+
 void UStoryFlowComponent::GetMapVariable(const FString& VariableName, TArray<FStoryFlowVariant>& Keys, TArray<FStoryFlowVariant>& Values, bool bGlobal)
 {
 	Keys.Reset();

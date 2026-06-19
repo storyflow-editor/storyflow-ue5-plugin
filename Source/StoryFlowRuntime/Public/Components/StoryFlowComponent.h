@@ -273,6 +273,49 @@ public:
 	TArray<FStoryFlowVariant> GetArrayVariable(const FString& VariableName, bool bGlobal = false);
 
 	/**
+	 * Read a boolean array variable by display name as a native Blueprint array.
+	 *
+	 * Mirrors GetArrayVariable's scoping (locals during dialogue, then globals) but unpacks
+	 * each element to bool in C++, so Blueprint never has to handle a variant. The variable
+	 * must be a boolean array; a missing, non-array, or wrong-typed variable warns and returns
+	 * an empty array. Counterpart to SetBoolArrayVariable.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	TArray<bool> GetBoolArrayVariable(const FString& VariableName, bool bGlobal = false);
+
+	/** Read an integer array variable as a native Blueprint array. See GetBoolArrayVariable for the shared rules. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	TArray<int32> GetIntArrayVariable(const FString& VariableName, bool bGlobal = false);
+
+	/** Read a float array variable as a native Blueprint array. See GetBoolArrayVariable for the shared rules. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	TArray<float> GetFloatArrayVariable(const FString& VariableName, bool bGlobal = false);
+
+	/**
+	 * Read a string array variable as a native Blueprint array. Elements are resolved through
+	 * the string table so callers receive localized text, matching GetStringVariable and
+	 * GetArrayVariable. See GetBoolArrayVariable for the shared rules.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	TArray<FString> GetStringArrayVariable(const FString& VariableName, bool bGlobal = false);
+
+	/** Read an enum array variable as native enum-option strings, resolved through the string table. See GetBoolArrayVariable for the shared rules. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	TArray<FString> GetEnumArrayVariable(const FString& VariableName, bool bGlobal = false);
+
+	/**
+	 * Read an image array variable as native asset-key strings. Keys are returned raw (not
+	 * string-table resolved), matching how image elements are stored. See GetBoolArrayVariable
+	 * for the shared rules.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	TArray<FString> GetImageArrayVariable(const FString& VariableName, bool bGlobal = false);
+
+	/** Read an audio array variable as native asset-key strings (returned raw). See GetBoolArrayVariable for the shared rules. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	TArray<FString> GetAudioArrayVariable(const FString& VariableName, bool bGlobal = false);
+
+	/**
 	 * Write a boolean array variable by display name.
 	 *
 	 * Replaces the variable's elements and fires OnVariableChanged, like the scalar
@@ -540,6 +583,14 @@ protected:
 	 * variant's scalar fields and type stay untouched, matching the Unity plugin.
 	 */
 	void ApplyArrayVariable(const FString& VariableName, bool bGlobal, TArray<FStoryFlowVariant>&& Items);
+
+	/**
+	 * Find an array variable of the expected element type for the typed Get*ArrayVariable
+	 * readers. Applies GetArrayVariable's scoping (locals during dialogue, then globals).
+	 * Warns and returns nullptr when the variable is missing, is not an array, or holds a
+	 * different element type. TypeLabel is the human-readable element name used in the warning.
+	 */
+	FStoryFlowVariable* FindArrayVariableForRead(const FString& VariableName, bool bGlobal, EStoryFlowVariableType ExpectedType, const TCHAR* TypeLabel);
 
 	/** Find a character def, falling back to subsystem when outside dialogue */
 	FStoryFlowCharacterDef* FindCharacter(const FString& CharacterPath);
