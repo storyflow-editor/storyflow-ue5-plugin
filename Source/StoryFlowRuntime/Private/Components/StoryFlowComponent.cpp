@@ -841,6 +841,461 @@ TArray<FString> UStoryFlowComponent::GetAudioArrayVariable(const FString& Variab
 	return Out;
 }
 
+FStoryFlowVariable* UStoryFlowComponent::FindMapVariableForAccess(const FString& VariableName, bool bGlobal)
+{
+	// Scoping mirrors FindArrayVariableForRead: locals during dialogue, then globals.
+	FStoryFlowVariable* Var = nullptr;
+	if (!bGlobal && ExecutionContext.bIsExecuting)
+	{
+		Var = ExecutionContext.FindVariableByName(VariableName, /*bIsGlobal=*/false);
+	}
+	if (!Var)
+	{
+		Var = FindVariableByName(VariableName, /*bGlobal=*/true);
+	}
+	if (!Var)
+	{
+		return nullptr;
+	}
+	if (Var->Type != EStoryFlowVariableType::Map)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Variable '%s' is not a map"), *VariableName);
+		return nullptr;
+	}
+	return Var;
+}
+
+TMap<FString, bool> UStoryFlowComponent::GetStringToBoolMap(const FString& VariableName, bool bGlobal)
+{
+	TMap<FString, bool> Out;
+	FStoryFlowVariable* Var = FindMapVariableForAccess(VariableName, bGlobal);
+	if (!Var) { return Out; }
+	if (Var->KeyType != EStoryFlowVariableType::String && Var->KeyType != EStoryFlowVariableType::Enum)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have string keys"), *VariableName);
+		return Out;
+	}
+	if (Var->ValueType != EStoryFlowVariableType::Boolean)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have boolean values"), *VariableName);
+		return Out;
+	}
+	for (const FStoryFlowMapEntry& Entry : Var->Value.GetMap())
+	{
+		Out.Add(Entry.Key.GetString(), Entry.Value.GetBool());
+	}
+	return Out;
+}
+
+TMap<FString, int32> UStoryFlowComponent::GetStringToIntMap(const FString& VariableName, bool bGlobal)
+{
+	TMap<FString, int32> Out;
+	FStoryFlowVariable* Var = FindMapVariableForAccess(VariableName, bGlobal);
+	if (!Var) { return Out; }
+	if (Var->KeyType != EStoryFlowVariableType::String && Var->KeyType != EStoryFlowVariableType::Enum)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have string keys"), *VariableName);
+		return Out;
+	}
+	if (Var->ValueType != EStoryFlowVariableType::Integer)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have integer values"), *VariableName);
+		return Out;
+	}
+	for (const FStoryFlowMapEntry& Entry : Var->Value.GetMap())
+	{
+		Out.Add(Entry.Key.GetString(), Entry.Value.GetInt());
+	}
+	return Out;
+}
+
+TMap<FString, float> UStoryFlowComponent::GetStringToFloatMap(const FString& VariableName, bool bGlobal)
+{
+	TMap<FString, float> Out;
+	FStoryFlowVariable* Var = FindMapVariableForAccess(VariableName, bGlobal);
+	if (!Var) { return Out; }
+	if (Var->KeyType != EStoryFlowVariableType::String && Var->KeyType != EStoryFlowVariableType::Enum)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have string keys"), *VariableName);
+		return Out;
+	}
+	if (Var->ValueType != EStoryFlowVariableType::Float)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have float values"), *VariableName);
+		return Out;
+	}
+	for (const FStoryFlowMapEntry& Entry : Var->Value.GetMap())
+	{
+		Out.Add(Entry.Key.GetString(), Entry.Value.GetFloat());
+	}
+	return Out;
+}
+
+TMap<FString, FString> UStoryFlowComponent::GetStringToStringMap(const FString& VariableName, bool bGlobal)
+{
+	TMap<FString, FString> Out;
+	FStoryFlowVariable* Var = FindMapVariableForAccess(VariableName, bGlobal);
+	if (!Var) { return Out; }
+	if (Var->KeyType != EStoryFlowVariableType::String && Var->KeyType != EStoryFlowVariableType::Enum)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have string keys"), *VariableName);
+		return Out;
+	}
+	const EStoryFlowVariableType VT = Var->ValueType;
+	const bool bStringFamily = (VT == EStoryFlowVariableType::String || VT == EStoryFlowVariableType::Enum ||
+		VT == EStoryFlowVariableType::Image || VT == EStoryFlowVariableType::Audio || VT == EStoryFlowVariableType::Character);
+	if (!bStringFamily)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have string-family values"), *VariableName);
+		return Out;
+	}
+	const bool bResolve = (VT == EStoryFlowVariableType::String || VT == EStoryFlowVariableType::Enum);
+	for (const FStoryFlowMapEntry& Entry : Var->Value.GetMap())
+	{
+		const FString Value = bResolve ? ResolveString(Entry.Value.GetString()) : Entry.Value.GetString();
+		Out.Add(Entry.Key.GetString(), Value);
+	}
+	return Out;
+}
+
+TMap<int32, bool> UStoryFlowComponent::GetIntToBoolMap(const FString& VariableName, bool bGlobal)
+{
+	TMap<int32, bool> Out;
+	FStoryFlowVariable* Var = FindMapVariableForAccess(VariableName, bGlobal);
+	if (!Var) { return Out; }
+	if (Var->KeyType != EStoryFlowVariableType::Integer)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have integer keys"), *VariableName);
+		return Out;
+	}
+	if (Var->ValueType != EStoryFlowVariableType::Boolean)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have boolean values"), *VariableName);
+		return Out;
+	}
+	for (const FStoryFlowMapEntry& Entry : Var->Value.GetMap())
+	{
+		Out.Add(Entry.Key.GetInt(), Entry.Value.GetBool());
+	}
+	return Out;
+}
+
+TMap<int32, int32> UStoryFlowComponent::GetIntToIntMap(const FString& VariableName, bool bGlobal)
+{
+	TMap<int32, int32> Out;
+	FStoryFlowVariable* Var = FindMapVariableForAccess(VariableName, bGlobal);
+	if (!Var) { return Out; }
+	if (Var->KeyType != EStoryFlowVariableType::Integer)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have integer keys"), *VariableName);
+		return Out;
+	}
+	if (Var->ValueType != EStoryFlowVariableType::Integer)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have integer values"), *VariableName);
+		return Out;
+	}
+	for (const FStoryFlowMapEntry& Entry : Var->Value.GetMap())
+	{
+		Out.Add(Entry.Key.GetInt(), Entry.Value.GetInt());
+	}
+	return Out;
+}
+
+TMap<int32, float> UStoryFlowComponent::GetIntToFloatMap(const FString& VariableName, bool bGlobal)
+{
+	TMap<int32, float> Out;
+	FStoryFlowVariable* Var = FindMapVariableForAccess(VariableName, bGlobal);
+	if (!Var) { return Out; }
+	if (Var->KeyType != EStoryFlowVariableType::Integer)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have integer keys"), *VariableName);
+		return Out;
+	}
+	if (Var->ValueType != EStoryFlowVariableType::Float)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have float values"), *VariableName);
+		return Out;
+	}
+	for (const FStoryFlowMapEntry& Entry : Var->Value.GetMap())
+	{
+		Out.Add(Entry.Key.GetInt(), Entry.Value.GetFloat());
+	}
+	return Out;
+}
+
+TMap<int32, FString> UStoryFlowComponent::GetIntToStringMap(const FString& VariableName, bool bGlobal)
+{
+	TMap<int32, FString> Out;
+	FStoryFlowVariable* Var = FindMapVariableForAccess(VariableName, bGlobal);
+	if (!Var) { return Out; }
+	if (Var->KeyType != EStoryFlowVariableType::Integer)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have integer keys"), *VariableName);
+		return Out;
+	}
+	const EStoryFlowVariableType VT = Var->ValueType;
+	const bool bStringFamily = (VT == EStoryFlowVariableType::String || VT == EStoryFlowVariableType::Enum ||
+		VT == EStoryFlowVariableType::Image || VT == EStoryFlowVariableType::Audio || VT == EStoryFlowVariableType::Character);
+	if (!bStringFamily)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have string-family values"), *VariableName);
+		return Out;
+	}
+	const bool bResolve = (VT == EStoryFlowVariableType::String || VT == EStoryFlowVariableType::Enum);
+	for (const FStoryFlowMapEntry& Entry : Var->Value.GetMap())
+	{
+		const FString Value = bResolve ? ResolveString(Entry.Value.GetString()) : Entry.Value.GetString();
+		Out.Add(Entry.Key.GetInt(), Value);
+	}
+	return Out;
+}
+
+TArray<FString> UStoryFlowComponent::GetMapKeysInOrder(const FString& VariableName, bool bGlobal)
+{
+	TArray<FString> Out;
+	FStoryFlowVariable* Var = FindMapVariableForAccess(VariableName, bGlobal);
+	if (!Var) { return Out; }
+	const TArray<FStoryFlowMapEntry>& Entries = Var->Value.GetMap();
+	Out.Reserve(Entries.Num());
+	for (const FStoryFlowMapEntry& Entry : Entries)
+	{
+		// String/enum keys come back verbatim from GetString; integer keys are stringified.
+		Out.Add(Var->KeyType == EStoryFlowVariableType::Integer
+			? FString::FromInt(Entry.Key.GetInt())
+			: Entry.Key.GetString());
+	}
+	return Out;
+}
+
+void UStoryFlowComponent::SetStringToBoolMap(const FString& VariableName, const TMap<FString, bool>& Values, bool bGlobal)
+{
+	FStoryFlowVariable* Var = FindMapVariableForAccess(VariableName, bGlobal);
+	if (!Var) { return; }
+	if (Var->KeyType != EStoryFlowVariableType::String && Var->KeyType != EStoryFlowVariableType::Enum)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have string keys"), *VariableName);
+		return;
+	}
+	if (Var->ValueType != EStoryFlowVariableType::Boolean)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have boolean values"), *VariableName);
+		return;
+	}
+	const bool bEnumKey = (Var->KeyType == EStoryFlowVariableType::Enum);
+	TArray<FStoryFlowMapEntry> Entries;
+	Entries.Reserve(Values.Num());
+	for (const TPair<FString, bool>& P : Values)
+	{
+		FStoryFlowMapEntry E;
+		if (bEnumKey) { E.Key.SetEnum(P.Key); } else { E.Key.SetString(P.Key); }
+		E.Value.SetBool(P.Value);
+		Entries.Add(E);
+	}
+	Var->Value.SetMap(Entries);
+	NotifyVariableChanged(*Var, bGlobal);
+}
+
+void UStoryFlowComponent::SetStringToIntMap(const FString& VariableName, const TMap<FString, int32>& Values, bool bGlobal)
+{
+	FStoryFlowVariable* Var = FindMapVariableForAccess(VariableName, bGlobal);
+	if (!Var) { return; }
+	if (Var->KeyType != EStoryFlowVariableType::String && Var->KeyType != EStoryFlowVariableType::Enum)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have string keys"), *VariableName);
+		return;
+	}
+	if (Var->ValueType != EStoryFlowVariableType::Integer)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have integer values"), *VariableName);
+		return;
+	}
+	const bool bEnumKey = (Var->KeyType == EStoryFlowVariableType::Enum);
+	TArray<FStoryFlowMapEntry> Entries;
+	Entries.Reserve(Values.Num());
+	for (const TPair<FString, int32>& P : Values)
+	{
+		FStoryFlowMapEntry E;
+		if (bEnumKey) { E.Key.SetEnum(P.Key); } else { E.Key.SetString(P.Key); }
+		E.Value.SetInt(P.Value);
+		Entries.Add(E);
+	}
+	Var->Value.SetMap(Entries);
+	NotifyVariableChanged(*Var, bGlobal);
+}
+
+void UStoryFlowComponent::SetStringToFloatMap(const FString& VariableName, const TMap<FString, float>& Values, bool bGlobal)
+{
+	FStoryFlowVariable* Var = FindMapVariableForAccess(VariableName, bGlobal);
+	if (!Var) { return; }
+	if (Var->KeyType != EStoryFlowVariableType::String && Var->KeyType != EStoryFlowVariableType::Enum)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have string keys"), *VariableName);
+		return;
+	}
+	if (Var->ValueType != EStoryFlowVariableType::Float)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have float values"), *VariableName);
+		return;
+	}
+	const bool bEnumKey = (Var->KeyType == EStoryFlowVariableType::Enum);
+	TArray<FStoryFlowMapEntry> Entries;
+	Entries.Reserve(Values.Num());
+	for (const TPair<FString, float>& P : Values)
+	{
+		FStoryFlowMapEntry E;
+		if (bEnumKey) { E.Key.SetEnum(P.Key); } else { E.Key.SetString(P.Key); }
+		E.Value.SetFloat(P.Value);
+		Entries.Add(E);
+	}
+	Var->Value.SetMap(Entries);
+	NotifyVariableChanged(*Var, bGlobal);
+}
+
+void UStoryFlowComponent::SetStringToStringMap(const FString& VariableName, const TMap<FString, FString>& Values, bool bGlobal)
+{
+	FStoryFlowVariable* Var = FindMapVariableForAccess(VariableName, bGlobal);
+	if (!Var) { return; }
+	if (Var->KeyType != EStoryFlowVariableType::String && Var->KeyType != EStoryFlowVariableType::Enum)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have string keys"), *VariableName);
+		return;
+	}
+	const EStoryFlowVariableType VT = Var->ValueType;
+	const bool bStringFamily = (VT == EStoryFlowVariableType::String || VT == EStoryFlowVariableType::Enum ||
+		VT == EStoryFlowVariableType::Image || VT == EStoryFlowVariableType::Audio || VT == EStoryFlowVariableType::Character);
+	if (!bStringFamily)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have string-family values"), *VariableName);
+		return;
+	}
+	const bool bEnumKey = (Var->KeyType == EStoryFlowVariableType::Enum);
+	const bool bEnumValue = (VT == EStoryFlowVariableType::Enum);
+	TArray<FStoryFlowMapEntry> Entries;
+	Entries.Reserve(Values.Num());
+	for (const TPair<FString, FString>& P : Values)
+	{
+		FStoryFlowMapEntry E;
+		if (bEnumKey) { E.Key.SetEnum(P.Key); } else { E.Key.SetString(P.Key); }
+		if (bEnumValue) { E.Value.SetEnum(P.Value); } else { E.Value.SetString(P.Value); }
+		Entries.Add(E);
+	}
+	Var->Value.SetMap(Entries);
+	NotifyVariableChanged(*Var, bGlobal);
+}
+
+void UStoryFlowComponent::SetIntToBoolMap(const FString& VariableName, const TMap<int32, bool>& Values, bool bGlobal)
+{
+	FStoryFlowVariable* Var = FindMapVariableForAccess(VariableName, bGlobal);
+	if (!Var) { return; }
+	if (Var->KeyType != EStoryFlowVariableType::Integer)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have integer keys"), *VariableName);
+		return;
+	}
+	if (Var->ValueType != EStoryFlowVariableType::Boolean)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have boolean values"), *VariableName);
+		return;
+	}
+	TArray<FStoryFlowMapEntry> Entries;
+	Entries.Reserve(Values.Num());
+	for (const TPair<int32, bool>& P : Values)
+	{
+		FStoryFlowMapEntry E;
+		E.Key.SetInt(P.Key);
+		E.Value.SetBool(P.Value);
+		Entries.Add(E);
+	}
+	Var->Value.SetMap(Entries);
+	NotifyVariableChanged(*Var, bGlobal);
+}
+
+void UStoryFlowComponent::SetIntToIntMap(const FString& VariableName, const TMap<int32, int32>& Values, bool bGlobal)
+{
+	FStoryFlowVariable* Var = FindMapVariableForAccess(VariableName, bGlobal);
+	if (!Var) { return; }
+	if (Var->KeyType != EStoryFlowVariableType::Integer)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have integer keys"), *VariableName);
+		return;
+	}
+	if (Var->ValueType != EStoryFlowVariableType::Integer)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have integer values"), *VariableName);
+		return;
+	}
+	TArray<FStoryFlowMapEntry> Entries;
+	Entries.Reserve(Values.Num());
+	for (const TPair<int32, int32>& P : Values)
+	{
+		FStoryFlowMapEntry E;
+		E.Key.SetInt(P.Key);
+		E.Value.SetInt(P.Value);
+		Entries.Add(E);
+	}
+	Var->Value.SetMap(Entries);
+	NotifyVariableChanged(*Var, bGlobal);
+}
+
+void UStoryFlowComponent::SetIntToFloatMap(const FString& VariableName, const TMap<int32, float>& Values, bool bGlobal)
+{
+	FStoryFlowVariable* Var = FindMapVariableForAccess(VariableName, bGlobal);
+	if (!Var) { return; }
+	if (Var->KeyType != EStoryFlowVariableType::Integer)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have integer keys"), *VariableName);
+		return;
+	}
+	if (Var->ValueType != EStoryFlowVariableType::Float)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have float values"), *VariableName);
+		return;
+	}
+	TArray<FStoryFlowMapEntry> Entries;
+	Entries.Reserve(Values.Num());
+	for (const TPair<int32, float>& P : Values)
+	{
+		FStoryFlowMapEntry E;
+		E.Key.SetInt(P.Key);
+		E.Value.SetFloat(P.Value);
+		Entries.Add(E);
+	}
+	Var->Value.SetMap(Entries);
+	NotifyVariableChanged(*Var, bGlobal);
+}
+
+void UStoryFlowComponent::SetIntToStringMap(const FString& VariableName, const TMap<int32, FString>& Values, bool bGlobal)
+{
+	FStoryFlowVariable* Var = FindMapVariableForAccess(VariableName, bGlobal);
+	if (!Var) { return; }
+	if (Var->KeyType != EStoryFlowVariableType::Integer)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have integer keys"), *VariableName);
+		return;
+	}
+	const EStoryFlowVariableType VT = Var->ValueType;
+	const bool bStringFamily = (VT == EStoryFlowVariableType::String || VT == EStoryFlowVariableType::Enum ||
+		VT == EStoryFlowVariableType::Image || VT == EStoryFlowVariableType::Audio || VT == EStoryFlowVariableType::Character);
+	if (!bStringFamily)
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have string-family values"), *VariableName);
+		return;
+	}
+	const bool bEnumValue = (VT == EStoryFlowVariableType::Enum);
+	TArray<FStoryFlowMapEntry> Entries;
+	Entries.Reserve(Values.Num());
+	for (const TPair<int32, FString>& P : Values)
+	{
+		FStoryFlowMapEntry E;
+		E.Key.SetInt(P.Key);
+		if (bEnumValue) { E.Value.SetEnum(P.Value); } else { E.Value.SetString(P.Value); }
+		Entries.Add(E);
+	}
+	Var->Value.SetMap(Entries);
+	NotifyVariableChanged(*Var, bGlobal);
+}
+
 void UStoryFlowComponent::GetMapVariable(const FString& VariableName, TArray<FStoryFlowVariant>& Keys, TArray<FStoryFlowVariant>& Values, bool bGlobal)
 {
 	Keys.Reset();

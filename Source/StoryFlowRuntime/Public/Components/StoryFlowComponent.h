@@ -381,6 +381,93 @@ public:
 	void GetMapVariable(const FString& VariableName, TArray<FStoryFlowVariant>& Keys, TArray<FStoryFlowVariant>& Values, bool bGlobal = false);
 
 	// ========================================================================
+	// Typed Map Access (read/write map variables as native TMaps)
+	// ========================================================================
+
+	/**
+	 * Read a string-or-enum-keyed, integer-valued map as a native TMap. Mirrors the scalar and
+	 * array getters' scoping (locals during dialogue, then globals). Returns an empty map and
+	 * warns when the variable is missing, is not a map, or has a different key or value type.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	TMap<FString, int32> GetStringToIntMap(const FString& VariableName, bool bGlobal = false);
+
+	/** Read a string-or-enum-keyed, boolean-valued map as a native TMap. See GetStringToIntMap. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	TMap<FString, bool> GetStringToBoolMap(const FString& VariableName, bool bGlobal = false);
+
+	/** Read a string-or-enum-keyed, float-valued map as a native TMap. See GetStringToIntMap. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	TMap<FString, float> GetStringToFloatMap(const FString& VariableName, bool bGlobal = false);
+
+	/**
+	 * Read a string-or-enum-keyed, string-family-valued map as a native TMap. Value types string,
+	 * enum, image, audio and character are accepted. String and enum values are resolved through
+	 * the string table; image, audio and character values are returned as raw asset keys.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	TMap<FString, FString> GetStringToStringMap(const FString& VariableName, bool bGlobal = false);
+
+	/** Read an integer-keyed, boolean-valued map as a native TMap. See GetStringToIntMap. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	TMap<int32, bool> GetIntToBoolMap(const FString& VariableName, bool bGlobal = false);
+
+	/** Read an integer-keyed, integer-valued map as a native TMap. See GetStringToIntMap. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	TMap<int32, int32> GetIntToIntMap(const FString& VariableName, bool bGlobal = false);
+
+	/** Read an integer-keyed, float-valued map as a native TMap. See GetStringToIntMap. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	TMap<int32, float> GetIntToFloatMap(const FString& VariableName, bool bGlobal = false);
+
+	/** Read an integer-keyed, string-family-valued map as a native TMap. Value resolution matches GetStringToStringMap. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	TMap<int32, FString> GetIntToStringMap(const FString& VariableName, bool bGlobal = false);
+
+	/**
+	 * Read a map's keys in entry order. String and enum keys come back verbatim, integer keys are
+	 * stringified. The typed map getters return an unordered TMap; this is the only ordered view.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	TArray<FString> GetMapKeysInOrder(const FString& VariableName, bool bGlobal = false);
+
+	/**
+	 * Write a string-or-enum-keyed, integer-valued map from a native TMap. No-op and warns on a
+	 * missing, non-map, or mistyped variable. Fires OnVariableChanged like the scalar and array
+	 * setters. Entry order is not preserved (TMap is unordered).
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	void SetStringToIntMap(const FString& VariableName, const TMap<FString, int32>& Values, bool bGlobal = false);
+
+	/** Write a string-or-enum-keyed, boolean-valued map. See SetStringToIntMap. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	void SetStringToBoolMap(const FString& VariableName, const TMap<FString, bool>& Values, bool bGlobal = false);
+
+	/** Write a string-or-enum-keyed, float-valued map. See SetStringToIntMap. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	void SetStringToFloatMap(const FString& VariableName, const TMap<FString, float>& Values, bool bGlobal = false);
+
+	/** Write a string-or-enum-keyed, string-family-valued map. Values are stored verbatim. See SetStringToIntMap. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	void SetStringToStringMap(const FString& VariableName, const TMap<FString, FString>& Values, bool bGlobal = false);
+
+	/** Write an integer-keyed, boolean-valued map. See SetStringToIntMap. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	void SetIntToBoolMap(const FString& VariableName, const TMap<int32, bool>& Values, bool bGlobal = false);
+
+	/** Write an integer-keyed, integer-valued map. See SetStringToIntMap. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	void SetIntToIntMap(const FString& VariableName, const TMap<int32, int32>& Values, bool bGlobal = false);
+
+	/** Write an integer-keyed, float-valued map. See SetStringToIntMap. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	void SetIntToFloatMap(const FString& VariableName, const TMap<int32, float>& Values, bool bGlobal = false);
+
+	/** Write an integer-keyed, string-family-valued map. Values stored verbatim. See SetStringToIntMap. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	void SetIntToStringMap(const FString& VariableName, const TMap<int32, FString>& Values, bool bGlobal = false);
+
+	// ========================================================================
 	// Character Variable Access (by path — legacy)
 	// ========================================================================
 
@@ -591,6 +678,13 @@ protected:
 	 * different element type. TypeLabel is the human-readable element name used in the warning.
 	 */
 	FStoryFlowVariable* FindArrayVariableForRead(const FString& VariableName, bool bGlobal, EStoryFlowVariableType ExpectedType, const TCHAR* TypeLabel);
+
+	/**
+	 * Find a map variable for the typed Get/Set*Map functions. Applies the same local/global
+	 * scoping as FindArrayVariableForRead and requires Type == Map, warning and returning nullptr
+	 * otherwise. The caller performs the key/value family checks (it knows the requested native types).
+	 */
+	FStoryFlowVariable* FindMapVariableForAccess(const FString& VariableName, bool bGlobal);
 
 	/** Find a character def, falling back to subsystem when outside dialogue */
 	FStoryFlowCharacterDef* FindCharacter(const FString& CharacterPath);
