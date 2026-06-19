@@ -350,7 +350,7 @@ FStoryFlowCharacterDef CharacterDefFromJson(const TSharedPtr<FJsonObject>& Obj)
 			const TSharedPtr<FJsonObject>* VarObj;
 			if (VarPair.Value->TryGetObject(VarObj))
 			{
-				CharDef.Variables.Add(VarPair.Key, VariableFromJson(*VarObj));
+				CharDef.Variables.Add(FString(*VarPair.Key), VariableFromJson(*VarObj));
 			}
 		}
 	}
@@ -422,7 +422,7 @@ bool DeserializeSaveData(
 			const TSharedPtr<FJsonObject>* VarObj;
 			if (VarPair.Value->TryGetObject(VarObj))
 			{
-				OutGlobalVariables.Add(VarPair.Key, VariableFromJson(*VarObj));
+				OutGlobalVariables.Add(FString(*VarPair.Key), VariableFromJson(*VarObj));
 			}
 		}
 	}
@@ -437,7 +437,7 @@ bool DeserializeSaveData(
 			const TSharedPtr<FJsonObject>* CharObj;
 			if (CharPair.Value->TryGetObject(CharObj))
 			{
-				OutRuntimeCharacters.Add(CharPair.Key, CharacterDefFromJson(*CharObj));
+				OutRuntimeCharacters.Add(FString(*CharPair.Key), CharacterDefFromJson(*CharObj));
 			}
 		}
 	}

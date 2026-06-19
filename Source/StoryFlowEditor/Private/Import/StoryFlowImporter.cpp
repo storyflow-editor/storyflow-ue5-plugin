@@ -200,7 +200,7 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 
 				for (const auto& CharPair : CharactersObject->Values)
 				{
-					FString CharPath = CharPair.Key;
+					FString CharPath = *CharPair.Key;
 					TSharedPtr<FJsonObject> CharObject = CharPair.Value->AsObject();
 					if (!CharObject.IsValid())
 					{
@@ -417,7 +417,7 @@ void UStoryFlowImporter::ParseNodes(const TSharedPtr<FJsonObject>& NodesObject, 
 {
 	for (const auto& NodePair : NodesObject->Values)
 	{
-		FString NodeId = NodePair.Key;
+		FString NodeId = *NodePair.Key;
 		if (NodeId.IsEmpty())
 		{
 			UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Skipping node with empty ID"));
@@ -737,7 +737,7 @@ void UStoryFlowImporter::ParseVariables(const TSharedPtr<FJsonObject>& Variables
 {
 	for (const auto& VarPair : VariablesObject->Values)
 	{
-		FString VariableId = VarPair.Key;
+		FString VariableId = *VarPair.Key;
 		TSharedPtr<FJsonObject> VarObject = VarPair.Value->AsObject();
 		if (VarObject.IsValid())
 		{
@@ -895,7 +895,7 @@ void UStoryFlowImporter::ParseStrings(const TSharedPtr<FJsonObject>& StringsObje
 	// Strings are nested by language code: { "en": { "key": "value" } }
 	for (const auto& LangPair : StringsObject->Values)
 	{
-		FString LanguageCode = LangPair.Key;
+		FString LanguageCode = *LangPair.Key;
 		TSharedPtr<FJsonObject> LangStrings = LangPair.Value->AsObject();
 
 		if (LangStrings.IsValid())
@@ -914,7 +914,7 @@ void UStoryFlowImporter::ParseAssets(const TSharedPtr<FJsonObject>& AssetsObject
 {
 	for (const auto& AssetPair : AssetsObject->Values)
 	{
-		FString AssetId = AssetPair.Key;
+		FString AssetId = *AssetPair.Key;
 		TSharedPtr<FJsonObject> AssetObject = AssetPair.Value->AsObject();
 
 		if (AssetObject.IsValid())
