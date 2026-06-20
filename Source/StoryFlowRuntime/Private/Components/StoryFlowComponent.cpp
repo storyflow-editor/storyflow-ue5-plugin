@@ -2434,18 +2434,24 @@ void UStoryFlowComponent::HandleRunScript(FStoryFlowNode* Node)
 				}
 				else if (Param.Type == TEXT("map"))
 				{
-					// Map parameters use "map-param-{id}" — the editor's scriptInterface
-					// carries no key/value types for map params, so unlike map op handles
-					// none are baked into the handle ID (resolve by explicit handle).
+					// Map parameters use the K/V-bearing handle
+					// "map-{keyType}-{valueType}-param-{id}", mirroring the editor's
+					// buildMapHandleId and the HTML runtime. The editor renders the handle
+					// from the param's declared key/value types, defaulting to "string" when
+					// absent, so match that fallback below. (A plain "map-param-{id}" never
+					// matches the wired edge, so the map param would silently pass nothing.)
 					// Maps cross the call boundary BY VALUE: SetMap allocates fresh
 					// storage for the entries, so the callee's variable never aliases the
 					// caller's (and entry values are scalar, so the copy is a full
 					// snapshot). Wired-but-unresolved passes an empty map (the eventual
 					// HTML getMapInput empty-Map fallback).
-					if (ExecutionContext.FindInputEdge(Node->Id, HandleSuffix))
+					const FString MapKeyType = Param.KeyType.IsEmpty() ? TEXT("string") : Param.KeyType;
+					const FString MapValueType = Param.ValueType.IsEmpty() ? TEXT("string") : Param.ValueType;
+					const FString MapHandleSuffix = StoryFlowHandles::In_Map(MapKeyType, MapValueType, FString(TEXT("param-")) + Param.Id);
+					if (ExecutionContext.FindInputEdge(Node->Id, MapHandleSuffix))
 					{
 						TArray<FStoryFlowMapEntry> Entries;
-						if (FStoryFlowVariable* SourceVar = Evaluator->ResolveMapInputVariableByHandle(Node, HandleSuffix))
+						if (FStoryFlowVariable* SourceVar = Evaluator->ResolveMapInputVariableByHandle(Node, MapHandleSuffix))
 						{
 							Entries = SourceVar->Value.GetMap();
 						}

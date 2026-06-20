@@ -791,6 +791,14 @@ struct STORYFLOWRUNTIME_API FStoryFlowScriptInterfaceParam
 	/** Whether this parameter is an array type */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bIsArray = false;
+
+	/** Map key type (string, integer, enum) - only set for map params, empty otherwise */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	FString KeyType;
+
+	/** Map value type (string, integer, float, boolean, enum, image, character, audio) - only set for map params, empty otherwise */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	FString ValueType;
 };
 
 /**

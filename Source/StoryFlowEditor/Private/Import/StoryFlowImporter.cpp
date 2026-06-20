@@ -570,6 +570,11 @@ FStoryFlowNodeData UStoryFlowImporter::ParseNodeData(const TSharedPtr<FJsonObjec
 						if (ParamObject->HasField(TEXT("name"))) Param.Name = ParamObject->GetStringField(TEXT("name"));
 						if (ParamObject->HasField(TEXT("type"))) Param.Type = ParamObject->GetStringField(TEXT("type"));
 						if (ParamObject->HasField(TEXT("isArray"))) Param.bIsArray = ParamObject->GetBoolField(TEXT("isArray"));
+						// Map params carry K/V types so HandleRunScript can rebuild the K/V-bearing
+						// input handle ("map-{keyType}-{valueType}-param-{id}"). Without them the
+						// handle lookup misses and the map param silently passes an empty map.
+						if (ParamObject->HasField(TEXT("keyType"))) Param.KeyType = ParamObject->GetStringField(TEXT("keyType"));
+						if (ParamObject->HasField(TEXT("valueType"))) Param.ValueType = ParamObject->GetStringField(TEXT("valueType"));
 						Data.ScriptParameters.Add(Param);
 					}
 				}
