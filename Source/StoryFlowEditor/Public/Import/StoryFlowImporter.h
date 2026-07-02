@@ -156,4 +156,15 @@ private:
 
 	/** Convert asset path to valid Unreal asset name */
 	static FString NormalizeAssetPath(const FString& Path);
+
+	/**
+	 * Sanitize one path segment for use in a package name. Segments already valid
+	 * pass through unchanged; invalid ones (spaces, apostrophes, dots, ...) are
+	 * cleaned and get a stable suffix derived from the original text so distinct
+	 * source names cannot collide after cleanup ("act 1" vs "act_1").
+	 */
+	static FString SanitizePackageNameSegment(const FString& Segment);
+
+	/** Sanitize each segment of a slash-separated relative package path */
+	static FString SanitizePackageRelativePath(const FString& RelPath);
 };

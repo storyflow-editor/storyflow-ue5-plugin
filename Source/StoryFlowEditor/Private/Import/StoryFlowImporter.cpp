@@ -6,6 +6,8 @@
 #include "Data/StoryFlowScriptAsset.h"
 #include "Data/StoryFlowCharacterAsset.h"
 #include "Misc/FileHelper.h"
+#include "Misc/PackageName.h"
+#include "Misc/Crc.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "AssetRegistry/AssetRegistryModule.h"
@@ -33,10 +35,20 @@ namespace
 		}
 
 		Package->FullyLoad();
-		FString PackageFileName = FPackageName::LongPackageNameToFilename(Package->GetName(), FPackageName::GetAssetPackageExtension());
+		FString PackageFileName;
+		if (!FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFileName, FPackageName::GetAssetPackageExtension()))
+		{
+			UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Cannot save '%s': package name cannot be mapped to a file path"), *Package->GetName());
+			return false;
+		}
 		FSavePackageArgs SaveArgs;
 		SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
-		return UPackage::SavePackage(Package, Asset, *PackageFileName, SaveArgs);
+		const bool bSaved = UPackage::SavePackage(Package, Asset, *PackageFileName, SaveArgs);
+		if (!bSaved)
+		{
+			UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Failed to save package '%s' to '%s'"), *Package->GetName(), *PackageFileName);
+		}
+		return bSaved;
 	}
 
 	/** Map an exported type string to EStoryFlowVariableType. Returns None for unknown strings. */
@@ -311,8 +323,20 @@ UStoryFlowScriptAsset* UStoryFlowImporter::ImportScriptFromJson(const TSharedPtr
 	// Create script asset — mirror subfolder structure under ContentPath
 	// "chapters/intro.json" with ContentPath "/Game/StoryFlow/Data"
 	//   → AssetName "intro", FullContentPath "/Game/StoryFlow/Data/chapters"
-	FString AssetName = FPaths::GetBaseFilename(ScriptPath);
-	FString SubDir = FPaths::GetPath(ScriptPath);
+	// User-authored file and folder names go into the package path, so segments
+	// with characters invalid in package names must be sanitized: the raw names
+	// produce assets the loader and cooker can never resolve (they vanish from
+	// packaged builds while the editor keeps working from memory).
+	const FString RawAssetName = FPaths::GetBaseFilename(ScriptPath);
+	const FString RawSubDir = FPaths::GetPath(ScriptPath);
+	FString AssetName = SanitizePackageNameSegment(RawAssetName);
+	FString SubDir = SanitizePackageRelativePath(RawSubDir);
+	if (AssetName != RawAssetName || SubDir != RawSubDir)
+	{
+		UE_LOG(LogStoryFlow, Warning,
+			TEXT("StoryFlow: Script path '%s' contains characters that are invalid in Unreal package names; importing as '%s'. Consider renaming the script or folder in the StoryFlow editor."),
+			*ScriptPath, *(SubDir.IsEmpty() ? AssetName : FPaths::Combine(SubDir, AssetName)));
+	}
 	FString FullContentPath = SubDir.IsEmpty() ? ContentPath : FPaths::Combine(ContentPath, SubDir);
 	UStoryFlowScriptAsset* ScriptAsset = CreateScriptAsset(FullContentPath, AssetName);
 	if (!ScriptAsset)
@@ -1106,6 +1130,15 @@ static T* CreateAssetInternal(const FString& ContentPath, const FString& AssetNa
 {
 	FString PackagePath = FPaths::Combine(ContentPath, AssetName);
 
+	// Invalid package paths must not reach CreatePackage: the resulting assets
+	// can never be loaded or cooked, and asset registry notification can even
+	// assert (PathTree) on some malformed names, crashing the editor.
+	if (!FPackageName::IsValidLongPackageName(PackagePath))
+	{
+		UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Cannot create asset: '%s' is not a valid package path"), *PackagePath);
+		return nullptr;
+	}
+
 	// Try to reuse existing asset to avoid refcount crashes during live sync
 	if (UEditorAssetLibrary::DoesAssetExist(PackagePath))
 	{
@@ -1463,5 +1496,48 @@ FString UStoryFlowImporter::NormalizeAssetPath(const FString& Path)
 	}
 
 	return CleanResult;
+}
+
+FString UStoryFlowImporter::SanitizePackageNameSegment(const FString& Segment)
+{
+	// Object names have a stricter invalid set than package names (parens,
+	// brackets, percent, ...), and the segment doubles as the asset name for
+	// script files, so both sets gate the cleanup.
+	const bool bValid = !FPackageName::DoesPackageNameContainInvalidCharacters(Segment)
+		&& FName::IsValidXName(Segment, INVALID_OBJECTNAME_CHARACTERS);
+	if (Segment.IsEmpty() || bValid)
+	{
+		return Segment;
+	}
+
+	FString Clean;
+	Clean.Reserve(Segment.Len());
+	for (TCHAR Char : Segment)
+	{
+		if (FChar::IsAlnum(Char) || Char == TEXT('_') || Char == TEXT('-'))
+		{
+			Clean.AppendChar(Char);
+		}
+		else if (Char == TEXT(' ') || Char == TEXT('.'))
+		{
+			Clean.AppendChar(TEXT('_'));
+		}
+		// remaining invalid characters are dropped
+	}
+
+	// Distinct source names must stay distinct after cleanup ("act 1" vs "act_1"),
+	// so sanitized names carry a stable suffix derived from the original text.
+	return FString::Printf(TEXT("%s_%04X"), *Clean, FCrc::StrCrc32(*Segment) & 0xFFFF);
+}
+
+FString UStoryFlowImporter::SanitizePackageRelativePath(const FString& RelPath)
+{
+	TArray<FString> Segments;
+	RelPath.Replace(TEXT("\\"), TEXT("/")).ParseIntoArray(Segments, TEXT("/"), /*InCullEmpty=*/ true);
+	for (FString& Segment : Segments)
+	{
+		Segment = SanitizePackageNameSegment(Segment);
+	}
+	return FString::Join(Segments, TEXT("/"));
 }
 
