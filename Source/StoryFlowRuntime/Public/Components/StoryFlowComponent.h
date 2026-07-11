@@ -26,6 +26,7 @@ class USoundAttenuation;
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnDialogueStarted);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnDialogueUpdated, const FStoryFlowDialogueState&, DialogueState);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnDialogueEnded);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnDialogueTagReached, const FString&, Tag);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnVariableChanged, const FStoryFlowVariable&, Variable, bool, bIsGlobal);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_ThreeParams(FOnCharacterVariableChanged, const FString&, CharacterPath, const FString&, VariableName, const FStoryFlowVariant&, Value);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnScriptStarted, const FString&, ScriptPath);
@@ -124,6 +125,10 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "StoryFlow|Events")
 	FOnDialogueEnded OnDialogueEnded;
 
+	/** Called once per tag, in authored order, when a tagged dialogue node is entered */
+	UPROPERTY(BlueprintAssignable, Category = "StoryFlow|Events")
+	FOnDialogueTagReached OnDialogueTagReached;
+
 	/** Called when a variable changes */
 	UPROPERTY(BlueprintAssignable, Category = "StoryFlow|Events")
 	FOnVariableChanged OnVariableChanged;
@@ -195,6 +200,10 @@ public:
 	/** Get the current dialogue state */
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")
 	FStoryFlowDialogueState GetCurrentDialogue() const;
+
+	/** Get the current dialogue's presentation tags (empty when untagged) */
+	UFUNCTION(BlueprintPure, Category = "StoryFlow")
+	TArray<FString> GetCurrentDialogueTags() const;
 
 	/** Check if dialogue is currently active */
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")

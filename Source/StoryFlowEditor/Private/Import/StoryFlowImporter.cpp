@@ -552,6 +552,19 @@ FStoryFlowNodeData UStoryFlowImporter::ParseNodeData(const TSharedPtr<FJsonObjec
 		ParseChoices(NodeObject->GetArrayField(TEXT("choices")), Data.Options);
 	}
 
+	// Dialogue tags (optional array of arbitrary strings; absent or empty means no tags)
+	if (NodeObject->HasField(TEXT("tags")))
+	{
+		for (const TSharedPtr<FJsonValue>& TagValue : NodeObject->GetArrayField(TEXT("tags")))
+		{
+			FString Tag;
+			if (TagValue.IsValid() && TagValue->TryGetString(Tag))
+			{
+				Data.Tags.Add(Tag);
+			}
+		}
+	}
+
 	// Input source flags
 	if (NodeObject->HasField(TEXT("imageUseVarInput")))
 	{

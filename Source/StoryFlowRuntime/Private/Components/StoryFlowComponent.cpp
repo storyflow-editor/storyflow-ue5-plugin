@@ -363,6 +363,11 @@ FStoryFlowDialogueState UStoryFlowComponent::GetCurrentDialogue() const
 	return ExecutionContext.CurrentDialogueState;
 }
 
+TArray<FString> UStoryFlowComponent::GetCurrentDialogueTags() const
+{
+	return ExecutionContext.CurrentDialogueState.Tags;
+}
+
 bool UStoryFlowComponent::IsDialogueActive() const
 {
 	return ExecutionContext.bIsExecuting;
@@ -2348,9 +2353,28 @@ void UStoryFlowComponent::HandleDialogue(FStoryFlowNode* Node)
 		}
 	}
 
+	// Snapshot the entered node's tags from the built state before broadcasting. A re-entrant
+	// Blueprint handler may synchronously advance/select/stop/restart mid-loop; the snapshot
+	// contract fires the entered node's tags fully regardless (interleaving with the next node's
+	// tags is accepted). Reading the built state also keeps us off the raw Node* the broadcast
+	// handlers can invalidate.
+	const TArray<FString> TagsToFire = ExecutionContext.CurrentDialogueState.Tags;
+
 	// Broadcast update
 	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Broadcasting OnDialogueUpdated"));
 	OnDialogueUpdated.Broadcast(ExecutionContext.CurrentDialogueState);
+
+	// Fire one tag event per tag, in authored order — only on fresh entry so re-renders
+	// (returning from a Set* node, live re-interpolation) never re-fire the same line's tags.
+	// Fired after the dialogue state is applied/broadcast so handlers can touch the presented UI.
+	if (bIsFreshEntry)
+	{
+		for (const FString& Tag : TagsToFire)
+		{
+			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Broadcasting OnDialogueTagReached '%s'"), *Tag);
+			OnDialogueTagReached.Broadcast(Tag);
+		}
+	}
 }
 
 void UStoryFlowComponent::HandleRunScript(FStoryFlowNode* Node)
@@ -3996,6 +4020,9 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 
 	State.Title = ExecutionContext.GetString(TitleKey, LanguageCode);
 	State.Text = ExecutionContext.InterpolateVariables(ExecutionContext.GetString(TextKey, LanguageCode));
+
+	// Presentation tags pass through untouched (raw authored strings, in array order)
+	State.Tags = DialogueNode->Data.Tags;
 
 	// Resolve image asset with persistence logic
 	if (!DialogueNode->Data.Image.IsEmpty())

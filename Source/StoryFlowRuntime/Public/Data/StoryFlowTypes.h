@@ -902,6 +902,10 @@ struct STORYFLOWRUNTIME_API FStoryFlowNodeData
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TArray<FStoryFlowChoice> Options;
 
+	/** Presentation tags (arbitrary strings) fired as events when this dialogue is entered */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	TArray<FString> Tags;
+
 	/** Input source flags */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bImageUseVarInput = false;
@@ -1280,6 +1284,10 @@ struct STORYFLOWRUNTIME_API FStoryFlowDialogueState
 	/** Resolved dialogue text (with variable interpolation) */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Text;
+
+	/** Presentation tags authored on this dialogue node (empty when untagged) */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	TArray<FString> Tags;
 
 	/** Current image asset */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
