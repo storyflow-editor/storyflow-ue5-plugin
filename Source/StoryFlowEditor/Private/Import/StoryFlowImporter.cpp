@@ -172,6 +172,16 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 			{
 				ParseStrings(GlobalVarsJson->GetObjectField(TEXT("strings")), ProjectAsset->GlobalStrings);
 			}
+			// Import global image/audio assets (e.g. the values of global Image/Audio
+			// variables) into the project pool — the shared final fallback consulted by
+			// portrait, background and audio resolution. Without this a global Image
+			// variable's asset key never resolves at runtime.
+			if (GlobalVarsJson->HasField(TEXT("assets")))
+			{
+				TMap<FString, FStoryFlowAsset> GlobalAssets;
+				ParseAssets(GlobalVarsJson->GetObjectField(TEXT("assets")), GlobalAssets);
+				ImportMediaAssets(BuildDirectory, ContentPath, GlobalAssets, ProjectAsset->ResolvedAssets);
+			}
 		}
 	}
 
@@ -197,11 +207,23 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 				}
 			}
 
-			// Parse character asset metadata (images, etc.) for import
+			// Parse character asset metadata (portraits, plus custom character-variable
+			// image/audio values and character-map image/audio values) for import
 			TMap<FString, FStoryFlowAsset> CharacterMediaAssets;
 			if (CharactersJson->HasField(TEXT("assets")))
 			{
 				ParseAssets(CharactersJson->GetObjectField(TEXT("assets")), CharacterMediaAssets);
+
+				// Import the ENTIRE character media set into the project pool — the shared
+				// final fallback consulted by portrait, background and audio resolution
+				// (there is no character-scoped audio pool). This resolves custom
+				// character-variable image/audio values and character-map image/audio
+				// values, not just portraits. Each character's portrait is additionally
+				// imported into its own CharAsset->ResolvedAssets below, so the
+				// character-pool-first portrait lookup still works; ImportMediaAssets is
+				// idempotent (it loads the existing asset when one is already present),
+				// so no media file is imported to disk twice.
+				ImportMediaAssets(BuildDirectory, ContentPath, CharacterMediaAssets, ProjectAsset->ResolvedAssets);
 			}
 
 			// Create per-character DataAssets
