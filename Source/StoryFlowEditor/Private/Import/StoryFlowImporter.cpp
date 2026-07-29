@@ -43,10 +43,23 @@ namespace
 		}
 		FSavePackageArgs SaveArgs;
 		SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
+		// FSavePackageArgs::Error defaults to GError, whose Serialize treats any
+		// message as a critical error and crashes the editor. Route save errors
+		// to GWarn (as the engine's own editor save paths do) so a failed save
+		// reaches the bSaved == false branch instead.
+		SaveArgs.Error = GWarn;
 		const bool bSaved = UPackage::SavePackage(Package, Asset, *PackageFileName, SaveArgs);
 		if (!bSaved)
 		{
-			UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Failed to save package '%s' to '%s'"), *Package->GetName(), *PackageFileName);
+			const FFileStatData TargetStat = IFileManager::Get().GetStatData(*PackageFileName);
+			if (TargetStat.bIsValid && TargetStat.bIsReadOnly)
+			{
+				UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Could not save '%s': the file is not writable. Clear the read-only flag (or check the file out of source control / fix its permissions), then sync again."), *PackageFileName);
+			}
+			else
+			{
+				UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Failed to save package '%s' to '%s'. Check file permissions and free disk space, then sync again."), *Package->GetName(), *PackageFileName);
+			}
 		}
 		return bSaved;
 	}
