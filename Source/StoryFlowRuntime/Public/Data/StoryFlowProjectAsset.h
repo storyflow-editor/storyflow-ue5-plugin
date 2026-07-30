@@ -56,6 +56,14 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TMap<FString, TSoftObjectPtr<UObject>> ResolvedAssets;
 
+#if WITH_EDITORONLY_DATA
+	/** Hash of the StoryFlow source this asset was last successfully imported
+	    and saved from; lets sync skip rewriting unchanged assets. Cleared when
+	    a save fails so the next sync retries. */
+	UPROPERTY()
+	FString ImportedSourceHash;
+#endif
+
 public:
 	/** Get the startup script asset */
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")

@@ -4,12 +4,14 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "Data/StoryFlowProjectAsset.h"
 #include "Data/StoryFlowScriptAsset.h"
 #include "Import/StoryFlowImporter.h"
 #include "EditorAssetLibrary.h"
 #include "HAL/FileManager.h"
 #include "HAL/PlatformFileManager.h"
 #include "GenericPlatform/GenericPlatformFile.h"
+#include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
@@ -23,8 +25,9 @@
  *
  * The read-only trick makes save attempts observable without timestamps:
  * with the target file read-only, any save attempt logs the plugin's
- * "Clear the read-only flag" error exactly once. So over the whole test the
- * count of that error equals the number of save attempts.
+ * "Clear the read-only flag" error exactly once. So while the subject file is
+ * read-only, the count of that error equals the number of save attempts (the
+ * test's last few imports run against a writable file and contribute none).
  *
  * Run via: Session Frontend > Automation > "StoryFlow.Import", or
  *   UnrealEditor-Cmd.exe StoryFlow.uproject -ExecCmds="Automation RunTests StoryFlow.Import.SkipUnchanged" -TestExit="Automation Test Queue Empty" -unattended -nullrhi
@@ -157,6 +160,8 @@ bool FStoryFlowImportSkipUnchangedScriptTest::RunTest(const FString& Parameters)
 	UStoryFlowScriptAsset* Recorded = UStoryFlowImporter::ImportScriptFromJson(V2, TEXT("skip/subject"), TestRoot);
 	if (TestNotNull(TEXT("import over a writable file succeeds"), Recorded))
 	{
+		// The rewrite pin below only means anything if this save actually landed
+		TestTrue(TEXT("hash-recording import wrote the .uasset"), FPaths::FileExists(PackageFileName));
 		if (TestTrue(TEXT("the .uasset can be deleted"), IFileManager::Get().Delete(*PackageFileName)))
 		{
 			UStoryFlowScriptAsset* Rewritten = UStoryFlowImporter::ImportScriptFromJson(V2, TEXT("skip/subject"), TestRoot);
@@ -167,6 +172,95 @@ bool FStoryFlowImportSkipUnchangedScriptTest::RunTest(const FString& Parameters)
 
 	// Cleanup
 	UEditorAssetLibrary::DeleteDirectory(TestRoot);
+	return true;
+}
+
+namespace StoryFlowSkipUnchangedTestHelpers
+{
+	const TCHAR* ProjectTestRoot = TEXT("/Game/StoryFlowSkipProjectTests");
+
+	FString ProjectFixtureDir()
+	{
+		return FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Temp/StoryFlowSkipProjectFixture"));
+	}
+
+	void WriteProjectFixture(const FString& HeroName)
+	{
+		const FString Dir = ProjectFixtureDir();
+		IFileManager::Get().MakeDirectory(*Dir, /*Tree*/ true); // SaveStringToFile does not create directories
+		FFileHelper::SaveStringToFile(TEXT(R"JSON({"version":"1.0","apiVersion":"1","startupScript":"main"})JSON"),
+			*FPaths::Combine(Dir, TEXT("project.json")));
+		FFileHelper::SaveStringToFile(FString::Printf(TEXT(R"JSON({"characters":{"chars/hero.sfc":{"name":"%s"}}})JSON"), *HeroName),
+			*FPaths::Combine(Dir, TEXT("characters.json")));
+		FFileHelper::SaveStringToFile(TEXT(R"JSON({"startNode":"0","nodes":{"0":{"type":"start","id":"0"}}})JSON"),
+			*FPaths::Combine(Dir, TEXT("main.json")));
+	}
+
+	/** Set or clear read-only on every .uasset under the test root's disk folder. */
+	void SetTestContentReadOnly(const TCHAR* ContentRoot, bool bReadOnly)
+	{
+		FString DiskRoot = FPackageName::LongPackageNameToFilename(FString(ContentRoot) + TEXT("/"));
+		TArray<FString> Files;
+		IFileManager::Get().FindFilesRecursive(Files, *DiskRoot, TEXT("*.uasset"), true, false);
+		IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
+		for (const FString& File : Files)
+		{
+			PlatformFile.SetReadOnly(*File, bReadOnly);
+		}
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowImportSkipUnchangedProjectTest,
+	"StoryFlow.Import.SkipUnchanged.Project",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowImportSkipUnchangedProjectTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowSkipUnchangedTestHelpers;
+
+	// Clear leftovers from a previous run that died mid-test
+	SetTestContentReadOnly(ProjectTestRoot, false);
+	UEditorAssetLibrary::DeleteDirectory(ProjectTestRoot);
+
+	WriteProjectFixture(TEXT("Hero"));
+
+	// Exactly two save attempts against read-only files are expected for the
+	// whole test: the changed character asset and the project asset (whose
+	// hash covers characters.json). The unchanged full re-import contributes
+	// zero, and the script asset contributes zero on both re-imports (its
+	// JSON never changes, so both its own save and the project loop's
+	// resolved-media re-save must be skipped).
+	AddExpectedError(TEXT("it is read only"), EAutomationExpectedErrorFlags::Contains, 0);
+	AddExpectedError(TEXT("Error saving"), EAutomationExpectedErrorFlags::Contains, 0);
+	AddExpectedError(TEXT("Clear the read-only flag"), EAutomationExpectedErrorFlags::Contains, 2);
+
+	UStoryFlowProjectAsset* First = UStoryFlowImporter::ImportProject(ProjectFixtureDir(), ProjectTestRoot);
+	if (!TestNotNull(TEXT("initial project import succeeds"), First))
+	{
+		return false;
+	}
+
+	SetTestContentReadOnly(ProjectTestRoot, true);
+
+	// Unchanged full re-import: zero save attempts
+	UStoryFlowProjectAsset* Unchanged = UStoryFlowImporter::ImportProject(ProjectFixtureDir(), ProjectTestRoot);
+	if (TestNotNull(TEXT("unchanged re-import returns the project"), Unchanged))
+	{
+		TestFalse(TEXT("unchanged re-import leaves the project package dirty"), Unchanged->GetOutermost()->IsDirty());
+		TestEqual(TEXT("unchanged re-import still lists the script"), Unchanged->Scripts.Num(), 1);
+		TestEqual(TEXT("unchanged re-import still lists the character"), Unchanged->Characters.Num(), 1);
+	}
+
+	// Change only the character: character asset + project asset save (fail
+	// read-only), script asset still skips
+	WriteProjectFixture(TEXT("Hero Renamed"));
+	UStoryFlowProjectAsset* Changed = UStoryFlowImporter::ImportProject(ProjectFixtureDir(), ProjectTestRoot);
+	TestNotNull(TEXT("changed re-import survives the failed saves"), Changed);
+
+	// Cleanup
+	SetTestContentReadOnly(ProjectTestRoot, false);
+	UEditorAssetLibrary::DeleteDirectory(ProjectTestRoot);
+	IFileManager::Get().DeleteDirectory(*ProjectFixtureDir(), false, true);
 	return true;
 }
 

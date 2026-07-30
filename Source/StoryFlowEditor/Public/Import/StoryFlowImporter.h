@@ -56,9 +56,12 @@ public:
 	 * @param JsonObject The parsed JSON object
 	 * @param ScriptPath Relative path of the script (for identification)
 	 * @param ContentPath Unreal content path where the asset will be created
+	 * @param bOutSkippedUnchanged Set to true when the source was unchanged since the last
+	 *        successful import, so nothing was re-parsed and nothing was written to disk.
+	 *        Callers that would otherwise follow up with their own save can then skip it.
 	 * @return The imported script asset, or nullptr on failure
 	 */
-	static UStoryFlowScriptAsset* ImportScriptFromJson(const TSharedPtr<FJsonObject>& JsonObject, const FString& ScriptPath, const FString& ContentPath);
+	static UStoryFlowScriptAsset* ImportScriptFromJson(const TSharedPtr<FJsonObject>& JsonObject, const FString& ScriptPath, const FString& ContentPath, bool* bOutSkippedUnchanged = nullptr);
 
 private:
 	// === Parsing Helpers ===

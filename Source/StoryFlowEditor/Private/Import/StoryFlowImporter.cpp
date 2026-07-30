@@ -199,6 +199,11 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 		return nullptr;
 	}
 
+	// Inputs that shape the project asset itself; compared at the end to skip
+	// a no-op save. Script assets and character assets hash separately.
+	TArray<FString> ProjectHashParts;
+	ProjectHashParts.Add(SerializeJsonCondensed(JsonObject.ToSharedRef()));
+
 	// Clear all containers for in-place update (keeps the same UObject pointer)
 	ProjectAsset->Scripts.Empty();
 	ProjectAsset->Characters.Empty();
@@ -233,6 +238,8 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 		TSharedPtr<FJsonObject> GlobalVarsJson = LoadJsonFile(GlobalVarsPath);
 		if (GlobalVarsJson.IsValid())
 		{
+			ProjectHashParts.Add(SerializeJsonCondensed(GlobalVarsJson.ToSharedRef()));
+
 			if (GlobalVarsJson->HasField(TEXT("variables")))
 			{
 				ParseVariables(GlobalVarsJson->GetObjectField(TEXT("variables")), ProjectAsset->GlobalVariables);
@@ -261,6 +268,8 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 		TSharedPtr<FJsonObject> CharactersJson = LoadJsonFile(CharactersPath);
 		if (CharactersJson.IsValid())
 		{
+			ProjectHashParts.Add(SerializeJsonCondensed(CharactersJson.ToSharedRef()));
+
 			// Merge character strings into global strings
 			if (CharactersJson->HasField(TEXT("strings")))
 			{
@@ -322,6 +331,16 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 						continue;
 					}
 
+					// Skip unchanged characters (same pattern as scripts)
+					const FString CharSourceHash = HashImportSource({ SerializeJsonCondensed(CharObject.ToSharedRef()), NormalizedPath });
+					if (CharAsset->ImportedSourceHash == CharSourceHash && PackageFileExists(CharAsset->GetOutermost()))
+					{
+						CharAsset->GetOutermost()->SetDirtyFlag(false);
+						ProjectAsset->Characters.Add(NormalizedPath, CharAsset);
+						UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Character '%s' unchanged since last import, skipping save"), *CharPath);
+						continue;
+					}
+
 					// Clear containers for in-place update
 					CharAsset->Variables.Empty();
 					CharAsset->ResolvedAssets.Empty();
@@ -351,8 +370,12 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 						ImportMediaAssets(BuildDirectory, ContentPath, ThisCharMedia, CharAsset->ResolvedAssets);
 					}
 
-					// Save the character asset
-					SavePackageSafe(CharAsset->GetOutermost(), CharAsset);
+					// Save the character asset; hash only sticks on success
+					CharAsset->ImportedSourceHash = CharSourceHash;
+					if (!SavePackageSafe(CharAsset->GetOutermost(), CharAsset))
+					{
+						CharAsset->ImportedSourceHash.Empty();
+					}
 
 					ProjectAsset->Characters.Add(NormalizedPath, CharAsset);
 					UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Created character asset '%s' at %s"), *CharPath, *CharAsset->GetPathName());
@@ -381,36 +404,68 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 		FString RelativePath = ScriptFile;
 		FPaths::MakePathRelativeTo(RelativePath, *(BuildDirectory + TEXT("/")));
 		RelativePath = NormalizeScriptPath(RelativePath);
+		ProjectHashParts.Add(RelativePath);
 
 		// Import script
 		TSharedPtr<FJsonObject> ScriptJson = LoadJsonFile(ScriptFile);
 		if (ScriptJson.IsValid())
 		{
 			FString ScriptContentPath = FPaths::Combine(ContentPath, TEXT("Data"));
-			UStoryFlowScriptAsset* ScriptAsset = ImportScriptFromJson(ScriptJson, RelativePath, ScriptContentPath);
+			bool bScriptSkippedUnchanged = false;
+			UStoryFlowScriptAsset* ScriptAsset = ImportScriptFromJson(ScriptJson, RelativePath, ScriptContentPath, &bScriptSkippedUnchanged);
 			if (ScriptAsset)
 			{
-				// Import media assets referenced by this script
-				ImportMediaAssets(BuildDirectory, ContentPath, ScriptAsset->Assets, ScriptAsset->ResolvedAssets);
+				// The script's asset list derives from its JSON, and media import
+				// is idempotent, so an unchanged script's ResolvedAssets are
+				// already correct on the loaded asset: skip the media pass and
+				// the re-save that exists only to persist resolved references.
+				if (!bScriptSkippedUnchanged)
+				{
+					// Import media assets referenced by this script
+					ImportMediaAssets(BuildDirectory, ContentPath, ScriptAsset->Assets, ScriptAsset->ResolvedAssets);
 
-				// Re-save script with resolved asset references
-				SavePackageSafe(ScriptAsset->GetOutermost(), ScriptAsset);
+					// Re-save script with resolved asset references; this second
+					// save is what persists ResolvedAssets, so a failure must
+					// clear the hash for the same retry semantics as the first
+					if (!SavePackageSafe(ScriptAsset->GetOutermost(), ScriptAsset))
+					{
+						ScriptAsset->ImportedSourceHash.Empty();
+					}
+				}
 
 				ProjectAsset->Scripts.Add(RelativePath, ScriptAsset);
 			}
 		}
 	}
 
-	// Save the project asset
-	SavePackageSafe(ProjectAsset->GetOutermost(), ProjectAsset);
+	ProjectHashParts.Sort();
+	const FString ProjectSourceHash = HashImportSource(ProjectHashParts);
+	if (ProjectAsset->ImportedSourceHash == ProjectSourceHash && PackageFileExists(ProjectAsset->GetOutermost()))
+	{
+		ProjectAsset->GetOutermost()->SetDirtyFlag(false);
+		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Project asset unchanged since last import, skipping save"));
+	}
+	else
+	{
+		ProjectAsset->ImportedSourceHash = ProjectSourceHash;
+		if (!SavePackageSafe(ProjectAsset->GetOutermost(), ProjectAsset))
+		{
+			ProjectAsset->ImportedSourceHash.Empty();
+		}
+	}
 
 	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Successfully imported project with %d scripts"), ProjectAsset->Scripts.Num());
 
 	return ProjectAsset;
 }
 
-UStoryFlowScriptAsset* UStoryFlowImporter::ImportScriptFromJson(const TSharedPtr<FJsonObject>& JsonObject, const FString& ScriptPath, const FString& ContentPath)
+UStoryFlowScriptAsset* UStoryFlowImporter::ImportScriptFromJson(const TSharedPtr<FJsonObject>& JsonObject, const FString& ScriptPath, const FString& ContentPath, bool* bOutSkippedUnchanged)
 {
+	if (bOutSkippedUnchanged)
+	{
+		*bOutSkippedUnchanged = false;
+	}
+
 	// Create script asset — mirror subfolder structure under ContentPath
 	// "chapters/intro.json" with ContentPath "/Game/StoryFlow/Data"
 	//   → AssetName "intro", FullContentPath "/Game/StoryFlow/Data/chapters"
@@ -440,14 +495,23 @@ UStoryFlowScriptAsset* UStoryFlowImporter::ImportScriptFromJson(const TSharedPtr
 	// that; the loaded asset already holds identical data.
 	// Connection indices (and the variant payloads PostLoad unpacks) are
 	// transient, not UPROPERTYs, so they exist only because PostLoad or a full
-	// import built them. Rebuild the indices here so the skip path returns an
-	// equally usable asset whichever route produced the in-memory object.
+	// import built them. Rebuilding the payloads here would be wrong, though:
+	// FStoryFlowVariant::UnpackArrayFromSerialization clears the live
+	// ArrayValue/MapValue before rebuilding them from the serialized blob, and
+	// this asset's blob was never re-packed (PreSave does that, and there is no
+	// save on this path), so re-unpacking would wipe live runtime data. Only the
+	// indices are rebuilt, so the skip path returns an equally usable asset
+	// whichever route produced the in-memory object.
 	const FString SourceHash = HashImportSource({ SerializeJsonCondensed(JsonObject.ToSharedRef()), ScriptPath });
 	if (ScriptAsset->ImportedSourceHash == SourceHash && PackageFileExists(ScriptAsset->GetOutermost()))
 	{
 		ScriptAsset->BuildConnectionIndices();
 		ScriptAsset->GetOutermost()->SetDirtyFlag(false);
 		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Script '%s' unchanged since last import, skipping save"), *ScriptPath);
+		if (bOutSkippedUnchanged)
+		{
+			*bOutSkippedUnchanged = true;
+		}
 		return ScriptAsset;
 	}
 

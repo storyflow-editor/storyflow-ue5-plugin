@@ -37,6 +37,14 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString CharacterPath;
 
+#if WITH_EDITORONLY_DATA
+	/** Hash of the StoryFlow source this asset was last successfully imported
+	    and saved from; lets sync skip rewriting unchanged assets. Cleared when
+	    a save fails so the next sync retries. */
+	UPROPERTY()
+	FString ImportedSourceHash;
+#endif
+
 	/** Unpack array variables after loading from disk */
 	virtual void PostLoad() override;
 
