@@ -24,6 +24,7 @@
 #include "Editor.h"
 #include "HAL/FileManager.h"
 #include "Import/StoryFlowMp3Decoder.h"
+#include "SourceControl/StoryFlowSourceControlUtils.h"
 
 namespace
 {
@@ -51,6 +52,15 @@ namespace
 			UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Cannot save '%s': package name cannot be mapped to a file path"), *Package->GetName());
 			return false;
 		}
+		const bool bFileExistedBeforeSave = FPaths::FileExists(PackageFileName);
+
+		FString SourceControlError;
+		if (!StoryFlowSourceControl::EnsureWritable(PackageFileName, SourceControlError))
+		{
+			UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Could not save '%s': %s. Resolve it in revision control, then sync again."), *PackageFileName, *SourceControlError);
+			return false;
+		}
+
 		FSavePackageArgs SaveArgs;
 		SaveArgs.TopLevelFlags = RF_Public | RF_Standalone;
 		// FSavePackageArgs::Error defaults to GError, whose Serialize treats any
@@ -69,6 +79,14 @@ namespace
 			else
 			{
 				UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Failed to save package '%s' to '%s'. Check file permissions and free disk space, then sync again."), *Package->GetName(), *PackageFileName);
+			}
+		}
+		if (bSaved && !bFileExistedBeforeSave)
+		{
+			FString AddError;
+			if (!StoryFlowSourceControl::MarkForAdd(PackageFileName, AddError))
+			{
+				UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Saved '%s' but could not mark it for add in revision control: %s"), *PackageFileName, *AddError);
 			}
 		}
 		return bSaved;

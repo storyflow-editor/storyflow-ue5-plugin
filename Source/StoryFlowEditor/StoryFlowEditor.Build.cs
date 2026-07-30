@@ -35,7 +35,8 @@ public class StoryFlowEditor : ModuleRules
 				"EditorScriptingUtilities",
 				"ToolMenus",
 				"Projects",
-				"DesktopPlatform"
+				"DesktopPlatform",
+				"SourceControl"
 			}
 		);
 	}
