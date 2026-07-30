@@ -50,6 +50,24 @@ namespace StoryFlowSaveFailureTestHelpers
 		FJsonSerializer::Deserialize(Reader, JsonObject);
 		return JsonObject;
 	}
+
+	TSharedPtr<FJsonObject> MinimalScriptJsonV2()
+	{
+		const FString Json = TEXT(R"JSON(
+		{
+			"startNode": "0",
+			"nodes": {
+				"0": { "type": "start", "id": "0" },
+				"1": { "type": "end", "id": "1" }
+			}
+		}
+		)JSON");
+
+		TSharedPtr<FJsonObject> JsonObject;
+		TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Json);
+		FJsonSerializer::Deserialize(Reader, JsonObject);
+		return JsonObject;
+	}
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowImportSaveFailureNonFatalTest,
@@ -114,7 +132,9 @@ bool FStoryFlowImportSaveFailureNonFatalTest::RunTest(const FString& Parameters)
 
 	// Re-import over the read-only file. Unfixed, this never returns: the
 	// engine routes the save failure to GError and the process dies.
-	UStoryFlowScriptAsset* Reimported = UStoryFlowImporter::ImportScriptFromJson(JsonObject, TEXT("readonly/victim"), TestRoot);
+	// Changed source so the save is actually attempted (an unchanged source
+	// would be skipped by the unchanged-import optimization).
+	UStoryFlowScriptAsset* Reimported = UStoryFlowImporter::ImportScriptFromJson(MinimalScriptJsonV2(), TEXT("readonly/victim"), TestRoot);
 	TestNotNull(TEXT("import survives a failed save and still returns the asset"), Reimported);
 
 	// Cleanup

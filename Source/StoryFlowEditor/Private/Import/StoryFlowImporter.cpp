@@ -8,8 +8,11 @@
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
 #include "Misc/Crc.h"
+#include "Misc/SecureHash.h"
+#include "Policies/CondensedJsonPrintPolicy.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "UObject/SavePackage.h"
 #include "AssetToolsModule.h"
@@ -62,6 +65,51 @@ namespace
 			}
 		}
 		return bSaved;
+	}
+
+	/** Bump when import parsing or asset population changes, so assets written
+	    by older plugin versions re-save once even if their source is unchanged. */
+	const TCHAR* GImportHashSchemaVersion = TEXT("1");
+
+	FString SerializeJsonCondensed(const TSharedPtr<FJsonObject>& JsonObject)
+	{
+		FString Out;
+		TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer =
+			TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Out);
+		FJsonSerializer::Serialize(JsonObject.ToSharedRef(), Writer);
+		Writer->Close();
+		return Out;
+	}
+
+	/** UTF-8 MD5 over the schema version and all parts. UTF-8 (not ANSI) so
+	    non-Latin dialogue text hashes losslessly. */
+	FString HashImportSource(const TArray<FString>& Parts)
+	{
+		FMD5 Md5;
+		auto Feed = [&Md5](const FString& Value)
+		{
+			FTCHARToUTF8 Utf8(*Value);
+			Md5.Update(reinterpret_cast<const uint8*>(Utf8.Get()), Utf8.Length());
+			const uint8 Separator = 0;
+			Md5.Update(&Separator, 1);
+		};
+		Feed(GImportHashSchemaVersion);
+		for (const FString& Part : Parts)
+		{
+			Feed(Part);
+		}
+		uint8 Digest[16];
+		Md5.Final(Digest);
+		return BytesToHex(Digest, 16);
+	}
+
+	/** True when the package's .uasset exists on disk (skip-save requires it:
+	    a deleted file must be rewritten even if the hash matches). */
+	bool PackageFileExists(UPackage* Package)
+	{
+		FString Filename;
+		return FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), Filename, FPackageName::GetAssetPackageExtension())
+			&& FPaths::FileExists(Filename);
 	}
 
 	/** Map an exported type string to EStoryFlowVariableType. Returns None for unknown strings. */
@@ -379,6 +427,17 @@ UStoryFlowScriptAsset* UStoryFlowImporter::ImportScriptFromJson(const TSharedPtr
 		return nullptr;
 	}
 
+	// Skip the disk write when this exact source was already imported and
+	// saved. CreateAssetInternal marked the reused package dirty, so clear
+	// that; the loaded asset already holds identical data.
+	const FString SourceHash = HashImportSource({ SerializeJsonCondensed(JsonObject), ScriptPath });
+	if (ScriptAsset->ImportedSourceHash == SourceHash && PackageFileExists(ScriptAsset->GetOutermost()))
+	{
+		ScriptAsset->GetOutermost()->SetDirtyFlag(false);
+		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Script '%s' unchanged since last import, skipping save"), *ScriptPath);
+		return ScriptAsset;
+	}
+
 	// Clear all containers for in-place update
 	ScriptAsset->Nodes.Empty();
 	ScriptAsset->Connections.Empty();
@@ -459,8 +518,14 @@ UStoryFlowScriptAsset* UStoryFlowImporter::ImportScriptFromJson(const TSharedPtr
 	// Mark the object as needing save
 	ScriptAsset->MarkPackageDirty();
 
-	// Save the script asset
+	// Save the script asset. Record the hash only for a successful save so a
+	// failed save (read-only file, PIE deferral) retries on the next sync.
+	ScriptAsset->ImportedSourceHash = SourceHash;
 	bool bSaved = SavePackageSafe(ScriptAsset->GetOutermost(), ScriptAsset);
+	if (!bSaved)
+	{
+		ScriptAsset->ImportedSourceHash.Empty();
+	}
 
 	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Script save result: %s"), bSaved ? TEXT("SUCCESS") : TEXT("DEFERRED/FAILED"));
 	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Imported script %s with %d nodes"), *ScriptPath, ScriptAsset->Nodes.Num());
