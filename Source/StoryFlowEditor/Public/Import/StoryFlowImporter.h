@@ -59,9 +59,17 @@ public:
 	 * @param bOutSkippedUnchanged Set to true when the source was unchanged since the last
 	 *        successful import, so nothing was re-parsed and nothing was written to disk.
 	 *        Callers that would otherwise follow up with their own save can then skip it.
+	 * @param bDeferSave When true, a re-imported script is parsed and stamped with its
+	 *        import hash but NOT saved; the package is left dirty and the caller owns the
+	 *        single save. For callers that populate more state afterwards (resolved media
+	 *        references), this keeps hash and payload in one write, so the on-disk hash can
+	 *        never claim data the file does not contain. The contract that comes with it:
+	 *        the hash only reaches disk if the caller's save succeeds, and the caller MUST
+	 *        clear ImportedSourceHash when its save fails, or the next sync would skip a
+	 *        script that was never written. Has no effect on the unchanged-skip path.
 	 * @return The imported script asset, or nullptr on failure
 	 */
-	static UStoryFlowScriptAsset* ImportScriptFromJson(const TSharedPtr<FJsonObject>& JsonObject, const FString& ScriptPath, const FString& ContentPath, bool* bOutSkippedUnchanged = nullptr);
+	static UStoryFlowScriptAsset* ImportScriptFromJson(const TSharedPtr<FJsonObject>& JsonObject, const FString& ScriptPath, const FString& ContentPath, bool* bOutSkippedUnchanged = nullptr, bool bDeferSave = false);
 
 private:
 	// === Parsing Helpers ===

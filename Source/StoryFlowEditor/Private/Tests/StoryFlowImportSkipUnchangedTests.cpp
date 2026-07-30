@@ -4,9 +4,11 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "Data/StoryFlowCharacterAsset.h"
 #include "Data/StoryFlowProjectAsset.h"
 #include "Data/StoryFlowScriptAsset.h"
 #include "Import/StoryFlowImporter.h"
+#include "StoryFlowRuntime.h"
 #include "EditorAssetLibrary.h"
 #include "HAL/FileManager.h"
 #include "HAL/PlatformFileManager.h"
@@ -184,16 +186,28 @@ namespace StoryFlowSkipUnchangedTestHelpers
 		return FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Temp/StoryFlowSkipProjectFixture"));
 	}
 
-	void WriteProjectFixture(const FString& HeroName)
+	/** The character path the fixture declares, as the importer keys it. */
+	FString FixtureCharacterKey()
+	{
+		return NormalizeCharacterPath(TEXT("chars/hero.sfc"));
+	}
+
+	/** Write the three-file fixture. bScriptEndNode adds a node to main.json so
+	    the script's source hash changes without touching any other input.
+	    Returns false if any write failed, so callers can fail fast. */
+	bool WriteProjectFixture(const FString& HeroName, bool bScriptEndNode = false)
 	{
 		const FString Dir = ProjectFixtureDir();
-		IFileManager::Get().MakeDirectory(*Dir, /*Tree*/ true); // SaveStringToFile does not create directories
-		FFileHelper::SaveStringToFile(TEXT(R"JSON({"version":"1.0","apiVersion":"1","startupScript":"main"})JSON"),
+		IFileManager::Get().MakeDirectory(*Dir, /*Tree*/ true);
+		const bool bProjectWritten = FFileHelper::SaveStringToFile(TEXT(R"JSON({"version":"1.0","apiVersion":"1","startupScript":"main"})JSON"),
 			*FPaths::Combine(Dir, TEXT("project.json")));
-		FFileHelper::SaveStringToFile(FString::Printf(TEXT(R"JSON({"characters":{"chars/hero.sfc":{"name":"%s"}}})JSON"), *HeroName),
+		const bool bCharactersWritten = FFileHelper::SaveStringToFile(FString::Printf(TEXT(R"JSON({"characters":{"chars/hero.sfc":{"name":"%s"}}})JSON"), *HeroName),
 			*FPaths::Combine(Dir, TEXT("characters.json")));
-		FFileHelper::SaveStringToFile(TEXT(R"JSON({"startNode":"0","nodes":{"0":{"type":"start","id":"0"}}})JSON"),
-			*FPaths::Combine(Dir, TEXT("main.json")));
+		const FString ScriptJson = bScriptEndNode
+			? TEXT(R"JSON({"startNode":"0","nodes":{"0":{"type":"start","id":"0"},"1":{"type":"end","id":"1"}}})JSON")
+			: TEXT(R"JSON({"startNode":"0","nodes":{"0":{"type":"start","id":"0"}}})JSON");
+		const bool bScriptWritten = FFileHelper::SaveStringToFile(ScriptJson, *FPaths::Combine(Dir, TEXT("main.json")));
+		return bProjectWritten && bCharactersWritten && bScriptWritten;
 	}
 
 	/** Set or clear read-only on every .uasset under the test root's disk folder. */
@@ -222,17 +236,24 @@ bool FStoryFlowImportSkipUnchangedProjectTest::RunTest(const FString& Parameters
 	SetTestContentReadOnly(ProjectTestRoot, false);
 	UEditorAssetLibrary::DeleteDirectory(ProjectTestRoot);
 
-	WriteProjectFixture(TEXT("Hero"));
+	if (!TestTrue(TEXT("fixture written"), WriteProjectFixture(TEXT("Hero"))))
+	{
+		return false;
+	}
 
-	// Exactly two save attempts against read-only files are expected for the
-	// whole test: the changed character asset and the project asset (whose
-	// hash covers characters.json). The unchanged full re-import contributes
-	// zero, and the script asset contributes zero on both re-imports (its
-	// JSON never changes, so both its own save and the project loop's
-	// resolved-media re-save must be skipped).
+	// Three save attempts against read-only files are expected for the whole
+	// test, one per phase that changes something:
+	//   - the unchanged full re-import: zero (every asset skips)
+	//   - the character rename: two, the character asset and the project asset
+	//     (whose hash covers characters.json); the script still skips
+	//   - the script content change: exactly one, the script's SINGLE save.
+	//     Two would mean the parse save and the resolved-media save are still
+	//     separate, which is the split-save hazard. The project asset must skip
+	//     here: script content is not a project hash input and the payload
+	//     membership it does hash is unchanged.
 	AddExpectedError(TEXT("it is read only"), EAutomationExpectedErrorFlags::Contains, 0);
 	AddExpectedError(TEXT("Error saving"), EAutomationExpectedErrorFlags::Contains, 0);
-	AddExpectedError(TEXT("Clear the read-only flag"), EAutomationExpectedErrorFlags::Contains, 2);
+	AddExpectedError(TEXT("Clear the read-only flag"), EAutomationExpectedErrorFlags::Contains, 3);
 
 	UStoryFlowProjectAsset* First = UStoryFlowImporter::ImportProject(ProjectFixtureDir(), ProjectTestRoot);
 	if (!TestNotNull(TEXT("initial project import succeeds"), First))
@@ -249,13 +270,57 @@ bool FStoryFlowImportSkipUnchangedProjectTest::RunTest(const FString& Parameters
 		TestFalse(TEXT("unchanged re-import leaves the project package dirty"), Unchanged->GetOutermost()->IsDirty());
 		TestEqual(TEXT("unchanged re-import still lists the script"), Unchanged->Scripts.Num(), 1);
 		TestEqual(TEXT("unchanged re-import still lists the character"), Unchanged->Characters.Num(), 1);
+
+		// A skipped character must be handed back populated and clean, not
+		// emptied by the in-place-update clears the skip jumps over.
+		UStoryFlowCharacterAsset* const* SkippedChar = Unchanged->Characters.Find(FixtureCharacterKey());
+		if (TestNotNull(TEXT("unchanged re-import keys the character by its normalized path"), SkippedChar ? *SkippedChar : nullptr))
+		{
+			TestEqual(TEXT("skipped character keeps its name"), (*SkippedChar)->Name, TEXT("Hero"));
+			TestFalse(TEXT("skipped character leaves its package dirty"), (*SkippedChar)->GetOutermost()->IsDirty());
+		}
 	}
 
 	// Change only the character: character asset + project asset save (fail
 	// read-only), script asset still skips
-	WriteProjectFixture(TEXT("Hero Renamed"));
+	if (!TestTrue(TEXT("renamed fixture written"), WriteProjectFixture(TEXT("Hero Renamed"))))
+	{
+		return false;
+	}
 	UStoryFlowProjectAsset* Changed = UStoryFlowImporter::ImportProject(ProjectFixtureDir(), ProjectTestRoot);
-	TestNotNull(TEXT("changed re-import survives the failed saves"), Changed);
+	if (TestNotNull(TEXT("changed re-import survives the failed saves"), Changed))
+	{
+		UStoryFlowCharacterAsset* const* RenamedChar = Changed->Characters.Find(FixtureCharacterKey());
+		if (TestNotNull(TEXT("changed re-import still keys the character"), RenamedChar ? *RenamedChar : nullptr))
+		{
+			TestEqual(TEXT("changed character was really re-parsed"), (*RenamedChar)->Name, TEXT("Hero Renamed"));
+		}
+	}
+
+	// Settle the failed saves before the next phase: those saves cleared their
+	// hashes on purpose, so they would retry and pollute the count of the
+	// script-only phase below. With the files writable they succeed and every
+	// hash is recorded again; successful saves log no read-only error.
+	SetTestContentReadOnly(ProjectTestRoot, false);
+	TestNotNull(TEXT("settling re-import over writable files succeeds"),
+		UStoryFlowImporter::ImportProject(ProjectFixtureDir(), ProjectTestRoot));
+	SetTestContentReadOnly(ProjectTestRoot, true);
+
+	// Change only the script's content: exactly one save attempt, the script's.
+	if (!TestTrue(TEXT("script-changed fixture written"), WriteProjectFixture(TEXT("Hero Renamed"), /*bScriptEndNode*/ true)))
+	{
+		return false;
+	}
+	UStoryFlowProjectAsset* ScriptChanged = UStoryFlowImporter::ImportProject(ProjectFixtureDir(), ProjectTestRoot);
+	if (TestNotNull(TEXT("script-changed re-import survives the failed save"), ScriptChanged))
+	{
+		TestFalse(TEXT("script-changed re-import leaves the project package dirty"), ScriptChanged->GetOutermost()->IsDirty());
+		UStoryFlowScriptAsset* const* ReparsedScript = ScriptChanged->Scripts.Find(TEXT("main"));
+		if (TestNotNull(TEXT("script-changed re-import still keys the script"), ReparsedScript ? *ReparsedScript : nullptr))
+		{
+			TestEqual(TEXT("changed script was really re-parsed"), (*ReparsedScript)->Nodes.Num(), 2);
+		}
+	}
 
 	// Cleanup
 	SetTestContentReadOnly(ProjectTestRoot, false);

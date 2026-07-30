@@ -199,8 +199,10 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 		return nullptr;
 	}
 
-	// Inputs that shape the project asset itself; compared at the end to skip
-	// a no-op save. Script assets and character assets hash separately.
+	// Inputs that shape the project asset itself, plus (appended after the
+	// scripts loop) the membership of the maps it actually ends up holding;
+	// compared at the end to skip a no-op save. Script assets and character
+	// assets hash separately.
 	TArray<FString> ProjectHashParts;
 	ProjectHashParts.Add(SerializeJsonCondensed(JsonObject.ToSharedRef()));
 
@@ -331,9 +333,14 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 						continue;
 					}
 
-					// Skip unchanged characters (same pattern as scripts)
+					// Skip unchanged characters (same pattern as scripts), but only
+					// when the portrait actually resolved: a character whose image
+					// failed to import on an earlier sync must not be certified
+					// unchanged, or the skip (which also clears the dirty flag)
+					// would make that gap permanent.
 					const FString CharSourceHash = HashImportSource({ SerializeJsonCondensed(CharObject.ToSharedRef()), NormalizedPath });
-					if (CharAsset->ImportedSourceHash == CharSourceHash && PackageFileExists(CharAsset->GetOutermost()))
+					if (CharAsset->ImportedSourceHash == CharSourceHash && PackageFileExists(CharAsset->GetOutermost())
+						&& (CharAsset->Image.IsEmpty() || CharAsset->ResolvedAssets.Contains(CharAsset->Image)))
 					{
 						CharAsset->GetOutermost()->SetDirtyFlag(false);
 						ProjectAsset->Characters.Add(NormalizedPath, CharAsset);
@@ -404,7 +411,6 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 		FString RelativePath = ScriptFile;
 		FPaths::MakePathRelativeTo(RelativePath, *(BuildDirectory + TEXT("/")));
 		RelativePath = NormalizeScriptPath(RelativePath);
-		ProjectHashParts.Add(RelativePath);
 
 		// Import script
 		TSharedPtr<FJsonObject> ScriptJson = LoadJsonFile(ScriptFile);
@@ -412,21 +418,19 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 		{
 			FString ScriptContentPath = FPaths::Combine(ContentPath, TEXT("Data"));
 			bool bScriptSkippedUnchanged = false;
-			UStoryFlowScriptAsset* ScriptAsset = ImportScriptFromJson(ScriptJson, RelativePath, ScriptContentPath, &bScriptSkippedUnchanged);
+			UStoryFlowScriptAsset* ScriptAsset = ImportScriptFromJson(ScriptJson, RelativePath, ScriptContentPath, &bScriptSkippedUnchanged, /*bDeferSave=*/ true);
 			if (ScriptAsset)
 			{
 				// The script's asset list derives from its JSON, and media import
 				// is idempotent, so an unchanged script's ResolvedAssets are
 				// already correct on the loaded asset: skip the media pass and
-				// the re-save that exists only to persist resolved references.
+				// the save that exists only to persist resolved references.
 				if (!bScriptSkippedUnchanged)
 				{
-					// Import media assets referenced by this script
+					// Import media assets referenced by this script, then write
+					// nodes, resolved references and the import hash in a single
+					// save so the on-disk hash can never outrun the payload.
 					ImportMediaAssets(BuildDirectory, ContentPath, ScriptAsset->Assets, ScriptAsset->ResolvedAssets);
-
-					// Re-save script with resolved asset references; this second
-					// save is what persists ResolvedAssets, so a failure must
-					// clear the hash for the same retry semantics as the first
 					if (!SavePackageSafe(ScriptAsset->GetOutermost(), ScriptAsset))
 					{
 						ScriptAsset->ImportedSourceHash.Empty();
@@ -438,7 +442,24 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 		}
 	}
 
-	ProjectHashParts.Sort();
+	// Hash the payload's actual membership, not just the source inputs: media
+	// resolution and script parsing can partially fail (PIE, missing files),
+	// and a skip must never certify a payload gap as up to date. The per-kind
+	// prefixes keep a script path from colliding with an asset key.
+	{
+		TArray<FString> ScriptKeys;   ProjectAsset->Scripts.GetKeys(ScriptKeys);
+		TArray<FString> CharKeys;     ProjectAsset->Characters.GetKeys(CharKeys);
+		TArray<FString> AssetKeys;    ProjectAsset->ResolvedAssets.GetKeys(AssetKeys);
+		for (const FString& Key : ScriptKeys) { ProjectHashParts.Add(TEXT("script:") + Key); }
+		for (const FString& Key : CharKeys)   { ProjectHashParts.Add(TEXT("char:") + Key); }
+		for (const FString& Key : AssetKeys)  { ProjectHashParts.Add(TEXT("asset:") + Key); }
+	}
+
+	// Sort so the hash does not depend on file-enumeration or map order.
+	// Explicitly case-sensitive: FString's operator< ignores case and
+	// TArray::Sort is unstable, so parts differing only in case could otherwise
+	// come out in either order and change the hash between runs.
+	ProjectHashParts.Sort([](const FString& A, const FString& B) { return A.Compare(B, ESearchCase::CaseSensitive) < 0; });
 	const FString ProjectSourceHash = HashImportSource(ProjectHashParts);
 	if (ProjectAsset->ImportedSourceHash == ProjectSourceHash && PackageFileExists(ProjectAsset->GetOutermost()))
 	{
@@ -459,7 +480,7 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 	return ProjectAsset;
 }
 
-UStoryFlowScriptAsset* UStoryFlowImporter::ImportScriptFromJson(const TSharedPtr<FJsonObject>& JsonObject, const FString& ScriptPath, const FString& ContentPath, bool* bOutSkippedUnchanged)
+UStoryFlowScriptAsset* UStoryFlowImporter::ImportScriptFromJson(const TSharedPtr<FJsonObject>& JsonObject, const FString& ScriptPath, const FString& ContentPath, bool* bOutSkippedUnchanged, bool bDeferSave)
 {
 	if (bOutSkippedUnchanged)
 	{
@@ -595,9 +616,19 @@ UStoryFlowScriptAsset* UStoryFlowImporter::ImportScriptFromJson(const TSharedPtr
 	// Mark the object as needing save
 	ScriptAsset->MarkPackageDirty();
 
-	// Save the script asset. Record the hash only for a successful save so a
-	// failed save (read-only file, PIE deferral) retries on the next sync.
+	// Record the hash only for a successful save so a failed save (read-only
+	// file, PIE deferral) retries on the next sync. In defer mode the caller
+	// saves instead, and owns clearing the hash if its save fails — the package
+	// is left dirty for it.
 	ScriptAsset->ImportedSourceHash = SourceHash;
+	if (bDeferSave)
+	{
+		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Deferring save of script %s to the caller"), *ScriptPath);
+		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Imported script %s with %d nodes"), *ScriptPath, ScriptAsset->Nodes.Num());
+		return ScriptAsset;
+	}
+
+	// Save the script asset
 	bool bSaved = SavePackageSafe(ScriptAsset->GetOutermost(), ScriptAsset);
 	if (!bSaved)
 	{
