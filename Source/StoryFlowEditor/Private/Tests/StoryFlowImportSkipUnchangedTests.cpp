@@ -7,6 +7,7 @@
 #include "Data/StoryFlowScriptAsset.h"
 #include "Import/StoryFlowImporter.h"
 #include "EditorAssetLibrary.h"
+#include "HAL/FileManager.h"
 #include "HAL/PlatformFileManager.h"
 #include "GenericPlatform/GenericPlatformFile.h"
 #include "Misc/PackageName.h"
@@ -24,6 +25,9 @@
  * with the target file read-only, any save attempt logs the plugin's
  * "Clear the read-only flag" error exactly once. So over the whole test the
  * count of that error equals the number of save attempts.
+ *
+ * Run via: Session Frontend > Automation > "StoryFlow.Import", or
+ *   UnrealEditor-Cmd.exe StoryFlow.uproject -ExecCmds="Automation RunTests StoryFlow.Import.SkipUnchanged" -TestExit="Automation Test Queue Empty" -unattended -nullrhi
  */
 
 namespace StoryFlowSkipUnchangedTestHelpers
@@ -84,6 +88,11 @@ bool FStoryFlowImportSkipUnchangedScriptTest::RunTest(const FString& Parameters)
 		}
 	}
 
+	// Start from no asset at all: a subject left over from a previous run would
+	// already carry a matching hash, so the first import below would skip and
+	// pass its "wrote the .uasset" check on the stale file.
+	UEditorAssetLibrary::DeleteDirectory(TestRoot);
+
 	TSharedPtr<FJsonObject> V1 = ScriptV1();
 	TSharedPtr<FJsonObject> V2 = ScriptV2();
 	if (!TestTrue(TEXT("Fixture JSON parses"), V1.IsValid() && V2.IsValid()))
@@ -118,11 +127,16 @@ bool FStoryFlowImportSkipUnchangedScriptTest::RunTest(const FString& Parameters)
 
 	PlatformFile.SetReadOnly(*PackageFileName, true);
 
-	// Unchanged re-import: no save attempt, package left clean
+	// Unchanged re-import: no save attempt, package left clean, and the asset
+	// handed back must be fully populated — a skip that short-circuits past the
+	// parse must not return an empty or stale asset.
 	UStoryFlowScriptAsset* Unchanged = UStoryFlowImporter::ImportScriptFromJson(V1, TEXT("skip/subject"), TestRoot);
 	if (TestNotNull(TEXT("unchanged re-import returns the asset"), Unchanged))
 	{
-		TestFalse(TEXT("unchanged re-import leaves the package clean"), Unchanged->GetOutermost()->IsDirty());
+		TestFalse(TEXT("unchanged re-import leaves the package dirty"), Unchanged->GetOutermost()->IsDirty());
+		TestEqual(TEXT("skipped asset keeps its nodes"), Unchanged->Nodes.Num(), 1);
+		TestEqual(TEXT("skipped asset keeps its start node"), Unchanged->StartNode, TEXT("0"));
+		TestEqual(TEXT("skipped asset keeps its script path"), Unchanged->ScriptPath, TEXT("skip/subject"));
 	}
 
 	// Changed source must attempt the save (fails: read-only) ...
@@ -134,8 +148,24 @@ bool FStoryFlowImportSkipUnchangedScriptTest::RunTest(const FString& Parameters)
 	UStoryFlowScriptAsset* Retry = UStoryFlowImporter::ImportScriptFromJson(V2, TEXT("skip/subject"), TestRoot);
 	TestNotNull(TEXT("retry import survives the failed save"), Retry);
 
-	// Cleanup
 	PlatformFile.SetReadOnly(*PackageFileName, false);
+
+	// A matching hash is not enough on its own: with the file writable, import
+	// V2 so the hash is recorded, then delete the .uasset behind the plugin's
+	// back. The next import must notice the missing file and rewrite it.
+	// Both of these saves succeed, so the read-only counts above are unaffected.
+	UStoryFlowScriptAsset* Recorded = UStoryFlowImporter::ImportScriptFromJson(V2, TEXT("skip/subject"), TestRoot);
+	if (TestNotNull(TEXT("import over a writable file succeeds"), Recorded))
+	{
+		if (TestTrue(TEXT("the .uasset can be deleted"), IFileManager::Get().Delete(*PackageFileName)))
+		{
+			UStoryFlowScriptAsset* Rewritten = UStoryFlowImporter::ImportScriptFromJson(V2, TEXT("skip/subject"), TestRoot);
+			TestNotNull(TEXT("import after the file was deleted returns the asset"), Rewritten);
+			TestTrue(TEXT("import after the file was deleted rewrites the .uasset"), FPaths::FileExists(PackageFileName));
+		}
+	}
+
+	// Cleanup
 	UEditorAssetLibrary::DeleteDirectory(TestRoot);
 	return true;
 }

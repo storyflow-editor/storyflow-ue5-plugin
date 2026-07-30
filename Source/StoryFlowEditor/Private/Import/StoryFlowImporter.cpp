@@ -27,6 +27,13 @@
 
 namespace
 {
+	/** Absolute-or-relative .uasset path a package saves to. False when the
+	    package name is outside every mounted content root. */
+	bool TryGetPackageFilename(const UPackage* Package, FString& OutFilename)
+	{
+		return FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), OutFilename, FPackageName::GetAssetPackageExtension());
+	}
+
 	/** Save package if not in PIE. Returns true if saved, false if deferred. */
 	bool SavePackageSafe(UPackage* Package, UObject* Asset)
 	{
@@ -39,7 +46,7 @@ namespace
 
 		Package->FullyLoad();
 		FString PackageFileName;
-		if (!FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), PackageFileName, FPackageName::GetAssetPackageExtension()))
+		if (!TryGetPackageFilename(Package, PackageFileName))
 		{
 			UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Cannot save '%s': package name cannot be mapped to a file path"), *Package->GetName());
 			return false;
@@ -69,20 +76,22 @@ namespace
 
 	/** Bump when import parsing or asset population changes, so assets written
 	    by older plugin versions re-save once even if their source is unchanged. */
-	const TCHAR* GImportHashSchemaVersion = TEXT("1");
+	constexpr const TCHAR* ImportHashSchemaVersion = TEXT("1");
 
-	FString SerializeJsonCondensed(const TSharedPtr<FJsonObject>& JsonObject)
+	FString SerializeJsonCondensed(const TSharedRef<FJsonObject>& JsonObject)
 	{
 		FString Out;
 		TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer =
 			TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Out);
-		FJsonSerializer::Serialize(JsonObject.ToSharedRef(), Writer);
+		FJsonSerializer::Serialize(JsonObject, Writer);
 		Writer->Close();
 		return Out;
 	}
 
 	/** UTF-8 MD5 over the schema version and all parts. UTF-8 (not ANSI) so
-	    non-Latin dialogue text hashes losslessly. */
+	    non-Latin dialogue text hashes losslessly. The NUL after each part keeps
+	    part boundaries unambiguous: without it {"ab","c"} and {"a","bc"} would
+	    hash alike. */
 	FString HashImportSource(const TArray<FString>& Parts)
 	{
 		FMD5 Md5;
@@ -93,7 +102,7 @@ namespace
 			const uint8 Separator = 0;
 			Md5.Update(&Separator, 1);
 		};
-		Feed(GImportHashSchemaVersion);
+		Feed(ImportHashSchemaVersion);
 		for (const FString& Part : Parts)
 		{
 			Feed(Part);
@@ -105,11 +114,10 @@ namespace
 
 	/** True when the package's .uasset exists on disk (skip-save requires it:
 	    a deleted file must be rewritten even if the hash matches). */
-	bool PackageFileExists(UPackage* Package)
+	bool PackageFileExists(const UPackage* Package)
 	{
 		FString Filename;
-		return FPackageName::TryConvertLongPackageNameToFilename(Package->GetName(), Filename, FPackageName::GetAssetPackageExtension())
-			&& FPaths::FileExists(Filename);
+		return TryGetPackageFilename(Package, Filename) && FPaths::FileExists(Filename);
 	}
 
 	/** Map an exported type string to EStoryFlowVariableType. Returns None for unknown strings. */
@@ -430,9 +438,14 @@ UStoryFlowScriptAsset* UStoryFlowImporter::ImportScriptFromJson(const TSharedPtr
 	// Skip the disk write when this exact source was already imported and
 	// saved. CreateAssetInternal marked the reused package dirty, so clear
 	// that; the loaded asset already holds identical data.
-	const FString SourceHash = HashImportSource({ SerializeJsonCondensed(JsonObject), ScriptPath });
+	// Connection indices (and the variant payloads PostLoad unpacks) are
+	// transient, not UPROPERTYs, so they exist only because PostLoad or a full
+	// import built them. Rebuild the indices here so the skip path returns an
+	// equally usable asset whichever route produced the in-memory object.
+	const FString SourceHash = HashImportSource({ SerializeJsonCondensed(JsonObject.ToSharedRef()), ScriptPath });
 	if (ScriptAsset->ImportedSourceHash == SourceHash && PackageFileExists(ScriptAsset->GetOutermost()))
 	{
+		ScriptAsset->BuildConnectionIndices();
 		ScriptAsset->GetOutermost()->SetDirtyFlag(false);
 		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Script '%s' unchanged since last import, skipping save"), *ScriptPath);
 		return ScriptAsset;
