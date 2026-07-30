@@ -117,42 +117,72 @@ bool FStoryFlowSourceControlCheckoutFailureTest::RunTest(const FString& Paramete
 	// Clean slate
 	UEditorAssetLibrary::DeleteDirectory(TestRoot);
 
+	// One scope covering every import below, so none of them can reach the real
+	// provider on a machine with revision control enabled (that would check out
+	// or p4-add these throwaway test assets). The refusal is toggled through
+	// bRefuseCheckout rather than by installing a second FScopedOverrides:
+	// nesting would not work, because leaving the inner scope restores an unset
+	// optional and so wipes the outer one.
+	bool bRefuseCheckout = false;
+	int32 MarkForAddCalls = 0;
+
+	StoryFlowSourceControl::FTestOverrides Overrides;
+	Overrides.EnsureWritable = [&bRefuseCheckout](const FString&, FString& OutError)
+	{
+		if (bRefuseCheckout)
+		{
+			OutError = TEXT("checked out by TestUser");
+			return false;
+		}
+		return true;
+	};
+	Overrides.MarkForAdd = [&MarkForAddCalls](const FString&, FString&) { ++MarkForAddCalls; return true; };
+	FScopedOverrides Scope(Overrides);
+
 	// Import normally first so the file exists on disk
 	UStoryFlowScriptAsset* First = UStoryFlowImporter::ImportScriptFromJson(ScriptV1(), TEXT("sc/lockedfile"), TestRoot);
 	if (!TestNotNull(TEXT("initial import succeeds"), First))
 	{
 		return false;
 	}
+	TestEqual(TEXT("creating the file marks it for add once"), MarkForAddCalls, 1);
+
 	FString PackageFileName;
 	if (!TestTrue(TEXT("package maps to a filename"),
 		FPackageName::TryConvertLongPackageNameToFilename(First->GetOutermost()->GetName(), PackageFileName, FPackageName::GetAssetPackageExtension())))
 	{
 		return false;
 	}
+	// Read the baseline explicitly, so a byte comparison below cannot pass by
+	// comparing two empty arrays from failed reads.
 	TArray<uint8> BytesBefore;
-	FFileHelper::LoadFileToArray(BytesBefore, *PackageFileName);
+	if (!TestTrue(TEXT("saved package reads back from disk"), FFileHelper::LoadFileToArray(BytesBefore, *PackageFileName)))
+	{
+		return false;
+	}
+	if (!TestTrue(TEXT("saved package is not empty"), BytesBefore.Num() > 0))
+	{
+		return false;
+	}
 
 	// A refused checkout must be reported once, skip the write and keep going
 	AddExpectedError(TEXT("checked out by TestUser"), EAutomationExpectedErrorFlags::Contains, 1);
-	{
-		StoryFlowSourceControl::FTestOverrides Overrides;
-		Overrides.EnsureWritable = [](const FString&, FString& OutError) { OutError = TEXT("checked out by TestUser"); return false; };
-		FScopedOverrides Scope(Overrides);
-
-		UStoryFlowScriptAsset* Refused = UStoryFlowImporter::ImportScriptFromJson(ScriptV2(), TEXT("sc/lockedfile"), TestRoot);
-		TestNotNull(TEXT("import survives a refused checkout"), Refused);
-
-		TArray<uint8> BytesAfter;
-		FFileHelper::LoadFileToArray(BytesAfter, *PackageFileName);
-		TestTrue(TEXT("refused checkout leaves the file untouched"), BytesBefore == BytesAfter);
-	}
+	bRefuseCheckout = true;
+	UStoryFlowScriptAsset* Refused = UStoryFlowImporter::ImportScriptFromJson(ScriptV2(), TEXT("sc/lockedfile"), TestRoot);
+	TestNotNull(TEXT("import survives a refused checkout"), Refused);
+	TArray<uint8> BytesAfter;
+	TestTrue(TEXT("package still reads back after a refused checkout"), FFileHelper::LoadFileToArray(BytesAfter, *PackageFileName));
+	TestTrue(TEXT("refused checkout leaves the file untouched"), BytesBefore == BytesAfter);
+	TestEqual(TEXT("refused checkout does not mark for add"), MarkForAddCalls, 1);
 
 	// With the refusal gone, the same source must save (failed save cleared the hash)
+	bRefuseCheckout = false;
 	UStoryFlowScriptAsset* Retried = UStoryFlowImporter::ImportScriptFromJson(ScriptV2(), TEXT("sc/lockedfile"), TestRoot);
 	TestNotNull(TEXT("retry import succeeds"), Retried);
 	TArray<uint8> BytesRetried;
-	FFileHelper::LoadFileToArray(BytesRetried, *PackageFileName);
+	TestTrue(TEXT("package reads back after the retry"), FFileHelper::LoadFileToArray(BytesRetried, *PackageFileName));
 	TestTrue(TEXT("retry actually rewrote the file"), BytesBefore != BytesRetried);
+	TestEqual(TEXT("rewriting an existing file does not mark for add"), MarkForAddCalls, 1);
 
 	UEditorAssetLibrary::DeleteDirectory(TestRoot);
 	return true;
