@@ -4,6 +4,15 @@ on:
   release:
     types: [published]
 
+env:
+  # Platforms baked into every zip. Set to "Win64+Linux" ONLY after the runner
+  # has (a) Linux Target Support installed for every engine version below and
+  # (b) Epic's Linux cross-compile toolchain installed (LINUX_MULTIARCH_ROOT
+  # set machine-wide). The precheck step fails the release loudly if Linux is
+  # requested without them - silently shipping Win64-only zips would recreate
+  # the "Linux download does not work" support case through a different door.
+  TARGET_PLATFORMS: Win64
+
 jobs:
   build:
     runs-on: self-hosted
@@ -63,6 +72,28 @@ jobs:
             '</Configuration>'
           )
 
+      - name: Verify Linux cross-compile prerequisites
+        if: contains(env.TARGET_PLATFORMS, 'Linux')
+        shell: powershell
+        run: |
+          # Loud failure beats silently shipping zips without the promised
+          # Linux binaries. Different engine versions may require different
+          # toolchain releases; if that bites, override LINUX_MULTIARCH_ROOT
+          # per iteration in the build step's loop instead of machine-wide.
+          $failed = $false
+          $toolchain = [Environment]::GetEnvironmentVariable("LINUX_MULTIARCH_ROOT", "Machine")
+          if (-not $toolchain -or -not (Test-Path $toolchain)) {
+            Write-Host "::error::LINUX_MULTIARCH_ROOT is not set or missing on this runner. Install Epic's Linux cross-compile toolchain."
+            $failed = $true
+          }
+          foreach ($ue in @("5.3", "5.4", "5.5", "5.6", "5.7", "5.8")) {
+            if (!(Test-Path "C:\Program Files\Epic Games\UE_$ue\Engine\Binaries\Linux")) {
+              Write-Host "::error::UE $ue has no Linux Target Support installed (Epic launcher > engine options)."
+              $failed = $true
+            }
+          }
+          if ($failed) { exit 1 }
+
       - name: Build plugin for all UE versions
         shell: cmd
         run: |
@@ -71,9 +102,9 @@ jobs:
           set ENGINES=C:\Program Files\Epic Games
 
           for %%V in (5.3 5.4 5.5 5.6 5.7 5.8) do (
-            echo Building for UE %%V...
+            echo Building for UE %%V targeting %TARGET_PLATFORMS%...
             if exist "%OUTPUT%\StoryFlowPlugin_%%V" rmdir /s /q "%OUTPUT%\StoryFlowPlugin_%%V"
-            call "%ENGINES%\UE_%%V\Engine\Build\BatchFiles\RunUAT.bat" BuildPlugin -Plugin="%PLUGIN%" -Package="%OUTPUT%\StoryFlowPlugin_%%V" -TargetPlatforms=Win64 -Rocket
+            call "%ENGINES%\UE_%%V\Engine\Build\BatchFiles\RunUAT.bat" BuildPlugin -Plugin="%PLUGIN%" -Package="%OUTPUT%\StoryFlowPlugin_%%V" -TargetPlatforms=%TARGET_PLATFORMS% -Rocket
             if errorlevel 1 (
               echo [FAILED] UE %%V build failed!
               exit /b 1
@@ -102,9 +133,27 @@ jobs:
               $pkg = "BuildOutput\StoryFlowPlugin"
               if (Test-Path $pkg) { Remove-Item $pkg -Recurse -Force }
               Rename-Item $src "StoryFlowPlugin"
-              Compress-Archive -Path $pkg -DestinationPath $zip -Force
+              # tar.exe (bundled with Windows 10 1803+ / Server 2019+) writes forward-slash
+              # zip entries; PowerShell's Compress-Archive writes backslashes that break
+              # extraction on Linux/Mac. -C strips the BuildOutput/ prefix from the entries.
+              tar.exe -a -c -f $zip -C "BuildOutput" "StoryFlowPlugin"
+              if ($LASTEXITCODE -ne 0) { Write-Host "tar failed for UE $ue"; exit 1 }
               Rename-Item $pkg "StoryFlowPlugin_$ue"
-              Write-Host "Created $zip"
+              # Guard against separator regressions regardless of which tool
+              # made the archive: a single backslash entry breaks extraction
+              # on Linux/Mac (files get literal backslashes in their names and
+              # the .uplugin is never found).
+              $entries = tar.exe -t -f $zip
+              if ($LASTEXITCODE -ne 0) { Write-Host "Cannot list $zip"; exit 1 }
+              if ($entries | Where-Object { $_ -match '\\' }) {
+                Write-Host "::error::$zip contains backslash path entries; it would extract broken on Linux/Mac."
+                exit 1
+              }
+              if (-not ($entries -contains "StoryFlowPlugin/StoryFlowPlugin.uplugin")) {
+                Write-Host "::error::$zip is missing StoryFlowPlugin/StoryFlowPlugin.uplugin at the expected path."
+                exit 1
+              }
+              Write-Host "Created and verified $zip"
             } else {
               Write-Host "WARNING: $src not found, skipping"
               exit 1
@@ -130,6 +179,30 @@ jobs:
           foreach ($ue in @("5.3", "5.4", "5.5", "5.6", "5.7", "5.8")) {
             gh release upload ${{ github.ref_name }} "StoryFlow-Plugin-v$version-UE$ue.zip" --clobber
           }
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  verify-linux-extraction:
+    # A real Linux unzip of a real release asset: the test that was missing
+    # when backslash-entry zips shipped and failed to load for Linux users.
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Download one release zip and extract it the way a user would
+        run: |
+          gh release download ${{ github.ref_name }} \
+            --repo ${{ github.repository }} \
+            --pattern "*-UE5.3.zip" \
+            --dir .
+          ZIP=$(ls *-UE5.3.zip)
+          unzip -q "$ZIP" -d extracted
+          if [ ! -f "extracted/StoryFlowPlugin/StoryFlowPlugin.uplugin" ]; then
+            echo "::error::$ZIP did not extract to StoryFlowPlugin/StoryFlowPlugin.uplugin on Linux."
+            echo "Extracted tree:"
+            find extracted -maxdepth 3 | head -50
+            exit 1
+          fi
+          echo "OK: $ZIP extracts correctly on Linux."
         env:
           GH_TOKEN: ${{ github.token }}
 
