@@ -34,6 +34,7 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnScriptEnded, const FString&, Scri
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnError, const FString&, ErrorMessage);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnBackgroundImageChanged, const FString&, ImagePath);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnAudioPlayRequested, const FString&, AudioPath, bool, bLoop);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnDialogueWidgetCreated, UStoryFlowDialogueWidget*, Widget);
 
 /**
  * Main runtime component for executing StoryFlow dialogues
@@ -80,6 +81,23 @@ public:
 	/** Optional dialogue widget class to auto-create when dialogue starts and destroy when it ends */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow")
 	TSubclassOf<UStoryFlowDialogueWidget> DialogueWidgetClass;
+
+	/**
+	 * Who owns the auto-created dialogue widget once it exists.
+	 *
+	 * True (default): the component adds the widget to the viewport when dialogue
+	 * starts and removes it when dialogue ends.
+	 *
+	 * False: the component only creates and initializes the widget, then hands it
+	 * over via OnDialogueWidgetCreated. Placing it is yours (a HUD, a widget
+	 * stack, a 3D widget component) and so is destroying it: at dialogue end the
+	 * component drops its reference without touching the widget, and OnDialogueEnded
+	 * is your cue to tear it down. A dialogue that starts while an earlier widget
+	 * still exists likewise only drops the reference, never removing it, because
+	 * the old widget may still be animating out and is yours to finish.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|UI")
+	bool bAutoAddWidgetToViewport = true;
 
 	// ========================================================================
 	// Audio Settings
@@ -157,6 +175,15 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "StoryFlow|Events")
 	FOnAudioPlayRequested OnAudioPlayRequested;
 
+	/**
+	 * Called when the component has created and initialized the dialogue widget,
+	 * after it has been added to the viewport (or not, per bAutoAddWidgetToViewport),
+	 * so handlers see its final placement. With auto-add off, this is where you
+	 * put the widget wherever your UI keeps it.
+	 */
+	UPROPERTY(BlueprintAssignable, Category = "StoryFlow|Events")
+	FOnDialogueWidgetCreated OnDialogueWidgetCreated;
+
 	// ========================================================================
 	// Control Functions
 	// ========================================================================
@@ -224,6 +251,16 @@ public:
 	/** Get the global project (from subsystem) */
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")
 	UStoryFlowProjectAsset* GetProject() const;
+
+	/**
+	 * The dialogue widget this component created from DialogueWidgetClass, or null
+	 * when no dialogue is running (or no widget class is set).
+	 *
+	 * Valid from OnDialogueWidgetCreated until dialogue end. Every dialogue creates
+	 * a fresh widget, so do not cache the result across dialogues — ask again.
+	 */
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|UI")
+	UStoryFlowDialogueWidget* GetDialogueWidget() const;
 
 	// ========================================================================
 	// Variable Access (by display name)

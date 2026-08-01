@@ -32,6 +32,9 @@ public class StoryFlowEditor : ModuleRules
 				"WebSockets",
 				"Slate",
 				"SlateCore",
+				// Automation tests construct and drive dialogue widgets. StoryFlowRuntime
+				// depends on UMG publicly, but that propagates headers, not the link.
+				"UMG",
 				"EditorScriptingUtilities",
 				"ToolMenus",
 				"Projects",

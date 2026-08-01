@@ -118,10 +118,15 @@ void UStoryFlowComponent::StartDialogueWithScript(const FString& ScriptPath)
 	// Create dialogue widget if configured
 	if (DialogueWidgetClass)
 	{
-		// Clean up existing widget if any
+		// Clean up existing widget if any. When the game owns placement the old
+		// widget may still be animating out, so only let go of it — finishing it
+		// is the game's job, same as at dialogue end.
 		if (ActiveDialogueWidget)
 		{
-			ActiveDialogueWidget->RemoveFromParent();
+			if (bAutoAddWidgetToViewport)
+			{
+				ActiveDialogueWidget->RemoveFromParent();
+			}
 			ActiveDialogueWidget = nullptr;
 		}
 
@@ -133,7 +138,13 @@ void UStoryFlowComponent::StartDialogueWithScript(const FString& ScriptPath)
 			if (ActiveDialogueWidget)
 			{
 				ActiveDialogueWidget->InitializeWithComponent(this);
-				ActiveDialogueWidget->AddToViewport();
+				if (bAutoAddWidgetToViewport)
+				{
+					ActiveDialogueWidget->AddToViewport();
+				}
+				// Announce after the placement decision so handlers see where the
+				// widget ended up (and can place it themselves when it went nowhere)
+				OnDialogueWidgetCreated.Broadcast(ActiveDialogueWidget);
 			}
 		}
 	}
@@ -325,10 +336,20 @@ void UStoryFlowComponent::StopDialogue()
 	OnScriptEnded.Broadcast(CurrentScriptPath);
 	OnDialogueEnded.Broadcast();
 
-	// Destroy dialogue widget after broadcasting so it receives OnDialogueEnded
+	// Destroy dialogue widget after broadcasting so it receives OnDialogueEnded.
+	// This is the only teardown funnel — natural end, StopDialogue and EndPlay all
+	// arrive here — so it is also where component destruction lands. Removing the
+	// widget is right only when the component added it: with auto-add off it was
+	// never in the viewport, so there is nothing to leak there, and if the game
+	// parented it into its own UI, that tree is the game's to unwind. The
+	// OnDialogueEnded broadcast just above is the signal it does that on, and it
+	// fires even when the component is being destroyed.
 	if (ActiveDialogueWidget)
 	{
-		ActiveDialogueWidget->RemoveFromParent();
+		if (bAutoAddWidgetToViewport)
+		{
+			ActiveDialogueWidget->RemoveFromParent();
+		}
 		ActiveDialogueWidget = nullptr;
 	}
 }
@@ -409,6 +430,11 @@ UStoryFlowProjectAsset* UStoryFlowComponent::GetProject() const
 		return Subsystem->GetProject();
 	}
 	return nullptr;
+}
+
+UStoryFlowDialogueWidget* UStoryFlowComponent::GetDialogueWidget() const
+{
+	return ActiveDialogueWidget;
 }
 
 TArray<FString> UStoryFlowComponent::GetAvailableScripts() const
