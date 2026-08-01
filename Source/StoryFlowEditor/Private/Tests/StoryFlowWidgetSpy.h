@@ -23,10 +23,18 @@ class UStoryFlowWidgetSpy : public UStoryFlowDialogueWidget
 public:
 	int32 RemoveFromParentCount = 0;
 
+	/** Dialogue updates this widget received, i.e. how live its subscription still is. */
+	int32 DialogueUpdatedCount = 0;
+
 	virtual void RemoveFromParent() override
 	{
 		++RemoveFromParentCount;
 		Super::RemoveFromParent();
+	}
+
+	virtual void OnDialogueUpdated_Implementation(const FStoryFlowDialogueState& DialogueState) override
+	{
+		++DialogueUpdatedCount;
 	}
 };
 

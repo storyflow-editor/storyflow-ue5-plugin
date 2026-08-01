@@ -30,10 +30,13 @@
  * dialogue end nor when a later dialogue replaces it.
  *
  * Headless coverage limit: AddToViewport routes through UGameViewportSubsystem,
- * which bails without a game viewport (-nullrhi automation has none), so the
- * ADD half of the flag cannot be observed here and is code-review-only. The
- * REMOVE half is observable because UWidget::RemoveFromParent is virtual, so
- * UStoryFlowWidgetSpy counts the component's teardown calls.
+ * which bails without a game viewport (-nullrhi automation has none), so whether
+ * the widget really reaches the screen cannot be observed here and stays
+ * code-review-only. What is observable is that the call was made, via the
+ * complaint that bail-out logs (see the expected message below). The REMOVE half
+ * needs no such indirection: UWidget::RemoveFromParent is virtual, so
+ * UStoryFlowWidgetSpy counts the component's teardown calls directly, and the
+ * same spy counts dialogue updates to show a released widget has gone quiet.
  *
  * Run via: Session Frontend > Automation > "StoryFlow.DialogueWidget", or
  *   UnrealEditor-Cmd.exe StoryFlow.uproject -ExecCmds="Automation RunTests StoryFlow.DialogueWidget" -TestExit="Automation Test Queue Empty" -unattended -nullrhi
@@ -142,6 +145,16 @@ bool FStoryFlowDialogueWidgetAutoAddTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("fixture initialized"), W.Init())) { return false; }
 	InstallScript(W.Subsystem);
 
+	// The two dialogues below each try to add their widget to a viewport this
+	// fixture's world never has, and UGameViewportSubsystem says so. Expecting it
+	// exactly twice both silences the noise and is the closest thing to a sensor
+	// for the add half of the flag: the message is only reachable through
+	// AddToViewport, so its absence would mean the component stopped calling it.
+	// The mirror-image assertion is not available in the user-owned test, where
+	// the message must never appear: an expected message that does not occur fails
+	// a test, but an unexpected warning does not.
+	AddExpectedMessage(TEXT("No game viewport was found"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 2);
+
 	TestTrue(TEXT("auto-add defaults on, preserving the pre-flag behavior"), W.Component->bAutoAddWidgetToViewport);
 	TestNull(TEXT("no widget before a dialogue starts"), W.Component->GetDialogueWidget());
 
@@ -205,6 +218,7 @@ bool FStoryFlowDialogueWidgetUserOwnedTest::RunTest(const FString& Parameters)
 	}
 
 	// --- a second dialogue must not touch the old widget: it may still be animating out ---
+	const int32 FirstUpdatesBeforeReplacement = First->DialogueUpdatedCount;
 	W.Component->StartDialogueWithScript(TEXT("widgettest"));
 
 	UStoryFlowWidgetSpy* Second = SpyFrom(W.Component);
@@ -212,12 +226,24 @@ bool FStoryFlowDialogueWidgetUserOwnedTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the fresh widget is not the previous one"), Second != First);
 	TestEqual(TEXT("the replaced widget is left for the game to finish"), First->RemoveFromParentCount, 0);
 
+	// Letting go must also mean going quiet. A still-subscribed widget would be
+	// driven by the new dialogue: it would show itself again on OnDialogueStarted
+	// and render the new lines, on top of the fade-out it was in the middle of.
+	TestEqual(TEXT("the replaced widget stops receiving dialogue updates"), First->DialogueUpdatedCount, FirstUpdatesBeforeReplacement);
+	TestNull(TEXT("the replaced widget no longer points at the component"), First->GetStoryFlowComponent());
+
 	// --- dialogue end: the reference is dropped, the widget itself is untouched ---
 	W.Component->StopDialogue();
 
 	TestEqual(TEXT("ending the dialogue leaves the widget parented"), Second->RemoveFromParentCount, 0);
 	TestTrue(TEXT("ending the dialogue does not destroy the widget"), IsValid(Second));
 	TestNull(TEXT("the component still forgets the widget at dialogue end"), W.Component->GetDialogueWidget());
+
+	// --- and a widget released at dialogue end is just as detached ---
+	const int32 SecondUpdatesAtDialogueEnd = Second->DialogueUpdatedCount;
+	W.Component->StartDialogueWithScript(TEXT("widgettest"));
+
+	TestEqual(TEXT("a widget released at dialogue end stops receiving updates too"), Second->DialogueUpdatedCount, SecondUpdatesAtDialogueEnd);
 
 	return true;
 }

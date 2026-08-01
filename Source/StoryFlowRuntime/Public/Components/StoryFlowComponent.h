@@ -91,12 +91,20 @@ public:
 	 * False: the component only creates and initializes the widget, then hands it
 	 * over via OnDialogueWidgetCreated. Placing it is yours (a HUD, a widget
 	 * stack, a 3D widget component) and so is destroying it: at dialogue end the
-	 * component drops its reference without touching the widget, and OnDialogueEnded
-	 * is your cue to tear it down. A dialogue that starts while an earlier widget
-	 * still exists likewise only drops the reference, never removing it, because
-	 * the old widget may still be animating out and is yours to finish.
+	 * component drops its reference without touching the widget's placement, and
+	 * OnDialogueEnded is your cue to tear it down. A dialogue that starts while an
+	 * earlier widget still exists likewise only lets go of it, because that widget
+	 * may still be animating out and is yours to finish. No OnDialogueEnded fires
+	 * on that path (the dialogue restarted rather than ended), so the cue there is
+	 * OnDialogueWidgetCreated arriving with a different widget.
+	 *
+	 * Two consequences of the handover. The component's reference is the only one
+	 * it keeps, so a widget it lets go of is garbage collected unless you parented
+	 * it or hold a reference of your own. And a widget it lets go of is detached
+	 * (see UStoryFlowDialogueWidget::DetachFromComponent): it stops receiving
+	 * dialogue events, and GetStoryFlowComponent returns null on it.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|UI")
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow")
 	bool bAutoAddWidgetToViewport = true;
 
 	// ========================================================================

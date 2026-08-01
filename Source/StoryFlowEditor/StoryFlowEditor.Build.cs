@@ -32,8 +32,10 @@ public class StoryFlowEditor : ModuleRules
 				"WebSockets",
 				"Slate",
 				"SlateCore",
-				// Automation tests construct and drive dialogue widgets. StoryFlowRuntime
-				// depends on UMG publicly, but that propagates headers, not the link.
+				// Required to link, despite StoryFlowRuntime depending on UMG publicly:
+				// the automation tests subclass UStoryFlowDialogueWidget, and the subclass
+				// vtable references UMG symbols directly. Dropping this entry fails the
+				// module link with 83 unresolved UMG externals.
 				"UMG",
 				"EditorScriptingUtilities",
 				"ToolMenus",

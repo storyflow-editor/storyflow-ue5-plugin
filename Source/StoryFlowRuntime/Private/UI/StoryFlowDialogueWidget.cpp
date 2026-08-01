@@ -14,6 +14,14 @@ void UStoryFlowDialogueWidget::InitializeWithComponent(UStoryFlowComponent* InCo
 	BindToComponent();
 }
 
+void UStoryFlowDialogueWidget::DetachFromComponent()
+{
+	// InitializeWithComponent already unbinds from the old component and stores
+	// what it is given, so passing null is exactly a detach. Routing through it
+	// keeps a single attach/detach path instead of a second one that could drift.
+	InitializeWithComponent(nullptr);
+}
+
 void UStoryFlowDialogueWidget::NativeConstruct()
 {
 	Super::NativeConstruct();

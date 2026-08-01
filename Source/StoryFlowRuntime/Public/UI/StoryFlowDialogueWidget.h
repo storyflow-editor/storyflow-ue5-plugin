@@ -30,6 +30,25 @@ public:
 	void InitializeWithComponent(UStoryFlowComponent* InComponent);
 
 	/**
+	 * Stop following the component: unsubscribe from its events and forget it.
+	 *
+	 * The component calls this when it lets a widget go while the game owns the
+	 * widget's lifecycle (see UStoryFlowComponent::bAutoAddWidgetToViewport), so a
+	 * widget that is still fading out is not driven by the next dialogue.
+	 *
+	 * Clearing the component pointer is part of the contract rather than tidiness:
+	 * NativeConstruct re-binds whenever the pointer is still set, so re-parenting a
+	 * merely unsubscribed widget would silently resubscribe it.
+	 *
+	 * Afterwards GetStoryFlowComponent returns null and the helpers that route
+	 * through it (SelectOption, AdvanceDialogue, GetCurrentDialogueState) do
+	 * nothing, so a fade-out that still needs to talk to the component has to use
+	 * the game's own reference. Call InitializeWithComponent again to reattach.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow")
+	void DetachFromComponent();
+
+	/**
 	 * Get the bound StoryFlow component
 	 */
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")

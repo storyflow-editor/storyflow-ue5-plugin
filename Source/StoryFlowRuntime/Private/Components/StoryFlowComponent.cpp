@@ -127,6 +127,13 @@ void UStoryFlowComponent::StartDialogueWithScript(const FString& ScriptPath)
 			{
 				ActiveDialogueWidget->RemoveFromParent();
 			}
+			else
+			{
+				// Restarting does not stop the dialogue, so no OnDialogueEnded fires
+				// here: detaching is the old widget's only cue to stop following this
+				// component, and without it the new dialogue would drive it.
+				ActiveDialogueWidget->DetachFromComponent();
+			}
 			ActiveDialogueWidget = nullptr;
 		}
 
@@ -349,6 +356,12 @@ void UStoryFlowComponent::StopDialogue()
 		if (bAutoAddWidgetToViewport)
 		{
 			ActiveDialogueWidget->RemoveFromParent();
+		}
+		else
+		{
+			// After the OnDialogueEnded broadcast above, so the widget still gets its
+			// ending cue before it stops following this component.
+			ActiveDialogueWidget->DetachFromComponent();
 		}
 		ActiveDialogueWidget = nullptr;
 	}
