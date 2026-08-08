@@ -17,7 +17,7 @@ Runtime plugin for [StoryFlow Editor](https://storyflow-editor.com) - a visual n
 
 ## Requirements
 
-- Unreal Engine 5.3 - 5.7
+- Unreal Engine 5.3 - 5.8
 - StoryFlow Editor (for creating and exporting projects)
 
 ## Installation
