@@ -41,6 +41,23 @@ struct FNodeRuntimeState
 	bool bLoopInitialized = false;
 
 	/**
+	 * Current scalar-loop element while an iteration is live. Reads the PERSISTENT
+	 * loop fields (LoopArray/LoopIndex survive ClearEvaluationCache), never
+	 * CachedOutput — HandleDialogue clears the whole cache right before building
+	 * option state, which used to blank loop-element reads in option conditions.
+	 * The map-loop counterpart is LoopKey/LoopValue below.
+	 */
+	bool TryGetLoopElement(FStoryFlowVariant& OutElement) const
+	{
+		if (!bLoopInitialized || !LoopArray.IsValidIndex(LoopIndex))
+		{
+			return false;
+		}
+		OutElement = LoopArray[LoopIndex];
+		return true;
+	}
+
+	/**
 	 * Map loop state (forEachMap). LoopEntries is a SNAPSHOT taken once at loop
 	 * init — body mutations land on the live map but never affect iteration.
 	 * LoopKey/LoopValue expose the current entry to the typed evaluators (read

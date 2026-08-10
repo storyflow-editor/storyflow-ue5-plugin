@@ -388,6 +388,21 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 		break;
 	}
 
+	// ForEach loop element access (boolean). Reads the PERSISTENT loop fields, not
+	// the cache: this arm did not exist and element reads resolved purely through
+	// the cache hit above — HandleDialogue's ClearEvaluationCache runs right before
+	// option state is built, so a loop element wired into an option condition
+	// silently evaluated false and the option was always hidden.
+	case EStoryFlowNodeType::ForEachBoolLoop:
+	{
+		FStoryFlowVariant Element;
+		if (NodeState.TryGetLoopElement(Element))
+		{
+			Result = Element.GetBool();
+		}
+		break;
+	}
+
 	// forEachMap Key/Value — two outputs share one node:
 	//   "source-{id}-{keyType}-key" and "source-{id}-{valueType}-value".
 	// Discriminate by SourceHandle suffix (precedent: getMapValue "-isValid").
@@ -718,10 +733,16 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 		{
 			Result = LoopState.LoopIndex;
 		}
-		else if (Node->Type == EStoryFlowNodeType::ForEachIntLoop && LoopState.bHasCachedOutput)
+		else if (Node->Type == EStoryFlowNodeType::ForEachIntLoop)
 		{
-			// Return current element value for ForEachIntLoop
-			Result = LoopState.CachedOutput.GetInt();
+			// Current element from the PERSISTENT loop fields, not the cache — the
+			// dialogue handler's ClearEvaluationCache used to blank this read when a
+			// comparison on the element fed an option condition.
+			FStoryFlowVariant Element;
+			if (LoopState.TryGetLoopElement(Element))
+			{
+				Result = Element.GetInt();
+			}
 		}
 		break;
 	}
@@ -1066,11 +1087,13 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 
 	case EStoryFlowNodeType::ForEachFloatLoop:
 	{
-		// Return current element value
+		// Current element from the PERSISTENT loop fields, not the cache (survives
+		// the dialogue handler's ClearEvaluationCache — see the integer arm).
 		FNodeRuntimeState& LoopState = Context->GetNodeState(Node->Id);
-		if (LoopState.bHasCachedOutput)
+		FStoryFlowVariant Element;
+		if (LoopState.TryGetLoopElement(Element))
 		{
-			Result = LoopState.CachedOutput.GetFloat();
+			Result = Element.GetFloat();
 		}
 		break;
 	}
@@ -1432,16 +1455,19 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 		break;
 	}
 
-	// ForEach loop element access (string-valued)
+	// ForEach loop element access (string-valued). Current element from the
+	// PERSISTENT loop fields, not the cache (survives the dialogue handler's
+	// ClearEvaluationCache — see the integer arm).
 	case EStoryFlowNodeType::ForEachStringLoop:
 	case EStoryFlowNodeType::ForEachImageLoop:
 	case EStoryFlowNodeType::ForEachCharacterLoop:
 	case EStoryFlowNodeType::ForEachAudioLoop:
 	{
 		FNodeRuntimeState& LoopState = Context->GetNodeState(Node->Id);
-		if (LoopState.bHasCachedOutput)
+		FStoryFlowVariant Element;
+		if (LoopState.TryGetLoopElement(Element))
 		{
-			Result = LoopState.CachedOutput.GetString();
+			Result = Element.GetString();
 		}
 		break;
 	}
@@ -2197,13 +2223,10 @@ void FStoryFlowEvaluator::ProcessBooleanChain(FStoryFlowNode* Node)
 
 	case EStoryFlowNodeType::ForEachBoolLoop:
 	{
-		// The loop handler stores the CURRENT ELEMENT in CachedOutput each iteration, and
-		// the boolean evaluator has no ForEachBoolLoop arm - element reads resolve entirely
-		// through that cache hit. The default arm below would wipe the live element and then
-		// cache a stale 'false' from the empty-handle evaluation, so a bool element wired
-		// into a branch condition inside its own loop body would always read false. Leave
-		// the cache untouched. (The other typed forEach loops never appear in boolean
-		// chains - their element outputs aren't boolean.)
+		// The boolean evaluator's ForEachBoolLoop arm reads the element from the
+		// PERSISTENT loop fields (TryGetLoopElement), so no pre-pass work is needed —
+		// and the default arm below would still wipe the warm element cache the loop
+		// handler set for this iteration. Leave the cache untouched.
 		break;
 	}
 
