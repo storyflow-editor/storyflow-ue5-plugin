@@ -1640,6 +1640,42 @@ TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateArrayInputGeneric(FStoryF
 	// the source node is a type the plugin does not understand.
 	MaybeWarnUnknownNode(SourceNode);
 
+	// Handle array outputs returned by completed Run Script calls.
+	if (SourceNode->Type == EStoryFlowNodeType::RunScript)
+	{
+		FNodeRuntimeState& RunScriptState = Context->GetNodeState(SourceNode->Id);
+
+		if (!RunScriptState.bHasOutputValues)
+		{
+			return TArray<FStoryFlowVariant>();
+		}
+
+		const int32 OutIndex = Edge->SourceHandle.Find(TEXT("-out-"));
+		if (OutIndex == INDEX_NONE)
+		{
+			return TArray<FStoryFlowVariant>();
+		}
+
+		const FString OutputId = Edge->SourceHandle.Mid(OutIndex + 5);
+		FString OutputName;
+
+		for (const auto& Output : SourceNode->Data.ScriptOutputs)
+		{
+			if (Output.Id == OutputId)
+			{
+				OutputName = Output.Name;
+				break;
+			}
+		}
+
+		if (const FStoryFlowVariant* OutputValue = RunScriptState.OutputValues.Find(OutputName))
+		{
+			return OutputValue->GetArray();
+		}
+
+		return TArray<FStoryFlowVariant>();
+	}
+
 	// Handle getCharacterVar/setCharacterVar nodes that can return arrays
 	if (SourceNode->Type == EStoryFlowNodeType::GetCharacterVar || SourceNode->Type == EStoryFlowNodeType::SetCharacterVar)
 	{
