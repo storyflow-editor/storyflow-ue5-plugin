@@ -929,29 +929,22 @@ FStoryFlowNodeData UStoryFlowImporter::ParseNodeData(const TSharedPtr<FJsonObjec
 		}
 	}
 
-	// Character Variable fields (for getCharacterVar/setCharacterVar nodes)
-	// Editor JSON uses "variableName", while built JSON may reuse "variable".
-	// Parse independently of characterPath because the character may arrive through an input pin.
+	// Character Variable fields (for getCharacterVar/setCharacterVar nodes).
+	// The export writes the character variable's NAME into the "variable" field for
+	// both node types (json-export-strategy: charVarNode.variable = variableName).
+	// Parse it regardless of characterPath — the export only writes characterPath
+	// when a character is embedded in the node, so it is absent when the character
+	// arrives through the input pin.
 	const FString NodeType = NodeObject->HasField(TEXT("type")) ? NodeObject->GetStringField(TEXT("type")) : TEXT("");
 
 	if (NodeType == TEXT("getCharacterVar") || NodeType == TEXT("setCharacterVar"))
 	{
 		if (NodeObject->HasField(TEXT("characterPath")))
 		{
-			Data.CharacterPath =
-				NodeObject->GetStringField(TEXT("characterPath"));
+			Data.CharacterPath = NodeObject->GetStringField(TEXT("characterPath"));
 		}
 
-		if (NodeObject->HasField(TEXT("variableName")))
-		{
-			Data.VariableName =
-				NodeObject->GetStringField(TEXT("variableName"));
-		}
-		else
-		{
-			// built StoryFlow JSON uses "variable".
-			Data.VariableName = Data.Variable;
-		}
+		Data.VariableName = Data.Variable;
 	}
 
 	if (NodeObject->HasField(TEXT("variableType")))
