@@ -108,7 +108,7 @@ namespace
 
 	/** Bump when import parsing or asset population changes, so assets written
 	    by older plugin versions re-save once even if their source is unchanged. */
-	constexpr const TCHAR* ImportHashSchemaVersion = TEXT("1");
+	constexpr const TCHAR* ImportHashSchemaVersion = TEXT("2");
 
 	FString SerializeJsonCondensed(const TSharedRef<FJsonObject>& JsonObject)
 	{
@@ -930,13 +930,30 @@ FStoryFlowNodeData UStoryFlowImporter::ParseNodeData(const TSharedPtr<FJsonObjec
 	}
 
 	// Character Variable fields (for getCharacterVar/setCharacterVar nodes)
-	// Export reuses the "variable" JSON field for the character variable name,
-	// so only populate VariableName when characterPath is present (i.e., this is a character variable node)
-	if (NodeObject->HasField(TEXT("characterPath")))
+	// Editor JSON uses "variableName", while built JSON may reuse "variable".
+	// Parse independently of characterPath because the character may arrive through an input pin.
+	const FString NodeType = NodeObject->HasField(TEXT("type")) ? NodeObject->GetStringField(TEXT("type")) : TEXT("");
+
+	if (NodeType == TEXT("getCharacterVar") || NodeType == TEXT("setCharacterVar"))
 	{
-		Data.CharacterPath = NodeObject->GetStringField(TEXT("characterPath"));
-		Data.VariableName = Data.Variable;
+		if (NodeObject->HasField(TEXT("characterPath")))
+		{
+			Data.CharacterPath =
+				NodeObject->GetStringField(TEXT("characterPath"));
+		}
+
+		if (NodeObject->HasField(TEXT("variableName")))
+		{
+			Data.VariableName =
+				NodeObject->GetStringField(TEXT("variableName"));
+		}
+		else
+		{
+			// built StoryFlow JSON uses "variable".
+			Data.VariableName = Data.Variable;
+		}
 	}
+
 	if (NodeObject->HasField(TEXT("variableType")))
 	{
 		Data.VariableType = NodeObject->GetStringField(TEXT("variableType"));
