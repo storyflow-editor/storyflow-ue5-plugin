@@ -519,6 +519,17 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 						continue;
 					}
 
+					// Every override's TYPE comes from an ANCESTOR's declaration, so the asset's
+					// own JSON is not the whole of its input: a base that flips a declaration
+					// from enum to string (or integer to float — the collector sanitizes neither
+					// across levels) leaves this asset's JSON byte-identical while changing how
+					// its override must be parsed. Collect the declarations each override
+					// actually resolved against and fold them into the skip hash below, so the
+					// parent's change dirties the child. Same spirit as the characters block's
+					// bPortraitOutstanding: a skip must never certify a payload that something
+					// else in this same import invalidated.
+					TArray<FString> OverrideDeclarationParts;
+
 					const TSharedPtr<FJsonObject>* OverridesObject = nullptr;
 					if (AssetObject->TryGetObjectField(TEXT("overrides"), OverridesObject))
 					{
@@ -534,6 +545,17 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 								UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Data Asset '%s' overrides '%s', which nothing on its chain declares - ignoring"), *AssetPair.Key, *OverridePair.Key);
 								continue;
 							}
+
+							// isArray and the map K/V join Type because all four steer the parse
+							// (and, at the accessors, the declMatches gate of contract §6.1). An
+							// orphan override contributes no part at all, so an ancestor that
+							// later declares the id also dirties this asset.
+							OverrideDeclarationParts.Add(FString::Printf(TEXT("decl:%s:%d:%d:%d:%d"),
+								*OverridePair.Key,
+								static_cast<int32>(Declaration->Type),
+								Declaration->bIsArray ? 1 : 0,
+								static_cast<int32>(Declaration->KeyType),
+								static_cast<int32>(Declaration->ValueType)));
 
 							FStoryFlowVariant OverrideValue;
 							if (Declaration->Type == EStoryFlowVariableType::Map)
@@ -566,8 +588,16 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 						continue;
 					}
 
-					// Skip unchanged data assets (same pattern as scripts and characters)
-					const FString DataAssetSourceHash = HashImportSource({ SerializeJsonCondensed(AssetObject.ToSharedRef()), AssetPair.Key });
+					// Skip unchanged data assets (same pattern as scripts and characters), with
+					// the resolved ancestor declarations folded in. Sorted case-sensitively for
+					// the reason the project hash is: JSON object order is not map order, and an
+					// unstable part order would change the hash between identical runs.
+					OverrideDeclarationParts.Sort([](const FString& A, const FString& B) { return A.Compare(B, ESearchCase::CaseSensitive) < 0; });
+					TArray<FString> DataAssetHashParts;
+					DataAssetHashParts.Add(SerializeJsonCondensed(AssetObject.ToSharedRef()));
+					DataAssetHashParts.Add(AssetPair.Key);
+					DataAssetHashParts.Append(OverrideDeclarationParts);
+					const FString DataAssetSourceHash = HashImportSource(DataAssetHashParts);
 					if (DataAsset->ImportedSourceHash == DataAssetSourceHash && PackageFileExists(DataAsset->GetOutermost()))
 					{
 						DataAsset->GetOutermost()->SetDirtyFlag(false);
