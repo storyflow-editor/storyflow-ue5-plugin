@@ -10,6 +10,7 @@
 class UStoryFlowProjectAsset;
 class UStoryFlowScriptAsset;
 class UStoryFlowCharacterAsset;
+class UStoryFlowDataAssetAsset;
 
 /**
  * JSON importer for StoryFlow project and script files
@@ -123,6 +124,9 @@ private:
 
 	/** Create a new character asset */
 	static UStoryFlowCharacterAsset* CreateCharacterAsset(const FString& ContentPath, const FString& AssetName);
+
+	/** Create a new Data Asset (.sfd seed level) asset */
+	static UStoryFlowDataAssetAsset* CreateDataAssetAsset(const FString& ContentPath, const FString& AssetName);
 
 	// === File Helpers ===
 

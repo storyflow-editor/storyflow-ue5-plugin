@@ -5,6 +5,7 @@
 #include "Data/StoryFlowProjectAsset.h"
 #include "Data/StoryFlowScriptAsset.h"
 #include "Data/StoryFlowCharacterAsset.h"
+#include "Data/StoryFlowDataAssetAsset.h"
 #include "Data/StoryFlowSaveGame.h"
 #include "Engine/AssetManager.h"
 #include "Kismet/GameplayStatics.h"
@@ -26,6 +27,8 @@ void UStoryFlowSubsystem::Deinitialize()
 	ProjectAsset = nullptr;
 	GlobalVariables.Empty();
 	RuntimeCharacters.Empty();
+	DataAssetSeed.Empty();
+	DataAssetOverlay.Empty();
 	UsedOnceOnlyOptions.Empty();
 
 	Super::Deinitialize();
@@ -47,11 +50,16 @@ void UStoryFlowSubsystem::SetProject(UStoryFlowProjectAsset* NewProject)
 		// Initialize runtime characters from character assets (mutable copies)
 		ResetRuntimeCharacters();
 
-		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Project set: %s (%d scripts, %d global variables, %d characters)"),
+		// Install the Data Asset seed and clear the overlay — contract §3 init ("runs once
+		// per game session"). A fresh seed is a fresh session.
+		ResetDataAssetSeed();
+
+		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Project set: %s (%d scripts, %d global variables, %d characters, %d data assets)"),
 			*ProjectAsset->GetName(),
 			ProjectAsset->Scripts.Num(),
 			GlobalVariables.Num(),
-			RuntimeCharacters.Num());
+			RuntimeCharacters.Num(),
+			DataAssetSeed.Num());
 
 		// Log available scripts
 		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Available scripts:"));
@@ -66,6 +74,8 @@ void UStoryFlowSubsystem::SetProject(UStoryFlowProjectAsset* NewProject)
 	{
 		GlobalVariables.Empty();
 		RuntimeCharacters.Empty();
+		DataAssetSeed.Empty();
+		DataAssetOverlay.Empty();
 		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Project cleared"));
 	}
 }
@@ -124,6 +134,27 @@ void UStoryFlowSubsystem::ResetRuntimeCharacters()
 		}
 		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Runtime characters reset to defaults"));
 	}
+}
+
+void UStoryFlowSubsystem::ResetDataAssetSeed()
+{
+	// Contract §3: init installs the seed AND clears the overlay. Reseeding without clearing
+	// would leave session writes pointing at a table that no longer describes them.
+	DataAssetOverlay.Empty();
+
+	if (!ProjectAsset)
+	{
+		DataAssetSeed.Empty();
+		return;
+	}
+
+	StoryFlowDataAssets::BuildSeed(ProjectAsset->DataAssets, DataAssetSeed);
+}
+
+void UStoryFlowSubsystem::ResetDataAssetOverlay()
+{
+	StoryFlowDataAssets::ResetOverlay(DataAssetOverlay);
+	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Data Asset session writes cleared"));
 }
 
 void UStoryFlowSubsystem::ResolveStringVariableValues(TMap<FString, FStoryFlowVariable>& Variables)
@@ -270,6 +301,8 @@ void UStoryFlowSubsystem::ResetAllState()
 {
 	ResetGlobalVariables();
 	ResetRuntimeCharacters();
+	// Contract §3: reset clears the OVERLAY only — the seed is content, not state.
+	ResetDataAssetOverlay();
 	UsedOnceOnlyOptions.Empty();
 	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: All runtime state reset"));
 }

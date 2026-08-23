@@ -10,6 +10,7 @@
 
 class UStoryFlowScriptAsset;
 class UStoryFlowCharacterAsset;
+class UStoryFlowDataAssetAsset;
 
 /**
  * DataAsset containing a StoryFlow project with all its scripts
@@ -47,6 +48,15 @@ public:
 	/** Characters (each is a separate DataAsset) */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TMap<FString, UStoryFlowCharacterAsset*> Characters;
+
+	/**
+	 * Data Assets (.sfd) the project's scripts reference, PLUS their full ancestor chains,
+	 * keyed by assetId (engine contract §2.1). Keyed by id and not by path because that is
+	 * what the whole contract is keyed by — pills bind ids, the resolver walks ids, saves
+	 * persist ids. Each is a separate DataAsset.
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	TMap<FString, UStoryFlowDataAssetAsset*> DataAssets;
 
 	/** Global string table */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")

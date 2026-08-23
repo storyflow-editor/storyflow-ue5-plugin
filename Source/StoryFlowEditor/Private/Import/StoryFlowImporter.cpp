@@ -5,6 +5,8 @@
 #include "Data/StoryFlowProjectAsset.h"
 #include "Data/StoryFlowScriptAsset.h"
 #include "Data/StoryFlowCharacterAsset.h"
+#include "Data/StoryFlowDataAssetAsset.h"
+#include "Data/StoryFlowDataAssetStore.h"
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
 #include "Misc/Crc.h"
@@ -108,7 +110,7 @@ namespace
 
 	/** Bump when import parsing or asset population changes, so assets written
 	    by older plugin versions re-save once even if their source is unchanged. */
-	constexpr const TCHAR* ImportHashSchemaVersion = TEXT("2");
+	constexpr const TCHAR* ImportHashSchemaVersion = TEXT("3");
 
 	FString SerializeJsonCondensed(const TSharedRef<FJsonObject>& JsonObject)
 	{
@@ -241,6 +243,7 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 	// Clear all containers for in-place update (keeps the same UObject pointer)
 	ProjectAsset->Scripts.Empty();
 	ProjectAsset->Characters.Empty();
+	ProjectAsset->DataAssets.Empty();
 	ProjectAsset->GlobalVariables.Empty();
 	ProjectAsset->GlobalStrings.Empty();
 	ProjectAsset->ResolvedAssets.Empty();
@@ -425,6 +428,174 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 		}
 	}
 
+	// Load Data Assets (.sfd seed) — engine contract §2.1. The seed is TRUSTED: the editor's
+	// export collector already stripped orphan and stale overrides and collapsed duplicate map
+	// keys, so nothing below re-validates or re-sanitizes it (a plugin that "fixes" the seed
+	// diverges from the other three runtimes).
+	FString DataAssetsPath = FPaths::Combine(BuildDirectory, TEXT("data-assets.json"));
+	if (FPaths::FileExists(DataAssetsPath))
+	{
+		TSharedPtr<FJsonObject> DataAssetsJson = LoadJsonFile(DataAssetsPath);
+		if (DataAssetsJson.IsValid())
+		{
+			ProjectHashParts.Add(SerializeJsonCondensed(DataAssetsJson.ToSharedRef()));
+
+			if (DataAssetsJson->HasField(TEXT("dataAssets")))
+			{
+				TSharedPtr<FJsonObject> AssetsObject = DataAssetsJson->GetObjectField(TEXT("dataAssets"));
+				FString DataAssetContentPath = FPaths::Combine(ContentPath, TEXT("DataAssets"));
+
+				// TWO PASSES, because an OVERRIDE value carries no type of its own: a map
+				// override is an ordered entry list and an enum override is a bare string, and
+				// telling either from a plain array/string needs the DECLARATION — which the
+				// contract puts on whichever chain level declares the id, root-most winning
+				// (§4.3). So pass 1 reads every level's declarations into an in-memory seed,
+				// and pass 2 resolves each override against that seed before parsing its value.
+				// One pass could not do it: an ancestor may be parsed after its descendant.
+				StoryFlowDataAssets::FSeed ParsedSeed;
+
+				// Pass 1 — declarations, in the seed's authored order.
+				for (const auto& AssetPair : AssetsObject->Values)
+				{
+					TSharedPtr<FJsonObject> AssetObject = AssetPair.Value->AsObject();
+					if (!AssetObject.IsValid())
+					{
+						continue;
+					}
+
+					FStoryFlowDataAssetDef Def;
+					// The MAP KEY is the authoritative id everywhere in the contract (pills bind
+					// it, the resolver walks it, saves persist it); the entry's own "id" field is
+					// the same value.
+					Def.Id = AssetPair.Key;
+					if (AssetObject->HasField(TEXT("name")))
+					{
+						Def.Name = AssetObject->GetStringField(TEXT("name"));
+					}
+					// A null parent is a ROOT asset — TryGetStringField leaves Parent empty for
+					// both a JSON null and an absent field, which is the same thing here.
+					AssetObject->TryGetStringField(TEXT("parent"), Def.Parent);
+
+					const TArray<TSharedPtr<FJsonValue>>* VariablesArray = nullptr;
+					if (AssetObject->TryGetArrayField(TEXT("variables"), VariablesArray))
+					{
+						for (const TSharedPtr<FJsonValue>& VariableValue : *VariablesArray)
+						{
+							TSharedPtr<FJsonObject> VariableObject = VariableValue->AsObject();
+							if (!VariableObject.IsValid())
+							{
+								continue;
+							}
+							FString VariableId;
+							if (!VariableObject->TryGetStringField(TEXT("id"), VariableId) || VariableId.IsEmpty())
+							{
+								continue;
+							}
+							// CATEGORY rows are section headers with no value and are never
+							// resolved (contract §2.1) — VariableTypeFromString already answers
+							// None for them, and skipping here keeps them out of every place
+							// variables are enumerated. ParseVariable would otherwise leave the
+							// row at the enum's default type and make it look declarable.
+							FString TypeString;
+							VariableObject->TryGetStringField(TEXT("type"), TypeString);
+							if (VariableTypeFromString(TypeString) == EStoryFlowVariableType::None)
+							{
+								continue;
+							}
+							Def.Variables.Add(ParseVariable(VariableId, VariableObject));
+						}
+					}
+
+					ParsedSeed.Add(AssetPair.Key, MoveTemp(Def));
+				}
+
+				// Pass 2 — overrides against the now-complete chain, then the assets themselves.
+				for (const auto& AssetPair : AssetsObject->Values)
+				{
+					TSharedPtr<FJsonObject> AssetObject = AssetPair.Value->AsObject();
+					FStoryFlowDataAssetDef* Def = ParsedSeed.Find(AssetPair.Key);
+					if (!AssetObject.IsValid() || !Def)
+					{
+						continue;
+					}
+
+					const TSharedPtr<FJsonObject>* OverridesObject = nullptr;
+					if (AssetObject->TryGetObjectField(TEXT("overrides"), OverridesObject))
+					{
+						for (const auto& OverridePair : (*OverridesObject)->Values)
+						{
+							const FStoryFlowVariable* Declaration = StoryFlowDataAssets::FindDeclaration(ParsedSeed, AssetPair.Key, OverridePair.Key);
+							if (!Declaration)
+							{
+								// The collector strips orphan overrides, so this is a legacy or
+								// hand-edited export. Trusting the seed means not repairing it —
+								// but an untyped value cannot be parsed, and the resolver ignores
+								// an override no level declares anyway (§4.3), so drop it.
+								UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Data Asset '%s' overrides '%s', which nothing on its chain declares - ignoring"), *AssetPair.Key, *OverridePair.Key);
+								continue;
+							}
+
+							FStoryFlowVariant OverrideValue;
+							if (Declaration->Type == EStoryFlowVariableType::Map)
+							{
+								// Map values are ORDERED ENTRY LISTS in every direction
+								// (contract §2.1), overrides included
+								const TArray<TSharedPtr<FJsonValue>>* EntriesArray = nullptr;
+								if (OverridePair.Value->TryGetArray(EntriesArray))
+								{
+									TArray<FStoryFlowMapEntry> Entries;
+									ParseMapEntries(*EntriesArray, Declaration->KeyType, Declaration->ValueType, Declaration->Name.IsEmpty() ? Declaration->Id : Declaration->Name, Entries);
+									OverrideValue.SetMap(Entries);
+								}
+							}
+							else
+							{
+								OverrideValue = ParseVariant(OverridePair.Value, Declaration->Type);
+							}
+							Def->Overrides.Add(OverridePair.Key, MoveTemp(OverrideValue));
+						}
+					}
+
+					// The asset is named by ID, not by display name: ids are unique and stable
+					// across re-imports while names are neither (two .sfd files in different
+					// folders can share a filename base, and the seed carries no path). A
+					// name-derived asset name would silently make two ids share one UObject.
+					UStoryFlowDataAssetAsset* DataAsset = CreateDataAssetAsset(DataAssetContentPath, NormalizeAssetPath(AssetPair.Key));
+					if (!DataAsset)
+					{
+						continue;
+					}
+
+					// Skip unchanged data assets (same pattern as scripts and characters)
+					const FString DataAssetSourceHash = HashImportSource({ SerializeJsonCondensed(AssetObject.ToSharedRef()), AssetPair.Key });
+					if (DataAsset->ImportedSourceHash == DataAssetSourceHash && PackageFileExists(DataAsset->GetOutermost()))
+					{
+						DataAsset->GetOutermost()->SetDirtyFlag(false);
+						ProjectAsset->DataAssets.Add(AssetPair.Key, DataAsset);
+						UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Data Asset '%s' unchanged since last import, skipping save"), *AssetPair.Key);
+						continue;
+					}
+
+					// Clear containers for in-place update
+					DataAsset->Variables.Empty();
+					DataAsset->Overrides.Empty();
+
+					DataAsset->AssetId = Def->Id;
+					DataAsset->Name = Def->Name;
+					DataAsset->Parent = Def->Parent;
+					DataAsset->Variables = Def->Variables;
+					DataAsset->Overrides = Def->Overrides;
+
+					DataAsset->ImportedSourceHash = DataAssetSourceHash;
+					SaveAssetRecordingHash(DataAsset->GetOutermost(), DataAsset, DataAsset->ImportedSourceHash);
+
+					ProjectAsset->DataAssets.Add(AssetPair.Key, DataAsset);
+					UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Created data asset '%s' at %s"), *AssetPair.Key, *DataAsset->GetPathName());
+				}
+			}
+		}
+	}
+
 	// Find and import all script files
 	TArray<FString> ScriptFiles;
 	IFileManager::Get().FindFilesRecursive(ScriptFiles, *BuildDirectory, TEXT("*.json"), true, false);
@@ -436,7 +607,8 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 		// Skip non-script files
 		if (Filename == TEXT("project.json") ||
 			Filename == TEXT("global-variables.json") ||
-			Filename == TEXT("characters.json"))
+			Filename == TEXT("characters.json") ||
+			Filename == TEXT("data-assets.json"))
 		{
 			continue;
 		}
@@ -490,6 +662,13 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 		for (const FString& Key : CharacterKeys)
 		{
 			ProjectHashParts.Add(TEXT("char:") + Key);
+		}
+
+		TArray<FString> DataAssetKeys;
+		ProjectAsset->DataAssets.GetKeys(DataAssetKeys);
+		for (const FString& Key : DataAssetKeys)
+		{
+			ProjectHashParts.Add(TEXT("dataasset:") + Key);
 		}
 
 		TArray<FString> AssetKeys;
@@ -1451,6 +1630,11 @@ UStoryFlowScriptAsset* UStoryFlowImporter::CreateScriptAsset(const FString& Cont
 UStoryFlowCharacterAsset* UStoryFlowImporter::CreateCharacterAsset(const FString& ContentPath, const FString& AssetName)
 {
 	return CreateAssetInternal<UStoryFlowCharacterAsset>(ContentPath, AssetName);
+}
+
+UStoryFlowDataAssetAsset* UStoryFlowImporter::CreateDataAssetAsset(const FString& ContentPath, const FString& AssetName)
+{
+	return CreateAssetInternal<UStoryFlowDataAssetAsset>(ContentPath, AssetName);
 }
 
 TSharedPtr<FJsonObject> UStoryFlowImporter::LoadJsonFile(const FString& FilePath)

@@ -663,6 +663,24 @@ STORYFLOWRUNTIME_API void PackVariablesForSerialization(TMap<FString, FStoryFlow
 STORYFLOWRUNTIME_API void UnpackVariablesFromSerialization(TMap<FString, FStoryFlowVariable>& Variables);
 
 /**
+ * Same pack/unpack contract for an ORDERED variable list. Data Asset declarations keep the
+ * seed's authored order (contract §2.1 — map values are ordered entry lists and the editor's
+ * declaration order is what the debugger and the details panel show), so they live in a
+ * TArray rather than the TMap the character/global variable stores use.
+ */
+STORYFLOWRUNTIME_API void PackVariablesForSerialization(TArray<FStoryFlowVariable>& Variables);
+STORYFLOWRUNTIME_API void UnpackVariablesFromSerialization(TArray<FStoryFlowVariable>& Variables);
+
+/**
+ * Same contract again for a bare variant table — the Data Asset OVERRIDE blob
+ * ({ variableId: value }, contract §2.1), whose values carry no declaration of their own.
+ * The variants themselves are ordinary UPROPERTYs; only their non-UPROPERTY ArrayValue /
+ * MapValue internals need the blob treatment, exactly as the variable helpers above do.
+ */
+STORYFLOWRUNTIME_API void PackVariantsForSerialization(TMap<FString, FStoryFlowVariant>& Variants);
+STORYFLOWRUNTIME_API void UnpackVariantsFromSerialization(TMap<FString, FStoryFlowVariant>& Variants);
+
+/**
  * Detach every map variable's shared entry storage in a variable map (see
  * FStoryFlowVariant::DeepCopyMap). Call right after copying variables out of an
  * asset (script locals, subsystem globals, runtime characters) so runtime map
@@ -671,6 +689,12 @@ STORYFLOWRUNTIME_API void UnpackVariablesFromSerialization(TMap<FString, FStoryF
  * (runtime-state.js SWITCH_SCRIPT / LOAD_CONTENT).
  */
 STORYFLOWRUNTIME_API void DeepCopyMapVariables(TMap<FString, FStoryFlowVariable>& Variables);
+
+/** Ordered-list twin of DeepCopyMapVariables (see the TArray pack helpers above). */
+STORYFLOWRUNTIME_API void DeepCopyMapVariables(TArray<FStoryFlowVariable>& Variables);
+
+/** Bare-variant twin of DeepCopyMapVariables, for the Data Asset override blob. */
+STORYFLOWRUNTIME_API void DeepCopyMapVariants(TMap<FString, FStoryFlowVariant>& Variants);
 
 // ============================================================================
 // Text Block
@@ -1151,6 +1175,49 @@ struct STORYFLOWRUNTIME_API FStoryFlowCharacterDef
 	/** Character-specific variables */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TMap<FString, FStoryFlowVariable> Variables;
+};
+
+// ============================================================================
+// Data Asset System (.sfd)
+// ============================================================================
+
+/**
+ * One level of a Data Asset chain, as the runtime SEED carries it (engine contract §2.1,
+ * mirroring the HTML runtime's seed entries in runtime-data-assets.js).
+ *
+ * This is the runtime twin of UStoryFlowDataAssetAsset, the same way FStoryFlowCharacterDef
+ * is the runtime twin of UStoryFlowCharacterAsset: the subsystem copies the imported assets
+ * into these at SetProject so map storage can be detached from the asset (see
+ * DeepCopyMapVariables) and so the store can be built from raw JSON in tests without
+ * creating UObjects.
+ *
+ * Unlike the character twin, this one is NEVER MUTATED — contract §3: session writes land in
+ * the overlay, and "the seed is never mutated by anything, ever".
+ */
+USTRUCT()
+struct STORYFLOWRUNTIME_API FStoryFlowDataAssetDef
+{
+	GENERATED_BODY()
+
+	/** Stable da_<32 hex> id — the key everything in the contract is keyed by */
+	UPROPERTY()
+	FString Id;
+
+	/** Display name (the .sfd filename base). Carried for tooling; nothing resolves through it. */
+	UPROPERTY()
+	FString Name;
+
+	/** Parent asset id, empty for a root asset */
+	UPROPERTY()
+	FString Parent;
+
+	/** Declarations in the seed's authored order, each carrying its own declared default */
+	UPROPERTY()
+	TArray<FStoryFlowVariable> Variables;
+
+	/** This level's file overrides, keyed by variable id (contract §2.1) */
+	UPROPERTY()
+	TMap<FString, FStoryFlowVariant> Overrides;
 };
 
 /**

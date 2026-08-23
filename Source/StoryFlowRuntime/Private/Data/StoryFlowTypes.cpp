@@ -266,11 +266,59 @@ void UnpackVariablesFromSerialization(TMap<FString, FStoryFlowVariable>& Variabl
 	}
 }
 
+void PackVariablesForSerialization(TArray<FStoryFlowVariable>& Variables)
+{
+	for (FStoryFlowVariable& Variable : Variables)
+	{
+		Variable.Value.PackArrayForSerialization();
+	}
+}
+
+void UnpackVariablesFromSerialization(TArray<FStoryFlowVariable>& Variables)
+{
+	for (FStoryFlowVariable& Variable : Variables)
+	{
+		Variable.Value.UnpackArrayFromSerialization();
+	}
+}
+
+void PackVariantsForSerialization(TMap<FString, FStoryFlowVariant>& Variants)
+{
+	for (auto& Pair : Variants)
+	{
+		Pair.Value.PackArrayForSerialization();
+	}
+}
+
+void UnpackVariantsFromSerialization(TMap<FString, FStoryFlowVariant>& Variants)
+{
+	for (auto& Pair : Variants)
+	{
+		Pair.Value.UnpackArrayFromSerialization();
+	}
+}
+
 void DeepCopyMapVariables(TMap<FString, FStoryFlowVariable>& Variables)
 {
 	for (auto& Pair : Variables)
 	{
 		Pair.Value.Value.DeepCopyMap();
+	}
+}
+
+void DeepCopyMapVariables(TArray<FStoryFlowVariable>& Variables)
+{
+	for (FStoryFlowVariable& Variable : Variables)
+	{
+		Variable.Value.DeepCopyMap();
+	}
+}
+
+void DeepCopyMapVariants(TMap<FString, FStoryFlowVariant>& Variants)
+{
+	for (auto& Pair : Variants)
+	{
+		Pair.Value.DeepCopyMap();
 	}
 }
 

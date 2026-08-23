@@ -5,6 +5,7 @@
 #include "CoreMinimal.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "Data/StoryFlowTypes.h"
+#include "Data/StoryFlowDataAssetStore.h"
 #include "StoryFlowSubsystem.generated.h"
 
 class UStoryFlowProjectAsset;
@@ -90,6 +91,35 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Characters")
 	void ResetRuntimeCharacters();
+
+	// ========================================================================
+	// Data Assets (.sfd) — the seed + session overlay store (engine contract §3)
+	// ========================================================================
+
+	/**
+	 * The read-only Data Asset SEED, keyed by assetId. Rebuilt from the project's imported
+	 * assets at SetProject and NEVER mutated afterwards (contract §3) — session writes go to
+	 * the overlay. Non-const accessor exists only for the tests and the seeding path.
+	 */
+	StoryFlowDataAssets::FSeed& GetDataAssetSeed() { return DataAssetSeed; }
+	const StoryFlowDataAssets::FSeed& GetDataAssetSeed() const { return DataAssetSeed; }
+
+	/** This session's Data Asset writes, keyed (assetId -> variableId). Cleared on reset. */
+	StoryFlowDataAssets::FOverlay& GetDataAssetOverlay() { return DataAssetOverlay; }
+	const StoryFlowDataAssets::FOverlay& GetDataAssetOverlay() const { return DataAssetOverlay; }
+
+	/**
+	 * Rebuild the seed from the project's imported Data Assets and clear the overlay
+	 * (contract §3 init). Called by SetProject; a game restart wants ResetDataAssetOverlay.
+	 */
+	void ResetDataAssetSeed();
+
+	/**
+	 * Drop every session Data Asset write, leaving the seed alone (contract §3 reset).
+	 * This is the game-restart semantic; the seed only changes when the project does.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	void ResetDataAssetOverlay();
 
 	// ========================================================================
 	// Once-Only Options (persists across dialogues)
@@ -182,6 +212,17 @@ private:
 	/** Runtime copy of characters (mutable, for character variable modifications) */
 	UPROPERTY()
 	TMap<FString, FStoryFlowCharacterDef> RuntimeCharacters;
+
+	/** Read-only Data Asset seed, keyed by assetId (contract §2.1 / §3) */
+	UPROPERTY()
+	TMap<FString, FStoryFlowDataAssetDef> DataAssetSeed;
+
+	/**
+	 * Session Data Asset writes, keyed (assetId -> variableId). Not a UPROPERTY: UHT rejects
+	 * a nested TMap, and there is nothing here for the GC to keep alive — FStoryFlowVariant
+	 * holds no UObject references. Serialization is manual either way (contract §7).
+	 */
+	StoryFlowDataAssets::FOverlay DataAssetOverlay;
 
 	/** Tracks which once-only dialogue options have been used (NodeId-OptionId keys) */
 	UPROPERTY()

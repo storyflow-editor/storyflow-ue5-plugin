@@ -29,7 +29,7 @@ void FStoryFlowExecutionContext::Initialize(UStoryFlowProjectAsset* InProject, U
 	RebuildGlobalNameIndex();
 }
 
-void FStoryFlowExecutionContext::InitializeWithSubsystem(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript, TMap<FString, FStoryFlowVariable>* InGlobalVariables, TMap<FString, FStoryFlowCharacterDef>* InCharacters, TSet<FString>* InUsedOnceOnlyOptions)
+void FStoryFlowExecutionContext::InitializeWithSubsystem(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript, TMap<FString, FStoryFlowVariable>* InGlobalVariables, TMap<FString, FStoryFlowCharacterDef>* InCharacters, TSet<FString>* InUsedOnceOnlyOptions, const StoryFlowDataAssets::FSeed* InDataAssetSeed, StoryFlowDataAssets::FOverlay* InDataAssetOverlay)
 {
 	Reset();
 
@@ -38,6 +38,8 @@ void FStoryFlowExecutionContext::InitializeWithSubsystem(UStoryFlowProjectAsset*
 	ExternalGlobalVariables = InGlobalVariables;
 	ExternalCharacters = InCharacters;
 	ExternalUsedOnceOnlyOptions = InUsedOnceOnlyOptions;
+	ExternalDataAssetSeed = InDataAssetSeed;
+	ExternalDataAssetOverlay = InDataAssetOverlay;
 
 	if (InScript)
 	{
@@ -78,6 +80,8 @@ void FStoryFlowExecutionContext::Reset()
 	WarnedMapNodes.Empty();
 	ExternalGlobalVariables = nullptr;
 	ExternalCharacters = nullptr;
+	ExternalDataAssetSeed = nullptr;
+	ExternalDataAssetOverlay = nullptr;
 }
 
 FStoryFlowNode* FStoryFlowExecutionContext::GetCurrentNode()

@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "Data/StoryFlowTypes.h"
+#include "Data/StoryFlowDataAssetStore.h"
 #include "StoryFlowExecutionContext.generated.h"
 
 class UStoryFlowScriptAsset;
@@ -99,7 +100,7 @@ public:
 	void Initialize(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript);
 
 	/** Initialize the context with external global variables, characters, and once-only options (from subsystem) */
-	void InitializeWithSubsystem(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript, TMap<FString, FStoryFlowVariable>* InGlobalVariables, TMap<FString, FStoryFlowCharacterDef>* InCharacters = nullptr, TSet<FString>* InUsedOnceOnlyOptions = nullptr);
+	void InitializeWithSubsystem(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript, TMap<FString, FStoryFlowVariable>* InGlobalVariables, TMap<FString, FStoryFlowCharacterDef>* InCharacters = nullptr, TSet<FString>* InUsedOnceOnlyOptions = nullptr, const StoryFlowDataAssets::FSeed* InDataAssetSeed = nullptr, StoryFlowDataAssets::FOverlay* InDataAssetOverlay = nullptr);
 
 	/** Reset the context to initial state */
 	void Reset();
@@ -180,6 +181,20 @@ public:
 	 * Lifetime: valid as long as the subsystem exists (GameInstance scope).
 	 */
 	TMap<FString, FStoryFlowCharacterDef>* ExternalCharacters = nullptr;
+
+	// === Data Assets (.sfd) ===
+
+	/**
+	 * Non-owning pointers to the subsystem-owned Data Asset store (engine contract §3): the
+	 * read-only SEED and this session's write OVERLAY. Same idiom, and same lifetime, as
+	 * ExternalGlobalVariables — valid as long as the subsystem exists (GameInstance scope).
+	 *
+	 * They come as a PAIR because every resolution needs both (contract §4 reads the overlay
+	 * and the seed at each chain level), and pointing at the subsystem's maps rather than
+	 * copying them is what makes a write from one component visible to every other.
+	 */
+	const StoryFlowDataAssets::FSeed* ExternalDataAssetSeed = nullptr;
+	StoryFlowDataAssets::FOverlay* ExternalDataAssetOverlay = nullptr;
 
 	// === Once-Only Tracking ===
 
