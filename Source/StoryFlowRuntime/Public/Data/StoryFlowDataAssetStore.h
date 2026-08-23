@@ -40,6 +40,24 @@ namespace StoryFlowDataAssets
 	using FOverlay = TMap<FString, TMap<FString, FStoryFlowVariant>>;
 
 	/**
+	 * The two halves of the store as ONE non-owning reference, so callers that hold the pair
+	 * (the execution context, and every signature that threads it) cannot end up with a seed
+	 * from one owner and an overlay from another. Both point at UStoryFlowSubsystem-owned maps
+	 * and share its GameInstance lifetime; a default-constructed ref is the "no store" state
+	 * every accessor null-checks.
+	 *
+	 * The seed is const because contract §3 says it is never mutated by anything, ever — the
+	 * const is that sentence, enforced.
+	 */
+	struct FStoreRef
+	{
+		const FSeed* Seed = nullptr;
+		FOverlay* Overlay = nullptr;
+
+		bool IsValid() const { return Seed != nullptr && Overlay != nullptr; }
+	};
+
+	/**
 	 * Chain depth cap, matching the reference implementation's MAX_DEPTH (contract §4.4):
 	 * the walk admits MAX_DEPTH ancestors PLUS the starting level, so 65 levels are visited
 	 * before a malformed chain is abandoned. A cycle is caught earlier by the visited set.
@@ -104,7 +122,9 @@ namespace StoryFlowDataAssets
 	STORYFLOWRUNTIME_API bool IsDeclaredOnChain(const FSeed& Seed, const FString& AssetId, const FString& VariableId);
 
 	/**
-	 * Record a session write in the overlay (contract §5). Writes land at THE REFERENCED
+	 * Record a session write in the overlay (contract §5), reporting whether it landed. Named
+	 * for the house Find/Try rule rather than after the reference implementation, whose
+	 * `set()` returns nothing and warns inline. Writes land at THE REFERENCED
 	 * ASSET'S OWN LEVEL, always — never at the declaring ancestor: setting via a child
 	 * overrides for that child's subtree, setting via the base cascades to every descendant
 	 * that does not shadow it. There is no "write to base" switch.
@@ -116,7 +136,7 @@ namespace StoryFlowDataAssets
 	 * The caller owns the warning: the node arms have a per-node warn latch (contract §6) and
 	 * the Blueprint surface does not, so this reports the refusal rather than logging it.
 	 */
-	STORYFLOWRUNTIME_API bool Set(const FSeed& Seed, FOverlay& Overlay, const FString& AssetId, const FString& VariableId, const FStoryFlowVariant& Value);
+	STORYFLOWRUNTIME_API bool TrySet(const FSeed& Seed, FOverlay& Overlay, const FString& AssetId, const FString& VariableId, const FStoryFlowVariant& Value);
 
 	/**
 	 * Does the seed's declaration still match the spawn-time snapshot an accessor node's pins

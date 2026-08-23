@@ -99,14 +99,16 @@ public:
 	/**
 	 * The read-only Data Asset SEED, keyed by assetId. Rebuilt from the project's imported
 	 * assets at SetProject and NEVER mutated afterwards (contract §3) — session writes go to
-	 * the overlay. Non-const accessor exists only for the tests and the seeding path.
+	 * the overlay. Const-only on purpose: that rule is the whole reason the overlay exists.
 	 */
-	StoryFlowDataAssets::FSeed& GetDataAssetSeed() { return DataAssetSeed; }
 	const StoryFlowDataAssets::FSeed& GetDataAssetSeed() const { return DataAssetSeed; }
 
 	/** This session's Data Asset writes, keyed (assetId -> variableId). Cleared on reset. */
 	StoryFlowDataAssets::FOverlay& GetDataAssetOverlay() { return DataAssetOverlay; }
 	const StoryFlowDataAssets::FOverlay& GetDataAssetOverlay() const { return DataAssetOverlay; }
+
+	/** Both halves as one non-owning reference, for everything that needs the pair. */
+	StoryFlowDataAssets::FStoreRef GetDataAssetStore() { return { &DataAssetSeed, &DataAssetOverlay }; }
 
 	/**
 	 * Rebuild the seed from the project's imported Data Assets and clear the overlay
@@ -118,7 +120,7 @@ public:
 	 * Drop every session Data Asset write, leaving the seed alone (contract §3 reset).
 	 * This is the game-restart semantic; the seed only changes when the project does.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables")
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|DataAssets")
 	void ResetDataAssetOverlay();
 
 	// ========================================================================

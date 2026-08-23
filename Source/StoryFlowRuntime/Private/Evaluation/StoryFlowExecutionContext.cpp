@@ -29,7 +29,7 @@ void FStoryFlowExecutionContext::Initialize(UStoryFlowProjectAsset* InProject, U
 	RebuildGlobalNameIndex();
 }
 
-void FStoryFlowExecutionContext::InitializeWithSubsystem(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript, TMap<FString, FStoryFlowVariable>* InGlobalVariables, TMap<FString, FStoryFlowCharacterDef>* InCharacters, TSet<FString>* InUsedOnceOnlyOptions, const StoryFlowDataAssets::FSeed* InDataAssetSeed, StoryFlowDataAssets::FOverlay* InDataAssetOverlay)
+void FStoryFlowExecutionContext::InitializeWithSubsystem(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript, TMap<FString, FStoryFlowVariable>* InGlobalVariables, TMap<FString, FStoryFlowCharacterDef>* InCharacters, TSet<FString>* InUsedOnceOnlyOptions, StoryFlowDataAssets::FStoreRef InDataAssetStore)
 {
 	Reset();
 
@@ -38,8 +38,7 @@ void FStoryFlowExecutionContext::InitializeWithSubsystem(UStoryFlowProjectAsset*
 	ExternalGlobalVariables = InGlobalVariables;
 	ExternalCharacters = InCharacters;
 	ExternalUsedOnceOnlyOptions = InUsedOnceOnlyOptions;
-	ExternalDataAssetSeed = InDataAssetSeed;
-	ExternalDataAssetOverlay = InDataAssetOverlay;
+	DataAssetStore = InDataAssetStore;
 
 	if (InScript)
 	{
@@ -80,8 +79,7 @@ void FStoryFlowExecutionContext::Reset()
 	WarnedMapNodes.Empty();
 	ExternalGlobalVariables = nullptr;
 	ExternalCharacters = nullptr;
-	ExternalDataAssetSeed = nullptr;
-	ExternalDataAssetOverlay = nullptr;
+	DataAssetStore = StoryFlowDataAssets::FStoreRef();
 }
 
 FStoryFlowNode* FStoryFlowExecutionContext::GetCurrentNode()
@@ -139,6 +137,24 @@ FStoryFlowVariant FStoryFlowExecutionContext::GetVariableValue(const FString& Va
 		return Variable->Value;
 	}
 	return FStoryFlowVariant();
+}
+
+bool FStoryFlowExecutionContext::TryResolveDataAsset(const FString& AssetId, const FString& VariableId, FStoryFlowVariant& OutValue) const
+{
+	if (!DataAssetStore.IsValid())
+	{
+		return false;
+	}
+	return StoryFlowDataAssets::TryResolve(*DataAssetStore.Seed, *DataAssetStore.Overlay, AssetId, VariableId, OutValue);
+}
+
+bool FStoryFlowExecutionContext::TrySetDataAsset(const FString& AssetId, const FString& VariableId, const FStoryFlowVariant& Value)
+{
+	if (!DataAssetStore.IsValid())
+	{
+		return false;
+	}
+	return StoryFlowDataAssets::TrySet(*DataAssetStore.Seed, *DataAssetStore.Overlay, AssetId, VariableId, Value);
 }
 
 FStoryFlowCharacterDef* FStoryFlowExecutionContext::FindCharacter(const FString& CharacterPath)

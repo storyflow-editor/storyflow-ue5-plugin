@@ -105,7 +105,7 @@ void UStoryFlowComponent::StartDialogueWithScript(const FString& ScriptPath)
 
 	// Initialize execution context with project and script
 	// Pass the subsystem's global variables, runtime characters, and once-only options so they're shared across all components
-	ExecutionContext.InitializeWithSubsystem(Project, ScriptAsset, &Subsystem->GetGlobalVariables(), &Subsystem->GetRuntimeCharacters(), &Subsystem->GetUsedOnceOnlyOptions(), &Subsystem->GetDataAssetSeed(), &Subsystem->GetDataAssetOverlay());
+	ExecutionContext.InitializeWithSubsystem(Project, ScriptAsset, &Subsystem->GetGlobalVariables(), &Subsystem->GetRuntimeCharacters(), &Subsystem->GetUsedOnceOnlyOptions(), Subsystem->GetDataAssetStore());
 	ExecutionContext.bIsExecuting = true;
 	ExecutionContext.bTraceEnabled = bTraceEnabled;
 	Subsystem->NotifyDialogueStarted();

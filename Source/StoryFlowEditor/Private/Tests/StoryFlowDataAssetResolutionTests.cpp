@@ -16,20 +16,29 @@
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
 #include "Serialization/ObjectReader.h"
 #include "Serialization/ObjectWriter.h"
-#include "Serialization/JsonSerializer.h"
+#include "UObject/GCObjectScopeGuard.h"
 #include "UObject/Package.h"
 
 /**
- * The Data Asset (.sfd) chain resolver against the SHARED GOLDEN FIXTURES — the cross-engine
- * parity gate for contract §4.
+ * The Data Asset (.sfd) store and chain resolver against the SHARED GOLDEN FIXTURES — the
+ * cross-engine parity gate for contract §4 and §5.
  *
- * TestContent/engine-contract/data-assets-seed.json and data-assets-resolution.json are checked
- * in VERBATIM from the editor repo and were GENERATED from the HTML runtime
- * (src/renderer/runtime/runtime-data-assets.js), the normative implementation. Every engine's
- * plugin consumes the same two files, so a resolver that drifts from the reference fails here
- * rather than in someone's game.
+ * TestContent/engine-contract/data-assets-*.json are checked in VERBATIM from the editor repo
+ * and were GENERATED from the HTML runtime (src/renderer/runtime/runtime-data-assets.js), the
+ * normative implementation. Every engine's plugin consumes the same files, so a store that
+ * drifts from the reference fails here rather than in someone's game.
+ *
+ * WHICH FIXTURES THIS FILE OWNS, and which it deliberately leaves alone:
+ *  - data-assets-seed.json ............ read here (the seed family every test below builds on)
+ *  - data-assets-resolution.json ...... read here (§4, empty overlay)
+ *  - data-assets-writes.json .......... `writes` + `postWriteResolutions` read here (§5).
+ *      Its `saveKey` member belongs to TASK U3, which adds the sparse `dataAssets` save key —
+ *      the Writes test below deliberately stops at the post-write resolution table.
+ *  - data-assets-degraded.json ........ belongs to TASK U2, which adds the accessor node arms
+ *      and the §6 degraded ladder. Nothing here reads it, and that is not an oversight.
  *
  * The seed is loaded through the REAL IMPORTER, not a parser written for the test: import is
  * where the seed's shape (ordered map entry lists, typed overrides, skipped category rows)
@@ -43,6 +52,27 @@
 namespace StoryFlowDataAssetTestHelpers
 {
 	const TCHAR* TestRoot = TEXT("/Game/StoryFlowDataAssetTests");
+
+	// The seed fixture's three assets, base -> child -> grandchild (contract §9.1)
+	const TCHAR* BaseId = TEXT("da_0a1b2c3d4e5f60718293a4b5c6d7e8f9");
+	const TCHAR* ChildId = TEXT("da_1b2c3d4e5f60718293a4b5c6d7e8f90a");
+	const TCHAR* GrandChildId = TEXT("da_2c3d4e5f60718293a4b5c6d7e8f90a1b");
+	const TCHAR* AbsentId = TEXT("da_ff00ff00ff00ff00ff00ff00ff00ff00");
+
+	// The seed fixture's variable ids, each annotated with where it lives on the chain —
+	// without this the assertions below are unreadable hex.
+	/** boolean, declared on the base, overridden nowhere */
+	const TCHAR* AliveId = TEXT("7f3a1c9e4b2d40518a6f0c3e7d1b5a29");
+	/** float, declared on the base AND overridden by the base itself (the §9.1 root override) */
+	const TCHAR* SpeedId = TEXT("9c4f7e25a3b84a19bd60e2f7c81a5d03");
+	/** string array, declared on the base, overridden on the child */
+	const TCHAR* TagsId = TEXT("c58e2f13a0d64c9b871e3f05d2a76b48");
+	/** map<string,integer>, declared on the base, overridden on the grandchild */
+	const TCHAR* LootId = TEXT("6d0f39a8b21e47c5903af8d61c72e504");
+	/** category, declared on the base — never resolves, and can never be written */
+	const TCHAR* LoreId = TEXT("ae41b70c95d84e2fa3608c1b5f2d97e0");
+	/** declared by no level of the chain at all */
+	const TCHAR* NowhereId = TEXT("4c9a1e07b38f42d6a1057e2c93bd48f0");
 
 	FString FixtureBuildDir()
 	{
@@ -79,7 +109,7 @@ namespace StoryFlowDataAssetTestHelpers
 		return JsonObject;
 	}
 
-	/** The smallest project.json ImportProject accepts, so the fixture seed can ride a real import. */
+	/** The smallest project.json ImportProject accepts, so a seed can ride a real import. */
 	bool WriteMinimalProject(const FString& Dir)
 	{
 		return FFileHelper::SaveStringToFile(TEXT(R"JSON({"version":"1.0.0","apiVersion":"1","startupScript":"main"})JSON"),
@@ -111,6 +141,31 @@ namespace StoryFlowDataAssetTestHelpers
 	{
 		UEditorAssetLibrary::DeleteDirectory(TestRoot);
 		IFileManager::Get().DeleteDirectory(*FixtureBuildDir(), false, true);
+	}
+
+	/**
+	 * The preamble every fixture-driven test shares: read data-assets-seed.json off disk, clear
+	 * any assets a previous run left behind (a stale one carries a matching hash and would be
+	 * skipped, never re-parsed), and import it. False means the test cannot proceed; it has
+	 * already reported why.
+	 */
+	bool LoadFixtureSeed(FAutomationTestBase& Test, StoryFlowDataAssets::FSeed& OutSeed)
+	{
+		const FString SeedPath = GoldenFixturePath(TEXT("data-assets-seed.json"));
+		FString SeedJson;
+		if (!Test.TestTrue(TEXT("data-assets-seed.json is readable"), !SeedPath.IsEmpty() && FFileHelper::LoadFileToString(SeedJson, *SeedPath)))
+		{
+			return false;
+		}
+
+		UEditorAssetLibrary::DeleteDirectory(TestRoot);
+
+		if (!Test.TestNotNull(TEXT("the seed fixture imports"), ImportSeedJson(SeedJson, OutSeed)))
+		{
+			CleanUp();
+			return false;
+		}
+		return true;
 	}
 
 	/** True for the string family — every one of these stores its value in StringValue. */
@@ -226,10 +281,67 @@ namespace StoryFlowDataAssetTestHelpers
 			return false;
 		}
 	}
+
+	/**
+	 * Run one fixture resolution table (data-assets-resolution.json's `resolutions`, or
+	 * data-assets-writes.json's `postWriteResolutions`) against the store.
+	 *
+	 * Returns the number of records a value or unset COMPARISON actually ran for — not the loop
+	 * count. A record dropped for a structural reason (not an object, the resolved flag did not
+	 * match, no value where the fixture claims one) is deliberately NOT counted, so the caller's
+	 * "every record was compared" assertion can fail on its own rather than being a tautology.
+	 */
+	int32 AssertResolutionTable(FAutomationTestBase& Test, const StoryFlowDataAssets::FSeed& Seed,
+		const StoryFlowDataAssets::FOverlay& Overlay, const TArray<TSharedPtr<FJsonValue>>& Records, const TCHAR* TableName)
+	{
+		int32 Compared = 0;
+		for (const TSharedPtr<FJsonValue>& RecordValue : Records)
+		{
+			const TSharedPtr<FJsonObject> Record = RecordValue->AsObject();
+			if (!Record.IsValid())
+			{
+				Test.AddError(FString::Printf(TEXT("%s: a record is not an object"), TableName));
+				continue;
+			}
+
+			const FString AssetId = Record->GetStringField(TEXT("assetId"));
+			const FString VariableId = Record->GetStringField(TEXT("variableId"));
+			FString VariableName;
+			Record->TryGetStringField(TEXT("variableName"), VariableName);
+			const bool bExpectResolved = Record->GetBoolField(TEXT("resolved"));
+			const FString Label = FString::Printf(TEXT("%s resolve(%s, %s /* %s */)"), TableName, *AssetId, *VariableId, *VariableName);
+
+			FStoryFlowVariant Value;
+			const bool bResolved = StoryFlowDataAssets::TryResolve(Seed, Overlay, AssetId, VariableId, Value);
+
+			if (!Test.TestTrue(Label + FString::Printf(TEXT(" resolves (expected %s)"), bExpectResolved ? TEXT("true") : TEXT("false")), bResolved == bExpectResolved))
+			{
+				continue;
+			}
+			if (!bExpectResolved)
+			{
+				// Contract §9.1: an unresolvable read is an UNSET variant, and a category
+				// declaration is deliberately indistinguishable from an undeclared id here
+				Test.TestFalse(Label + TEXT(" hands back an unset variant"), Value.IsValid());
+				++Compared;
+				continue;
+			}
+
+			const TSharedPtr<FJsonValue> ExpectedValue = Record->TryGetField(TEXT("value"));
+			if (!ExpectedValue.IsValid())
+			{
+				Test.AddError(Label + TEXT(": the fixture record is marked resolved but carries no value"));
+				continue;
+			}
+			VariantMatchesJson(Test, Label, Value, ExpectedValue);
+			++Compared;
+		}
+		return Compared;
+	}
 }
 
 // ============================================================================
-// The golden resolution table
+// The golden resolution table (§4, empty overlay)
 // ============================================================================
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetResolutionFixtureTest,
@@ -240,47 +352,36 @@ bool FStoryFlowDataAssetResolutionFixtureTest::RunTest(const FString& Parameters
 {
 	using namespace StoryFlowDataAssetTestHelpers;
 
-	const FString SeedPath = GoldenFixturePath(TEXT("data-assets-seed.json"));
-	FString SeedJson;
-	if (!TestTrue(TEXT("the seed fixture is readable"), !SeedPath.IsEmpty() && FFileHelper::LoadFileToString(SeedJson, *SeedPath)))
-	{
-		return false;
-	}
-
 	TSharedPtr<FJsonObject> ResolutionFixture = LoadGoldenFixture(TEXT("data-assets-resolution.json"));
-	if (!TestTrue(TEXT("the resolution fixture parses"), ResolutionFixture.IsValid()))
+	if (!TestTrue(TEXT("data-assets-resolution.json parses"), ResolutionFixture.IsValid()))
 	{
 		return false;
 	}
-
-	// A stale asset from an earlier run would be skipped as unchanged and never re-parsed
-	UEditorAssetLibrary::DeleteDirectory(TestRoot);
 
 	StoryFlowDataAssets::FSeed Seed;
-	UStoryFlowProjectAsset* Project = ImportSeedJson(SeedJson, Seed);
-	if (!TestNotNull(TEXT("the fixture seed imports"), Project))
+	if (!LoadFixtureSeed(*this, Seed))
 	{
-		CleanUp();
 		return false;
 	}
 
-	// The seed family is base -> child -> grandchild (contract §9.1)
-	TestEqual(TEXT("every fixture asset was imported"), Seed.Num(), 3);
-	if (const FStoryFlowDataAssetDef* Base = Seed.Find(TEXT("da_0a1b2c3d4e5f60718293a4b5c6d7e8f9")))
+	// Cardinality assertions against the fixture. If a fixture regen moves any of these, the
+	// failure should read as "the fixture changed", not as "the importer broke".
+	TestEqual(TEXT("data-assets-seed.json still carries 3 assets, all imported"), Seed.Num(), 3);
+	if (const FStoryFlowDataAssetDef* Base = Seed.Find(BaseId))
 	{
-		TestEqual(TEXT("the base carries its display name"), Base->Name, TEXT("CreatureBase"));
-		TestTrue(TEXT("the base is a root (no parent)"), Base->Parent.IsEmpty());
-		// The category row must not survive import: it has no value and can never resolve
-		TestEqual(TEXT("the category declaration is skipped at import"), Base->Variables.Num(), 11);
+		TestEqual(TEXT("the seed fixture's base is still named CreatureBase"), Base->Name, TEXT("CreatureBase"));
+		TestTrue(TEXT("the seed fixture's base is still a root (no parent)"), Base->Parent.IsEmpty());
+		// The fixture's base declares 12 rows, one of them the category that must not survive
+		TestEqual(TEXT("the seed fixture's base keeps 11 of its 12 rows, the category dropped"), Base->Variables.Num(), 11);
 	}
 	else
 	{
 		AddError(TEXT("the base asset is missing from the seed"));
 	}
-	if (const FStoryFlowDataAssetDef* Child = Seed.Find(TEXT("da_1b2c3d4e5f60718293a4b5c6d7e8f90a")))
+	if (const FStoryFlowDataAssetDef* Child = Seed.Find(ChildId))
 	{
-		TestEqual(TEXT("the child keeps its parent link"), Child->Parent, TEXT("da_0a1b2c3d4e5f60718293a4b5c6d7e8f9"));
-		TestEqual(TEXT("the child keeps all three of its overrides"), Child->Overrides.Num(), 3);
+		TestEqual(TEXT("the seed fixture's child still points at the base"), Child->Parent, FString(BaseId));
+		TestEqual(TEXT("the seed fixture's child still carries 3 overrides"), Child->Overrides.Num(), 3);
 	}
 	else
 	{
@@ -297,62 +398,187 @@ bool FStoryFlowDataAssetResolutionFixtureTest::RunTest(const FString& Parameters
 		return false;
 	}
 
-	int32 Asserted = 0;
-	for (const TSharedPtr<FJsonValue>& RecordValue : *Resolutions)
-	{
-		const TSharedPtr<FJsonObject> Record = RecordValue->AsObject();
-		if (!Record.IsValid())
-		{
-			AddError(TEXT("a resolution record is not an object"));
-			continue;
-		}
-
-		const FString AssetId = Record->GetStringField(TEXT("assetId"));
-		const FString VariableId = Record->GetStringField(TEXT("variableId"));
-		FString VariableName;
-		Record->TryGetStringField(TEXT("variableName"), VariableName);
-		const bool bExpectResolved = Record->GetBoolField(TEXT("resolved"));
-		const FString Label = FString::Printf(TEXT("resolve(%s, %s /* %s */)"), *AssetId, *VariableId, *VariableName);
-
-		FStoryFlowVariant Value;
-		const bool bResolved = StoryFlowDataAssets::TryResolve(Seed, EmptyOverlay, AssetId, VariableId, Value);
-
-		if (!TestTrue(Label + FString::Printf(TEXT(" resolves (expected %s)"), bExpectResolved ? TEXT("true") : TEXT("false")), bResolved == bExpectResolved))
-		{
-			++Asserted;
-			continue;
-		}
-		if (!bExpectResolved)
-		{
-			// Contract §9.1: an unresolvable read is an UNSET variant, and a category
-			// declaration is deliberately indistinguishable from an undeclared id here
-			TestFalse(Label + TEXT(" hands back an unset variant"), Value.IsValid());
-			++Asserted;
-			continue;
-		}
-
-		// A resolved record without a value is a malformed fixture, not a passing case
-		const TSharedPtr<FJsonValue> ExpectedValue = Record->TryGetField(TEXT("value"));
-		if (ExpectedValue.IsValid())
-		{
-			VariantMatchesJson(*this, Label, Value, ExpectedValue);
-		}
-		else
-		{
-			AddError(Label + TEXT(": the fixture record is marked resolved but carries no value"));
-		}
-		++Asserted;
-	}
-
-	TestEqual(TEXT("every fixture record was asserted"), Asserted, Resolutions->Num());
-	TestTrue(TEXT("the fixture is not empty"), Resolutions->Num() > 0);
+	const int32 Compared = AssertResolutionTable(*this, Seed, EmptyOverlay, *Resolutions, TEXT("resolutions"));
+	TestEqual(TEXT("every data-assets-resolution.json record was compared"), Compared, Resolutions->Num());
+	TestTrue(TEXT("data-assets-resolution.json is not empty"), Resolutions->Num() > 0);
 
 	CleanUp();
 	return true;
 }
 
 // ============================================================================
-// Copy-on-read and the session overlay
+// The golden write sequence (§5) and the resolution table it leaves behind
+// ============================================================================
+
+namespace StoryFlowDataAssetTestHelpers
+{
+	/**
+	 * Turn a fixture write's JSON value into the variant a node arm would hand the store.
+	 *
+	 * Typed against the chain's DECLARATION, exactly as the executor will be: at runtime the
+	 * value arrives on a typed pin, so an entry list is a map and a bare string is whatever the
+	 * declaration says it is. Falls back to JSON-shape inference for a write the chain does not
+	 * declare — that write is going to be refused anyway, and its value never reaches storage.
+	 */
+	FStoryFlowVariant WriteValueFromJson(const StoryFlowDataAssets::FSeed& Seed, const FString& AssetId, const FString& VariableId, const TSharedPtr<FJsonValue>& Value)
+	{
+		const FStoryFlowVariable* Declaration = StoryFlowDataAssets::FindDeclaration(Seed, AssetId, VariableId);
+		if (Declaration && Declaration->Type == EStoryFlowVariableType::Map)
+		{
+			const TArray<TSharedPtr<FJsonValue>>* EntriesJson = nullptr;
+			TArray<FStoryFlowMapEntry> Entries;
+			if (Value->TryGetArray(EntriesJson))
+			{
+				for (const TSharedPtr<FJsonValue>& EntryValue : *EntriesJson)
+				{
+					const TSharedPtr<FJsonObject> EntryObject = EntryValue->AsObject();
+					if (!EntryObject.IsValid())
+					{
+						continue;
+					}
+					FStoryFlowMapEntry Entry;
+					if (Declaration->KeyType == EStoryFlowVariableType::Integer)
+					{
+						Entry.Key.SetInt(static_cast<int32>(EntryObject->GetNumberField(TEXT("key"))));
+					}
+					else
+					{
+						Entry.Key.SetString(EntryObject->GetStringField(TEXT("key")));
+					}
+					const TSharedPtr<FJsonValue> EntryValueField = EntryObject->TryGetField(TEXT("value"));
+					if (EntryValueField.IsValid() && Declaration->ValueType == EStoryFlowVariableType::Integer)
+					{
+						Entry.Value.SetInt(static_cast<int32>(EntryValueField->AsNumber()));
+					}
+					else if (EntryValueField.IsValid())
+					{
+						Entry.Value.SetString(EntryValueField->AsString());
+					}
+					Entries.Add(Entry);
+				}
+			}
+			FStoryFlowVariant MapValue;
+			MapValue.SetMap(Entries);
+			return MapValue;
+		}
+
+		FStoryFlowVariant Result;
+		switch (Value->Type)
+		{
+		case EJson::Boolean:
+			Result.SetBool(Value->AsBool());
+			break;
+		case EJson::Number:
+			if (Declaration && Declaration->Type == EStoryFlowVariableType::Float)
+			{
+				Result.SetFloat(static_cast<float>(Value->AsNumber()));
+			}
+			else
+			{
+				Result.SetInt(static_cast<int32>(Value->AsNumber()));
+			}
+			break;
+		case EJson::String:
+			Result.SetString(Value->AsString());
+			break;
+		case EJson::Array:
+		{
+			TArray<FStoryFlowVariant> Items;
+			for (const TSharedPtr<FJsonValue>& Item : Value->AsArray())
+			{
+				FStoryFlowVariant Element;
+				Element.SetString(Item->AsString());
+				Items.Add(Element);
+			}
+			Result.SetArray(Items);
+			break;
+		}
+		default:
+			break;
+		}
+		return Result;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetWritesFixtureTest,
+	"StoryFlow.DataAssets.Resolution.Writes",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowDataAssetWritesFixtureTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowDataAssetTestHelpers;
+
+	TSharedPtr<FJsonObject> WritesFixture = LoadGoldenFixture(TEXT("data-assets-writes.json"));
+	if (!TestTrue(TEXT("data-assets-writes.json parses"), WritesFixture.IsValid()))
+	{
+		return false;
+	}
+
+	StoryFlowDataAssets::FSeed Seed;
+	if (!LoadFixtureSeed(*this, Seed))
+	{
+		return false;
+	}
+
+	StoryFlowDataAssets::FOverlay Overlay;
+
+	// --- Replay the scripted writes in order ---
+	const TArray<TSharedPtr<FJsonValue>>* Writes = nullptr;
+	if (!TestTrue(TEXT("the fixture carries a writes array"), WritesFixture->TryGetArrayField(TEXT("writes"), Writes)))
+	{
+		CleanUp();
+		return false;
+	}
+
+	int32 Replayed = 0;
+	for (const TSharedPtr<FJsonValue>& WriteValue : *Writes)
+	{
+		const TSharedPtr<FJsonObject> Write = WriteValue->AsObject();
+		if (!Write.IsValid())
+		{
+			AddError(TEXT("writes: a record is not an object"));
+			continue;
+		}
+
+		const FString AssetId = Write->GetStringField(TEXT("assetId"));
+		const FString VariableId = Write->GetStringField(TEXT("variableId"));
+		const FString Expect = Write->GetStringField(TEXT("expect"));
+		FString Note;
+		Write->TryGetStringField(TEXT("note"), Note);
+
+		const FStoryFlowVariant Value = WriteValueFromJson(Seed, AssetId, VariableId, Write->TryGetField(TEXT("value")));
+		const bool bWritten = StoryFlowDataAssets::TrySet(Seed, Overlay, AssetId, VariableId, Value);
+
+		TestTrue(FString::Printf(TEXT("write %d is %s -- %s"), Replayed, *Expect, *Note), bWritten == (Expect == TEXT("written")));
+		++Replayed;
+	}
+	TestEqual(TEXT("every data-assets-writes.json write was replayed"), Replayed, Writes->Num());
+	TestTrue(TEXT("data-assets-writes.json is not empty"), Writes->Num() > 0);
+
+	// The refused write must not have reached the overlay at all — three assets were written to
+	TestEqual(TEXT("only the assets the fixture writes to have overlay entries"), Overlay.Num(), 3);
+
+	// --- Then the whole post-write resolution table ---
+	const TArray<TSharedPtr<FJsonValue>>* PostWrite = nullptr;
+	if (!TestTrue(TEXT("the fixture carries a postWriteResolutions array"), WritesFixture->TryGetArrayField(TEXT("postWriteResolutions"), PostWrite)))
+	{
+		CleanUp();
+		return false;
+	}
+
+	const int32 Compared = AssertResolutionTable(*this, Seed, Overlay, *PostWrite, TEXT("postWriteResolutions"));
+	TestEqual(TEXT("every data-assets-writes.json postWriteResolutions record was compared"), Compared, PostWrite->Num());
+	TestTrue(TEXT("postWriteResolutions is not empty"), PostWrite->Num() > 0);
+
+	// The fixture's `saveKey` is TASK U3's (the sparse dataAssets save key, contract §7) and is
+	// deliberately not read here.
+
+	CleanUp();
+	return true;
+}
+
+// ============================================================================
+// Store behaviour the fixtures cannot express: aliasing and reset
 // ============================================================================
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetOverlayTest,
@@ -363,29 +589,12 @@ bool FStoryFlowDataAssetOverlayTest::RunTest(const FString& Parameters)
 {
 	using namespace StoryFlowDataAssetTestHelpers;
 
-	const FString Base = TEXT("da_0a1b2c3d4e5f60718293a4b5c6d7e8f9");
-	const FString Child = TEXT("da_1b2c3d4e5f60718293a4b5c6d7e8f90a");
-	const FString GrandChild = TEXT("da_2c3d4e5f60718293a4b5c6d7e8f90a1b");
-	const FString Alive = TEXT("7f3a1c9e4b2d40518a6f0c3e7d1b5a29");
-	const FString Speed = TEXT("9c4f7e25a3b84a19bd60e2f7c81a5d03");   // declared AND overridden on the base
-	const FString Tags = TEXT("c58e2f13a0d64c9b871e3f05d2a76b48");
-	const FString Loot = TEXT("6d0f39a8b21e47c5903af8d61c72e504");
-	const FString Lore = TEXT("ae41b70c95d84e2fa3608c1b5f2d97e0");   // the category row
-	const FString Nowhere = TEXT("4c9a1e07b38f42d6a1057e2c93bd48f0");
-
-	const FString SeedPath = GoldenFixturePath(TEXT("data-assets-seed.json"));
-	FString SeedJson;
-	if (!TestTrue(TEXT("the seed fixture is readable"), !SeedPath.IsEmpty() && FFileHelper::LoadFileToString(SeedJson, *SeedPath)))
-	{
-		return false;
-	}
-
-	UEditorAssetLibrary::DeleteDirectory(TestRoot);
-
+	// Precedence and cascade are the WRITES FIXTURE's job (see the Writes test). What is left
+	// here is what a value-table fixture structurally cannot say: that reads and writes COPY,
+	// and that reset drops the overlay without touching the seed.
 	StoryFlowDataAssets::FSeed Seed;
-	if (!TestNotNull(TEXT("the fixture seed imports"), ImportSeedJson(SeedJson, Seed)))
+	if (!LoadFixtureSeed(*this, Seed))
 	{
-		CleanUp();
 		return false;
 	}
 
@@ -393,64 +602,26 @@ bool FStoryFlowDataAssetOverlayTest::RunTest(const FString& Parameters)
 
 	// --- Write refusals (contract §5) ---
 	TestFalse(TEXT("a write to an unknown asset is refused"),
-		StoryFlowDataAssets::Set(Seed, Overlay, TEXT("da_ff00ff00ff00ff00ff00ff00ff00ff00"), Alive, FStoryFlowVariant::FromBool(false)));
+		StoryFlowDataAssets::TrySet(Seed, Overlay, AbsentId, AliveId, FStoryFlowVariant::FromBool(false)));
 	TestFalse(TEXT("a write to an undeclared id is refused"),
-		StoryFlowDataAssets::Set(Seed, Overlay, Base, Nowhere, FStoryFlowVariant::FromBool(false)));
+		StoryFlowDataAssets::TrySet(Seed, Overlay, BaseId, NowhereId, FStoryFlowVariant::FromBool(false)));
 	TestFalse(TEXT("a write to a category row is refused"),
-		StoryFlowDataAssets::Set(Seed, Overlay, Base, Lore, FStoryFlowVariant::FromBool(false)));
+		StoryFlowDataAssets::TrySet(Seed, Overlay, BaseId, LoreId, FStoryFlowVariant::FromBool(false)));
 	TestEqual(TEXT("no refused write touched the overlay"), Overlay.Num(), 0);
-
-	// --- Set on the BASE cascades to every descendant that does not shadow it (§5) ---
-	TestTrue(TEXT("a write through the base lands"),
-		StoryFlowDataAssets::Set(Seed, Overlay, Base, Alive, FStoryFlowVariant::FromBool(false)));
-	TestFalse(TEXT("the base sees its own session write"), StoryFlowDataAssets::Resolve(Seed, Overlay, Base, Alive).GetBool(true));
-	TestFalse(TEXT("the child inherits the base's session write"), StoryFlowDataAssets::Resolve(Seed, Overlay, Child, Alive).GetBool(true));
-	TestFalse(TEXT("the grandchild inherits it too"), StoryFlowDataAssets::Resolve(Seed, Overlay, GrandChild, Alive).GetBool(true));
-
-	// --- A nearer level shadows it, and only for its own subtree (§4.2) ---
-	TestTrue(TEXT("a write through the child lands"),
-		StoryFlowDataAssets::Set(Seed, Overlay, Child, Alive, FStoryFlowVariant::FromBool(true)));
-	TestTrue(TEXT("the child sees its own write"), StoryFlowDataAssets::Resolve(Seed, Overlay, Child, Alive).GetBool(false));
-	TestTrue(TEXT("the grandchild sees the nearer write"), StoryFlowDataAssets::Resolve(Seed, Overlay, GrandChild, Alive).GetBool(false));
-	TestFalse(TEXT("the base is unaffected by its descendant's write"), StoryFlowDataAssets::Resolve(Seed, Overlay, Base, Alive).GetBool(true));
-
-	// --- WITHIN one level, the overlay entry beats that level's OWN file override (§4.1) ---
-	// speed is declared on the base at 1.5 AND overridden on the base itself at 2.25 (the
-	// root-level override contract §9.1 pins), so this is the only shape that separates the
-	// two Find calls in TryResolve: check the override first and the session write is lost,
-	// silently, for the rest of the game. Mirrors write #3 of data-assets-writes.json.
-	TestNearlyEqual(TEXT("the base's own file override is the pre-write value"),
-		StoryFlowDataAssets::Resolve(Seed, Overlay, Base, Speed).GetFloat(), 2.25f, 1.e-4f);
-	TestTrue(TEXT("a write over the base's own override lands"),
-		StoryFlowDataAssets::Set(Seed, Overlay, Base, Speed, FStoryFlowVariant::FromFloat(9.5f)));
-	TestNearlyEqual(TEXT("the session write beats the same level's file override"),
-		StoryFlowDataAssets::Resolve(Seed, Overlay, Base, Speed).GetFloat(), 9.5f, 1.e-4f);
-	TestNearlyEqual(TEXT("and it cascades to a descendant that does not shadow it"),
-		StoryFlowDataAssets::Resolve(Seed, Overlay, GrandChild, Speed).GetFloat(), 9.5f, 1.e-4f);
-
-	// --- An ancestor's OVERLAY entry beats a descendant's inherited file value (§4.2) ---
-	// tags is declared on the base and overridden on the child; a base-level session write must
-	// NOT win over the child's nearer file override.
-	TArray<FStoryFlowVariant> NewTags;
-	NewTags.Add(FStoryFlowVariant::FromString(TEXT("boss")));
-	FStoryFlowVariant TagsWrite;
-	TagsWrite.SetArray(NewTags);
-	TestTrue(TEXT("an array write through the base lands"), StoryFlowDataAssets::Set(Seed, Overlay, Base, Tags, TagsWrite));
-	TestEqual(TEXT("the base sees its array write"), StoryFlowDataAssets::Resolve(Seed, Overlay, Base, Tags).GetArray().Num(), 1);
-	TestEqual(TEXT("the child's nearer file override still wins"), StoryFlowDataAssets::Resolve(Seed, Overlay, Child, Tags).GetArray().Num(), 2);
 
 	// --- Copy on read: graph code must not reach the store through a read (§3) ---
 	{
-		FStoryFlowVariant Read = StoryFlowDataAssets::Resolve(Seed, Overlay, Child, Tags);
+		FStoryFlowVariant Read = StoryFlowDataAssets::Resolve(Seed, Overlay, ChildId, TagsId);
+		TestEqual(TEXT("the array resolves through the child's override"), Read.GetArray().Num(), 2);
 		Read.GetArrayMutable().Empty();
 		TestEqual(TEXT("mutating a read array leaves the seed alone"),
-			StoryFlowDataAssets::Resolve(Seed, Overlay, Child, Tags).GetArray().Num(), 2);
+			StoryFlowDataAssets::Resolve(Seed, Overlay, ChildId, TagsId).GetArray().Num(), 2);
 
-		FStoryFlowVariant ReadMap = StoryFlowDataAssets::Resolve(Seed, Overlay, Base, Loot);
+		FStoryFlowVariant ReadMap = StoryFlowDataAssets::Resolve(Seed, Overlay, BaseId, LootId);
 		TestEqual(TEXT("the map resolves with its authored entries"), ReadMap.GetMap().Num(), 2);
 		ReadMap.GetMapMutable().Empty();
 		TestEqual(TEXT("mutating a read map leaves the seed alone"),
-			StoryFlowDataAssets::Resolve(Seed, Overlay, Base, Loot).GetMap().Num(), 2);
+			StoryFlowDataAssets::Resolve(Seed, Overlay, BaseId, LootId).GetMap().Num(), 2);
 	}
 
 	// --- Deep copy on write: the caller's container must not alias the overlay (§5) ---
@@ -462,24 +633,102 @@ bool FStoryFlowDataAssetOverlayTest::RunTest(const FString& Parameters)
 		Entries.Add(Entry);
 		FStoryFlowVariant MapWrite;
 		MapWrite.SetMap(Entries);
-		TestTrue(TEXT("a map write through the base lands"), StoryFlowDataAssets::Set(Seed, Overlay, Base, Loot, MapWrite));
+		TestTrue(TEXT("a map write through the base lands"), StoryFlowDataAssets::TrySet(Seed, Overlay, BaseId, LootId, MapWrite));
 		MapWrite.GetMapMutable().Empty();
-		TestEqual(TEXT("mutating the written map afterwards leaves the overlay alone"),
-			StoryFlowDataAssets::Resolve(Seed, Overlay, Base, Loot).GetMap().Num(), 1);
-		// Map writes REPLACE the whole value, never merge
-		TestEqual(TEXT("the map write replaced the whole value"),
-			StoryFlowDataAssets::Resolve(Seed, Overlay, Base, Loot).GetMap()[0].Key.GetString(), TEXT("bones"));
-		// ... and the grandchild's own file override still shadows it
-		TestEqual(TEXT("the grandchild's map override still wins"),
-			StoryFlowDataAssets::Resolve(Seed, Overlay, GrandChild, Loot).GetMap().Num(), 2);
+		// Gates the indexed read below — an unguarded [0] on a regressed empty result aborts
+		// the suite instead of reporting the failure.
+		if (TestEqual(TEXT("mutating the written map afterwards leaves the overlay alone"),
+			StoryFlowDataAssets::Resolve(Seed, Overlay, BaseId, LootId).GetMap().Num(), 1))
+		{
+			// Map writes REPLACE the whole value, never merge
+			TestEqual(TEXT("the map write replaced the whole value"),
+				StoryFlowDataAssets::Resolve(Seed, Overlay, BaseId, LootId).GetMap()[0].Key.GetString(), TEXT("bones"));
+		}
 	}
 
 	// --- Reset clears the overlay ONLY (§3) ---
+	TestTrue(TEXT("a boolean write through the base lands"),
+		StoryFlowDataAssets::TrySet(Seed, Overlay, BaseId, AliveId, FStoryFlowVariant::FromBool(false)));
 	StoryFlowDataAssets::ResetOverlay(Overlay);
 	TestEqual(TEXT("reset empties the overlay"), Overlay.Num(), 0);
-	TestTrue(TEXT("the seed's own value is back after a reset"), StoryFlowDataAssets::Resolve(Seed, Overlay, Base, Alive).GetBool(false));
+	TestTrue(TEXT("the seed's own value is back after a reset"), StoryFlowDataAssets::Resolve(Seed, Overlay, BaseId, AliveId).GetBool(false));
+	TestEqual(TEXT("and so is the seed's map, untouched by the write above"),
+		StoryFlowDataAssets::Resolve(Seed, Overlay, BaseId, LootId).GetMap().Num(), 2);
 
 	CleanUp();
+	return true;
+}
+
+// ============================================================================
+// DeclMatches — the §6.1 snapshot rule, mirrored from the editor/runtime parity table
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetDeclMatchesTest,
+	"StoryFlow.DataAssets.Resolution.DeclMatches",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowDataAssetDeclMatchesTest::RunTest(const FString& Parameters)
+{
+	// Row for row, this is the editor repo's GOLDEN PAIR table in
+	// src/__tests__/runtime/data-asset-nodes.test.ts ("editor/runtime parity:
+	// dataAssetDeclMatches vs matchesSnapshot"), which runs one fixture list through the HTML
+	// runtime's dataAssetDeclMatches AND the editor's matchesSnapshot and requires they agree.
+	// This is the third copy of that rule, so it gets the same table: drift here is a binding
+	// the editor paints broken that Unreal keeps resolving, or one painted healthy that
+	// silently reads a type default.
+	struct FCase
+	{
+		const TCHAR* Name;
+		// The chain's declaration
+		EStoryFlowVariableType DeclType;
+		bool bDeclIsArray;
+		EStoryFlowVariableType DeclKeyType;
+		EStoryFlowVariableType DeclValueType;
+		// The accessor node's spawn-time snapshot
+		EStoryFlowVariableType SnapType;
+		bool bSnapIsArray;
+		EStoryFlowVariableType SnapKeyType;
+		EStoryFlowVariableType SnapValueType;
+		bool bAgree;
+	};
+
+	const EStoryFlowVariableType Str = EStoryFlowVariableType::String;
+	const EStoryFlowVariableType Int = EStoryFlowVariableType::Integer;
+	const EStoryFlowVariableType Map = EStoryFlowVariableType::Map;
+
+	const FCase Cases[] = {
+		{ TEXT("identical scalar"),                       Str, false, Str, Str,  Str, false, Str, Str,  true  },
+		{ TEXT("type moved"),                             Int, false, Str, Str,  Str, false, Str, Str,  false },
+		{ TEXT("identical array"),                        Str, true,  Str, Str,  Str, true,  Str, Str,  true  },
+		{ TEXT("scalar binding over an array declaration"), Str, true,  Str, Str,  Str, false, Str, Str,  false },
+		{ TEXT("array binding over a scalar declaration"), Str, false, Str, Str,  Str, true,  Str, Str,  false },
+		// The JS row "isArray false vs absent are the same thing" is structural in C++: bIsArray
+		// is a bool with no absent state, so an unset snapshot IS false. Kept as a row anyway so
+		// the two tables line up one for one.
+		{ TEXT("isArray false vs absent are the same thing"), Str, false, Str, Str,  Str, false, Str, Str,  true  },
+		{ TEXT("identical map"),                          Map, false, Str, Int,  Map, false, Str, Int,  true  },
+		{ TEXT("map value type moved"),                   Map, false, Str, Str,  Map, false, Str, Int,  false },
+		{ TEXT("map key type moved"),                     Map, false, Int, Int,  Map, false, Str, Int,  false },
+		// The K/V pair is baked into the MAP pin's handle id and means nothing off a scalar, so
+		// it must not be compared for one. This is the row that catches a DeclMatches which
+		// forgot to gate its K/V comparison on the map type.
+		{ TEXT("K/V ignored off a non-map binding"),       Str, false, Int, Int,  Str, false, Str, Str,  true  },
+	};
+
+	for (const FCase& Case : Cases)
+	{
+		FStoryFlowVariable Declaration;
+		Declaration.Id = TEXT("v");
+		Declaration.Type = Case.DeclType;
+		Declaration.bIsArray = Case.bDeclIsArray;
+		Declaration.KeyType = Case.DeclKeyType;
+		Declaration.ValueType = Case.DeclValueType;
+
+		const bool bMatches = StoryFlowDataAssets::DeclMatches(Declaration, Case.SnapType, Case.bSnapIsArray, Case.SnapKeyType, Case.SnapValueType);
+		TestTrue(FString::Printf(TEXT("declMatches: %s (expected %s)"), Case.Name, Case.bAgree ? TEXT("match") : TEXT("stale")),
+			bMatches == Case.bAgree);
+	}
+
 	return true;
 }
 
@@ -574,21 +823,27 @@ bool FStoryFlowDataAssetChainGuardTest::RunTest(const FString& Parameters)
 
 namespace StoryFlowDataAssetTestHelpers
 {
+	const TCHAR* RoundTripBaseId = TEXT("da_aa000000000000000000000000000001");
+	const TCHAR* RoundTripChildId = TEXT("da_aa000000000000000000000000000002");
+
 	/**
-	 * The inline seed the round-trip test imports. `BaseHpType` is the BASE's declaration of
-	 * v_hp, which the CHILD only overrides — moving it is how the test proves a parent's type
-	 * change dirties a child whose own JSON never moved.
+	 * The inline seed the round-trip test imports. The BASE_HP_TYPE token is the BASE's
+	 * declaration of v_hp, which the CHILD only overrides — moving it is how the test proves a
+	 * parent's type change dirties a child whose own JSON never moved.
+	 *
+	 * Token replacement rather than FString::Printf: this is a JSON fixture that will grow, and
+	 * a future percent sign anywhere in it would silently corrupt a Printf-built string.
 	 */
 	FString RoundTripSeedJson(const TCHAR* BaseHpType)
 	{
-		return FString::Printf(TEXT(R"JSON(
+		const FString Template = TEXT(R"JSON(
 		{ "dataAssets": {
 			"da_aa000000000000000000000000000001": {
 				"id": "da_aa000000000000000000000000000001",
 				"name": "RoundTripBase",
 				"parent": null,
 				"variables": [
-					{ "id": "v_hp", "name": "hp", "type": "%s", "value": 10 },
+					{ "id": "v_hp", "name": "hp", "type": "BASE_HP_TYPE", "value": 10 },
 					{ "id": "v_tags", "name": "tags", "type": "string", "isArray": true, "value": [ "mob", "melee" ] },
 					{ "id": "v_loot", "name": "loot", "type": "map", "keyType": "string", "valueType": "integer",
 					  "value": [ { "key": "gold", "value": 1 }, { "key": "gems", "value": 2 } ] },
@@ -608,7 +863,8 @@ namespace StoryFlowDataAssetTestHelpers
 				}
 			}
 		} }
-		)JSON"), BaseHpType);
+		)JSON");
+		return Template.Replace(TEXT("BASE_HP_TYPE"), BaseHpType, ESearchCase::CaseSensitive);
 	}
 
 	/**
@@ -624,6 +880,9 @@ namespace StoryFlowDataAssetTestHelpers
 	 *
 	 * The target starts with empty non-UPROPERTY containers by construction, so anything that
 	 * comes back came back through the blob.
+	 *
+	 * The returned object is rooted in nothing — the CALLER must keep it alive across any
+	 * assertion that could tick GC, with FGCObjectScopeGuard.
 	 */
 	UStoryFlowDataAssetAsset* SerializeAndPostLoad(UStoryFlowDataAssetAsset* Source)
 	{
@@ -645,9 +904,6 @@ bool FStoryFlowDataAssetImportRoundTripTest::RunTest(const FString& Parameters)
 {
 	using namespace StoryFlowDataAssetTestHelpers;
 
-	const FString BaseId = TEXT("da_aa000000000000000000000000000001");
-	const FString ChildId = TEXT("da_aa000000000000000000000000000002");
-
 	UEditorAssetLibrary::DeleteDirectory(TestRoot);
 
 	StoryFlowDataAssets::FSeed Seed;
@@ -663,7 +919,7 @@ bool FStoryFlowDataAssetImportRoundTripTest::RunTest(const FString& Parameters)
 	// The skip-list edit: data-assets.json must never be swept up as a script
 	TestFalse(TEXT("data-assets.json was not imported as a script"), Project->Scripts.Contains(TEXT("data-assets")));
 
-	UStoryFlowDataAssetAsset* const* BaseAsset = Project->DataAssets.Find(BaseId);
+	UStoryFlowDataAssetAsset* const* BaseAsset = Project->DataAssets.Find(RoundTripBaseId);
 	if (TestNotNull(TEXT("the base data asset exists"), BaseAsset ? *BaseAsset : nullptr))
 	{
 		TestEqual(TEXT("the base keeps its display name"), (*BaseAsset)->Name, TEXT("RoundTripBase"));
@@ -671,10 +927,10 @@ bool FStoryFlowDataAssetImportRoundTripTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("the category row is skipped, the other three survive"), (*BaseAsset)->Variables.Num(), 3);
 	}
 
-	UStoryFlowDataAssetAsset* const* ChildAsset = Project->DataAssets.Find(ChildId);
+	UStoryFlowDataAssetAsset* const* ChildAsset = Project->DataAssets.Find(RoundTripChildId);
 	if (TestNotNull(TEXT("the child data asset exists"), ChildAsset ? *ChildAsset : nullptr))
 	{
-		TestEqual(TEXT("the child keeps its parent link"), (*ChildAsset)->Parent, BaseId);
+		TestEqual(TEXT("the child keeps its parent link"), (*ChildAsset)->Parent, FString(RoundTripBaseId));
 		// The map override is typed against the ANCESTOR's declaration, which is the whole
 		// reason import runs two passes — a one-pass import would leave it an untyped array
 		if (const FStoryFlowVariant* LootOverride = (*ChildAsset)->Overrides.Find(TEXT("v_loot")))
@@ -689,16 +945,16 @@ bool FStoryFlowDataAssetImportRoundTripTest::RunTest(const FString& Parameters)
 
 	// Resolution through the imported assets, with entry order preserved
 	const StoryFlowDataAssets::FOverlay Overlay;
-	TestEqual(TEXT("the child sees its own hp override"), StoryFlowDataAssets::Resolve(Seed, Overlay, ChildId, TEXT("v_hp")).GetInt(), 25);
-	TestEqual(TEXT("the base keeps its declared hp"), StoryFlowDataAssets::Resolve(Seed, Overlay, BaseId, TEXT("v_hp")).GetInt(), 10);
-	const FStoryFlowVariant ChildLoot = StoryFlowDataAssets::Resolve(Seed, Overlay, ChildId, TEXT("v_loot"));
+	TestEqual(TEXT("the child sees its own hp override"), StoryFlowDataAssets::Resolve(Seed, Overlay, RoundTripChildId, TEXT("v_hp")).GetInt(), 25);
+	TestEqual(TEXT("the base keeps its declared hp"), StoryFlowDataAssets::Resolve(Seed, Overlay, RoundTripBaseId, TEXT("v_hp")).GetInt(), 10);
+	const FStoryFlowVariant ChildLoot = StoryFlowDataAssets::Resolve(Seed, Overlay, RoundTripChildId, TEXT("v_loot"));
 	if (TestEqual(TEXT("the overridden map has both entries"), ChildLoot.GetMap().Num(), 2))
 	{
 		TestEqual(TEXT("the override's authored key order survives"), ChildLoot.GetMap()[0].Key.GetString(), TEXT("gems"));
 		TestEqual(TEXT("the override's second key too"), ChildLoot.GetMap()[1].Key.GetString(), TEXT("gold"));
 		TestEqual(TEXT("the override's values survive"), ChildLoot.GetMap()[0].Value.GetInt(), 9);
 	}
-	TestFalse(TEXT("the category row never resolves"), StoryFlowDataAssets::Resolve(Seed, Overlay, BaseId, TEXT("v_lore")).IsValid());
+	TestFalse(TEXT("the category row never resolves"), StoryFlowDataAssets::Resolve(Seed, Overlay, RoundTripBaseId, TEXT("v_lore")).IsValid());
 
 	// ------------------------------------------------------------------
 	// The packed blobs survive a real save and load
@@ -710,6 +966,8 @@ bool FStoryFlowDataAssetImportRoundTripTest::RunTest(const FString& Parameters)
 	{
 		// The OVERRIDE blob (PackVariantsForSerialization / UnpackVariantsFromSerialization)
 		UStoryFlowDataAssetAsset* Reloaded = SerializeAndPostLoad(*ChildAsset);
+		FGCObjectScopeGuard ReloadedGuard(Reloaded);
+
 		TestEqual(TEXT("the reloaded child keeps its override keys"), Reloaded->Overrides.Num(), 3);
 
 		if (const FStoryFlowVariant* Loot = Reloaded->Overrides.Find(TEXT("v_loot")))
@@ -750,6 +1008,8 @@ bool FStoryFlowDataAssetImportRoundTripTest::RunTest(const FString& Parameters)
 	{
 		// The DECLARATION blob (the new TArray overload of Pack/UnpackVariablesForSerialization)
 		UStoryFlowDataAssetAsset* Reloaded = SerializeAndPostLoad(*BaseAsset);
+		FGCObjectScopeGuard ReloadedGuard(Reloaded);
+
 		if (TestEqual(TEXT("the reloaded base keeps its declarations in order"), Reloaded->Variables.Num(), 3))
 		{
 			TestEqual(TEXT("declaration order survives save and load"), Reloaded->Variables[2].Id, TEXT("v_loot"));
@@ -789,7 +1049,7 @@ bool FStoryFlowDataAssetImportRoundTripTest::RunTest(const FString& Parameters)
 	UStoryFlowProjectAsset* Retyped = ImportSeedJson(RoundTripSeedJson(TEXT("float")), RetypedSeed);
 	if (TestNotNull(TEXT("the re-typed seed imports"), Retyped))
 	{
-		UStoryFlowDataAssetAsset* const* RetypedChild = Retyped->DataAssets.Find(ChildId);
+		UStoryFlowDataAssetAsset* const* RetypedChild = Retyped->DataAssets.Find(RoundTripChildId);
 		if (TestNotNull(TEXT("the child survives the parent's type change"), RetypedChild ? *RetypedChild : nullptr))
 		{
 			if (const FStoryFlowVariant* Hp = (*RetypedChild)->Overrides.Find(TEXT("v_hp")))
@@ -805,7 +1065,88 @@ bool FStoryFlowDataAssetImportRoundTripTest::RunTest(const FString& Parameters)
 			}
 		}
 		TestNearlyEqual(TEXT("the re-typed chain resolves as a float"),
-			StoryFlowDataAssets::Resolve(RetypedSeed, Overlay, ChildId, TEXT("v_hp")).GetFloat(), 25.0f, 1.e-4f);
+			StoryFlowDataAssets::Resolve(RetypedSeed, Overlay, RoundTripChildId, TEXT("v_hp")).GetFloat(), 25.0f, 1.e-4f);
+	}
+
+	CleanUp();
+	return true;
+}
+
+// ============================================================================
+// A malformed override the seed cannot express
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetMalformedOverrideTest,
+	"StoryFlow.DataAssets.Resolution.MalformedOverride",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowDataAssetMalformedOverrideTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowDataAssetTestHelpers;
+
+	// A map-declared variable overridden with a bare number. The collector never emits this, so
+	// it can only arrive from a legacy or hand-edited export — but trusting the seed cannot mean
+	// storing a value that is not one. The override must be DROPPED, leaving the declared
+	// default to resolve, because the alternative (an unset variant in the overrides table)
+	// would make TryResolve answer true with nothing usable in it, and reach the accessor arms
+	// as a silent type default.
+	const TCHAR* SeedJson = TEXT(R"JSON(
+	{ "dataAssets": {
+		"da_bb000000000000000000000000000001": {
+			"id": "da_bb000000000000000000000000000001",
+			"name": "MalformedBase",
+			"parent": null,
+			"variables": [
+				{ "id": "v_loot", "name": "loot", "type": "map", "keyType": "string", "valueType": "integer",
+				  "value": [ { "key": "gold", "value": 1 } ] }
+			],
+			"overrides": {}
+		},
+		"da_bb000000000000000000000000000002": {
+			"id": "da_bb000000000000000000000000000002",
+			"name": "MalformedChild",
+			"parent": "da_bb000000000000000000000000000001",
+			"variables": [],
+			"overrides": { "v_loot": 5 }
+		}
+	} }
+	)JSON");
+
+	UEditorAssetLibrary::DeleteDirectory(TestRoot);
+
+	StoryFlowDataAssets::FSeed Seed;
+	UStoryFlowProjectAsset* Project = ImportSeedJson(SeedJson, Seed);
+	if (!TestNotNull(TEXT("the malformed seed still imports"), Project))
+	{
+		CleanUp();
+		return false;
+	}
+
+	const FString ChildAssetId = TEXT("da_bb000000000000000000000000000002");
+	if (UStoryFlowDataAssetAsset* const* Child = Project->DataAssets.Find(ChildAssetId))
+	{
+		TestFalse(TEXT("the unusable map override is not stored at all"), (*Child)->Overrides.Contains(TEXT("v_loot")));
+		TestEqual(TEXT("and nothing else was stored in its place"), (*Child)->Overrides.Num(), 0);
+	}
+	else
+	{
+		AddError(TEXT("the malformed child asset is missing"));
+	}
+
+	// Resolution falls through to the base's declared default, intact
+	const StoryFlowDataAssets::FOverlay Overlay;
+	FStoryFlowVariant Resolved;
+	if (TestTrue(TEXT("the variable still resolves through the chain"),
+		StoryFlowDataAssets::TryResolve(Seed, Overlay, ChildAssetId, TEXT("v_loot"), Resolved)))
+	{
+		TestTrue(TEXT("a successful resolve always yields a usable value"), Resolved.IsValid());
+		TestTrue(TEXT("and it is the declared map, not an unset variant"), Resolved.IsMap());
+		// The count assertion GATES the indexed read: when this regresses the variant is empty,
+		// and an unguarded [0] would abort the whole suite instead of reporting the failure.
+		if (TestEqual(TEXT("the declared default's entries come through"), Resolved.GetMap().Num(), 1))
+		{
+			TestEqual(TEXT("the declared default's key comes through"), Resolved.GetMap()[0].Key.GetString(), TEXT("gold"));
+		}
 	}
 
 	CleanUp();

@@ -167,7 +167,7 @@ namespace StoryFlowDataAssets
 		return bDeclared;
 	}
 
-	bool Set(const FSeed& Seed, FOverlay& Overlay, const FString& AssetId, const FString& VariableId, const FStoryFlowVariant& Value)
+	bool TrySet(const FSeed& Seed, FOverlay& Overlay, const FString& AssetId, const FString& VariableId, const FStoryFlowVariant& Value)
 	{
 		if (!HasAsset(Seed, AssetId))
 		{

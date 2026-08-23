@@ -73,6 +73,16 @@ public:
 	static UStoryFlowScriptAsset* ImportScriptFromJson(const TSharedPtr<FJsonObject>& JsonObject, const FString& ScriptPath, const FString& ContentPath, bool* bOutSkippedUnchanged = nullptr, bool bDeferSave = false);
 
 private:
+	// === Import Sections ===
+
+	/**
+	 * Import the export's Data Asset (.sfd) seed into per-asset assets under
+	 * ContentPath/DataAssets, keyed onto the project by assetId (engine contract §2.1).
+	 * Appends the seed JSON to InOutProjectHashParts so the project's skip hash covers it,
+	 * exactly as the characters and global-variables sections do.
+	 */
+	static void ImportDataAssets(const FString& BuildDirectory, const FString& ContentPath, UStoryFlowProjectAsset* ProjectAsset, TArray<FString>& InOutProjectHashParts);
+
 	// === Parsing Helpers ===
 
 	/** Parse nodes from JSON object */

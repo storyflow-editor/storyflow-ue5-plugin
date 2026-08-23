@@ -1193,6 +1193,10 @@ struct STORYFLOWRUNTIME_API FStoryFlowCharacterDef
  *
  * Unlike the character twin, this one is NEVER MUTATED — contract §3: session writes land in
  * the overlay, and "the seed is never mutated by anything, ever".
+ *
+ * Not BlueprintType: nothing exposes the seed to Blueprint. Blueprint reads and writes go
+ * through the accessor node arms and the typed component API, both of which resolve through
+ * the chain — handing out a raw seed level would hand out pre-inheritance values.
  */
 USTRUCT()
 struct STORYFLOWRUNTIME_API FStoryFlowDataAssetDef

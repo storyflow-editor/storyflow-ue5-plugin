@@ -28,7 +28,7 @@ void UStoryFlowSubsystem::Deinitialize()
 	GlobalVariables.Empty();
 	RuntimeCharacters.Empty();
 	DataAssetSeed.Empty();
-	DataAssetOverlay.Empty();
+	StoryFlowDataAssets::ResetOverlay(DataAssetOverlay);
 	UsedOnceOnlyOptions.Empty();
 
 	Super::Deinitialize();
@@ -75,7 +75,7 @@ void UStoryFlowSubsystem::SetProject(UStoryFlowProjectAsset* NewProject)
 		GlobalVariables.Empty();
 		RuntimeCharacters.Empty();
 		DataAssetSeed.Empty();
-		DataAssetOverlay.Empty();
+		StoryFlowDataAssets::ResetOverlay(DataAssetOverlay);
 		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Project cleared"));
 	}
 }
@@ -140,7 +140,7 @@ void UStoryFlowSubsystem::ResetDataAssetSeed()
 {
 	// Contract §3: init installs the seed AND clears the overlay. Reseeding without clearing
 	// would leave session writes pointing at a table that no longer describes them.
-	DataAssetOverlay.Empty();
+	StoryFlowDataAssets::ResetOverlay(DataAssetOverlay);
 
 	if (!ProjectAsset)
 	{
@@ -276,6 +276,13 @@ bool UStoryFlowSubsystem::LoadFromSlot(const FString& SlotName, int32 UserIndex)
 		UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Failed to parse save data from slot '%s'"), *SlotName);
 		return false;
 	}
+
+	// Contract §7 is "load = REPLACE, not merge", and an absent or malformed dataAssets key
+	// clears — so a save that carries none correctly restores seed state. Until Task U3 adds
+	// the sparse persistence, every save is such a save, and clearing here is the whole of
+	// that rule that applies. Leaving the overlay alone would layer the pre-load session's
+	// writes over freshly loaded state, which is the one outcome §7 names as wrong.
+	StoryFlowDataAssets::ResetOverlay(DataAssetOverlay);
 
 	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Loaded from slot '%s' (%d globals, %d characters, %d once-only)"),
 		*SlotName, GlobalVariables.Num(), RuntimeCharacters.Num(), UsedOnceOnlyOptions.Num());

@@ -224,6 +224,232 @@ UStoryFlowScriptAsset* UStoryFlowImporter::ImportScript(const FString& JsonPath,
 	return ImportScriptFromJson(ScriptJson, ScriptPath, ContentPath);
 }
 
+/**
+ * Its own function rather than another inline block in ImportProjectFromJson: the two-pass
+ * shape below is the only part of the import that has to resolve data ACROSS entries, and it
+ * reads as an algorithm rather than as one more section of a long procedure.
+ */
+void UStoryFlowImporter::ImportDataAssets(const FString& BuildDirectory, const FString& ContentPath, UStoryFlowProjectAsset* ProjectAsset, TArray<FString>& InOutProjectHashParts)
+{
+	// Load Data Assets (.sfd seed) — engine contract §2.1. The seed is TRUSTED: the editor's
+	// export collector already stripped orphan and stale overrides and collapsed duplicate map
+	// keys, so nothing below re-validates or re-sanitizes it (a plugin that "fixes" the seed
+	// diverges from the other three runtimes).
+	FString DataAssetsPath = FPaths::Combine(BuildDirectory, TEXT("data-assets.json"));
+	if (FPaths::FileExists(DataAssetsPath))
+	{
+		TSharedPtr<FJsonObject> DataAssetsJson = LoadJsonFile(DataAssetsPath);
+		if (DataAssetsJson.IsValid())
+		{
+			InOutProjectHashParts.Add(SerializeJsonCondensed(DataAssetsJson.ToSharedRef()));
+
+			if (DataAssetsJson->HasField(TEXT("dataAssets")))
+			{
+				TSharedPtr<FJsonObject> AssetsObject = DataAssetsJson->GetObjectField(TEXT("dataAssets"));
+				FString DataAssetContentPath = FPaths::Combine(ContentPath, TEXT("DataAssets"));
+
+				// TWO PASSES, because an OVERRIDE value carries no type of its own: a map
+				// override is an ordered entry list and an enum override is a bare string, and
+				// telling either from a plain array/string needs the DECLARATION — which the
+				// contract puts on whichever chain level declares the id, root-most winning
+				// (§4.3). So pass 1 reads every level's declarations into an in-memory seed,
+				// and pass 2 resolves each override against that seed before parsing its value.
+				// One pass could not do it: an ancestor may be parsed after its descendant.
+				StoryFlowDataAssets::FSeed ParsedSeed;
+
+				// Pass 1 — declarations, in the seed's authored order.
+				for (const auto& AssetPair : AssetsObject->Values)
+				{
+					TSharedPtr<FJsonObject> AssetObject = AssetPair.Value->AsObject();
+					if (!AssetObject.IsValid())
+					{
+						continue;
+					}
+
+					FStoryFlowDataAssetDef Def;
+					// The MAP KEY is the authoritative id everywhere in the contract (pills bind
+					// it, the resolver walks it, saves persist it); the entry's own "id" field is
+					// the same value.
+					Def.Id = AssetPair.Key;
+					if (AssetObject->HasField(TEXT("name")))
+					{
+						Def.Name = AssetObject->GetStringField(TEXT("name"));
+					}
+					// A null parent is a ROOT asset — TryGetStringField leaves Parent empty for
+					// both a JSON null and an absent field, which is the same thing here.
+					AssetObject->TryGetStringField(TEXT("parent"), Def.Parent);
+
+					const TArray<TSharedPtr<FJsonValue>>* VariablesArray = nullptr;
+					if (AssetObject->TryGetArrayField(TEXT("variables"), VariablesArray))
+					{
+						for (const TSharedPtr<FJsonValue>& VariableValue : *VariablesArray)
+						{
+							TSharedPtr<FJsonObject> VariableObject = VariableValue->AsObject();
+							if (!VariableObject.IsValid())
+							{
+								continue;
+							}
+							FString VariableId;
+							if (!VariableObject->TryGetStringField(TEXT("id"), VariableId) || VariableId.IsEmpty())
+							{
+								continue;
+							}
+							// CATEGORY rows are section headers with no value and are never
+							// resolved (contract §2.1) — VariableTypeFromString already answers
+							// None for them, and skipping here keeps them out of every place
+							// variables are enumerated. ParseVariable would otherwise leave the
+							// row at the enum's default type and make it look declarable.
+							FString TypeString;
+							VariableObject->TryGetStringField(TEXT("type"), TypeString);
+							if (VariableTypeFromString(TypeString) == EStoryFlowVariableType::None)
+							{
+								if (TypeString != TEXT("category"))
+								{
+									// category is the one type that is MEANT to fall out here. Anything
+									// else reaching this branch is a type the editor added and this
+									// plugin does not know yet, and it would otherwise vanish from the
+									// seed without a trace.
+									UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Data Asset '%s' declares '%s' with unsupported type '%s' - skipping the row"), *AssetPair.Key, *VariableId, *TypeString);
+								}
+								continue;
+							}
+							Def.Variables.Add(ParseVariable(VariableId, VariableObject));
+						}
+					}
+
+					ParsedSeed.Add(AssetPair.Key, MoveTemp(Def));
+				}
+
+				// Pass 2 — overrides against the now-complete chain, then the assets themselves.
+				for (const auto& AssetPair : AssetsObject->Values)
+				{
+					TSharedPtr<FJsonObject> AssetObject = AssetPair.Value->AsObject();
+					FStoryFlowDataAssetDef* Def = ParsedSeed.Find(AssetPair.Key);
+					if (!AssetObject.IsValid() || !Def)
+					{
+						continue;
+					}
+
+					// Every override's TYPE comes from an ANCESTOR's declaration, so the asset's
+					// own JSON is not the whole of its input: a base that flips a declaration
+					// from enum to string (or integer to float — the collector sanitizes neither
+					// across levels) leaves this asset's JSON byte-identical while changing how
+					// its override must be parsed. Collect the declarations each override
+					// actually resolved against and fold them into the skip hash below, so the
+					// parent's change dirties the child. Same spirit as the characters block's
+					// bPortraitOutstanding: a skip must never certify a payload that something
+					// else in this same import invalidated.
+					TArray<FString> OverrideDeclarationParts;
+
+					const TSharedPtr<FJsonObject>* OverridesObject = nullptr;
+					if (AssetObject->TryGetObjectField(TEXT("overrides"), OverridesObject))
+					{
+						for (const auto& OverridePair : (*OverridesObject)->Values)
+						{
+							const FStoryFlowVariable* Declaration = StoryFlowDataAssets::FindDeclaration(ParsedSeed, AssetPair.Key, OverridePair.Key);
+							if (!Declaration)
+							{
+								// The collector strips orphan overrides, so this is a legacy or
+								// hand-edited export. Trusting the seed means not repairing it —
+								// but an untyped value cannot be parsed, and the resolver ignores
+								// an override no level declares anyway (§4.3), so drop it.
+								UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Data Asset '%s' overrides '%s', which nothing on its chain declares - ignoring"), *AssetPair.Key, *OverridePair.Key);
+								continue;
+							}
+
+							// Type and the map K/V steer the parse below; isArray steers nothing
+							// there but is a clause of the §6.1 declMatches gate the accessors
+							// run, so a stale one degrades a live node just as loudly. All four
+							// therefore belong in the hash. An orphan override contributes no
+							// part at all, so an ancestor that later declares the id also
+							// dirties this asset.
+							OverrideDeclarationParts.Add(FString::Printf(TEXT("decl:%s:%d:%d:%d:%d"),
+								*OverridePair.Key,
+								static_cast<int32>(Declaration->Type),
+								Declaration->bIsArray ? 1 : 0,
+								static_cast<int32>(Declaration->KeyType),
+								static_cast<int32>(Declaration->ValueType)));
+
+							FStoryFlowVariant OverrideValue;
+							if (Declaration->Type == EStoryFlowVariableType::Map)
+							{
+								// Map values are ORDERED ENTRY LISTS in every direction
+								// (contract §2.1), overrides included
+								const TArray<TSharedPtr<FJsonValue>>* EntriesArray = nullptr;
+								if (!OverridePair.Value->TryGetArray(EntriesArray))
+								{
+									// Not an entry list, so there is no map here to store. DROP it
+									// rather than record an unset variant: the store's contract is
+									// that a successful resolve yields a usable value, and an unset
+									// one would reach the accessor arms as a silent type default
+									// with nothing to distinguish it from a real read. Dropping
+									// instead falls through to the declared default, which is what
+									// an override the seed cannot express should do. Same posture
+									// as the orphan drop above.
+									UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Data Asset '%s' overrides map '%s' with a value that is not an entry list - ignoring"), *AssetPair.Key, *OverridePair.Key);
+									continue;
+								}
+								TArray<FStoryFlowMapEntry> Entries;
+								ParseMapEntries(*EntriesArray, Declaration->KeyType, Declaration->ValueType, Declaration->Name.IsEmpty() ? Declaration->Id : Declaration->Name, Entries);
+								OverrideValue.SetMap(Entries);
+							}
+							else
+							{
+								OverrideValue = ParseVariant(OverridePair.Value, Declaration->Type);
+							}
+							Def->Overrides.Add(OverridePair.Key, MoveTemp(OverrideValue));
+						}
+					}
+
+					// The asset is named by ID, not by display name: ids are unique and stable
+					// across re-imports while names are neither (two .sfd files in different
+					// folders can share a filename base, and the seed carries no path). A
+					// name-derived asset name would silently make two ids share one UObject.
+					UStoryFlowDataAssetAsset* DataAsset = CreateDataAssetAsset(DataAssetContentPath, NormalizeAssetPath(AssetPair.Key));
+					if (!DataAsset)
+					{
+						continue;
+					}
+
+					// Skip unchanged data assets (same pattern as scripts and characters), with
+					// the resolved ancestor declarations folded in. Sorted case-sensitively for
+					// the reason the project hash is: JSON object order is not map order, and an
+					// unstable part order would change the hash between identical runs.
+					OverrideDeclarationParts.Sort([](const FString& A, const FString& B) { return A.Compare(B, ESearchCase::CaseSensitive) < 0; });
+					TArray<FString> DataAssetHashParts;
+					DataAssetHashParts.Add(SerializeJsonCondensed(AssetObject.ToSharedRef()));
+					DataAssetHashParts.Add(AssetPair.Key);
+					DataAssetHashParts.Append(OverrideDeclarationParts);
+					const FString DataAssetSourceHash = HashImportSource(DataAssetHashParts);
+					if (DataAsset->ImportedSourceHash == DataAssetSourceHash && PackageFileExists(DataAsset->GetOutermost()))
+					{
+						DataAsset->GetOutermost()->SetDirtyFlag(false);
+						ProjectAsset->DataAssets.Add(AssetPair.Key, DataAsset);
+						UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Data Asset '%s' unchanged since last import, skipping save"), *AssetPair.Key);
+						continue;
+					}
+
+					// Clear containers for in-place update
+					DataAsset->Variables.Empty();
+					DataAsset->Overrides.Empty();
+
+					DataAsset->AssetId = Def->Id;
+					DataAsset->Name = Def->Name;
+					DataAsset->Parent = Def->Parent;
+					DataAsset->Variables = Def->Variables;
+					DataAsset->Overrides = Def->Overrides;
+
+					DataAsset->ImportedSourceHash = DataAssetSourceHash;
+					SaveAssetRecordingHash(DataAsset->GetOutermost(), DataAsset, DataAsset->ImportedSourceHash);
+
+					ProjectAsset->DataAssets.Add(AssetPair.Key, DataAsset);
+					UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Created data asset '%s' at %s"), *AssetPair.Key, *DataAsset->GetPathName());
+				}
+			}
+		}
+	}
+}
+
 UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedPtr<FJsonObject>& JsonObject, const FString& BuildDirectory, const FString& ContentPath)
 {
 	// Create or reuse project asset
@@ -428,203 +654,8 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 		}
 	}
 
-	// Load Data Assets (.sfd seed) — engine contract §2.1. The seed is TRUSTED: the editor's
-	// export collector already stripped orphan and stale overrides and collapsed duplicate map
-	// keys, so nothing below re-validates or re-sanitizes it (a plugin that "fixes" the seed
-	// diverges from the other three runtimes).
-	FString DataAssetsPath = FPaths::Combine(BuildDirectory, TEXT("data-assets.json"));
-	if (FPaths::FileExists(DataAssetsPath))
-	{
-		TSharedPtr<FJsonObject> DataAssetsJson = LoadJsonFile(DataAssetsPath);
-		if (DataAssetsJson.IsValid())
-		{
-			ProjectHashParts.Add(SerializeJsonCondensed(DataAssetsJson.ToSharedRef()));
-
-			if (DataAssetsJson->HasField(TEXT("dataAssets")))
-			{
-				TSharedPtr<FJsonObject> AssetsObject = DataAssetsJson->GetObjectField(TEXT("dataAssets"));
-				FString DataAssetContentPath = FPaths::Combine(ContentPath, TEXT("DataAssets"));
-
-				// TWO PASSES, because an OVERRIDE value carries no type of its own: a map
-				// override is an ordered entry list and an enum override is a bare string, and
-				// telling either from a plain array/string needs the DECLARATION — which the
-				// contract puts on whichever chain level declares the id, root-most winning
-				// (§4.3). So pass 1 reads every level's declarations into an in-memory seed,
-				// and pass 2 resolves each override against that seed before parsing its value.
-				// One pass could not do it: an ancestor may be parsed after its descendant.
-				StoryFlowDataAssets::FSeed ParsedSeed;
-
-				// Pass 1 — declarations, in the seed's authored order.
-				for (const auto& AssetPair : AssetsObject->Values)
-				{
-					TSharedPtr<FJsonObject> AssetObject = AssetPair.Value->AsObject();
-					if (!AssetObject.IsValid())
-					{
-						continue;
-					}
-
-					FStoryFlowDataAssetDef Def;
-					// The MAP KEY is the authoritative id everywhere in the contract (pills bind
-					// it, the resolver walks it, saves persist it); the entry's own "id" field is
-					// the same value.
-					Def.Id = AssetPair.Key;
-					if (AssetObject->HasField(TEXT("name")))
-					{
-						Def.Name = AssetObject->GetStringField(TEXT("name"));
-					}
-					// A null parent is a ROOT asset — TryGetStringField leaves Parent empty for
-					// both a JSON null and an absent field, which is the same thing here.
-					AssetObject->TryGetStringField(TEXT("parent"), Def.Parent);
-
-					const TArray<TSharedPtr<FJsonValue>>* VariablesArray = nullptr;
-					if (AssetObject->TryGetArrayField(TEXT("variables"), VariablesArray))
-					{
-						for (const TSharedPtr<FJsonValue>& VariableValue : *VariablesArray)
-						{
-							TSharedPtr<FJsonObject> VariableObject = VariableValue->AsObject();
-							if (!VariableObject.IsValid())
-							{
-								continue;
-							}
-							FString VariableId;
-							if (!VariableObject->TryGetStringField(TEXT("id"), VariableId) || VariableId.IsEmpty())
-							{
-								continue;
-							}
-							// CATEGORY rows are section headers with no value and are never
-							// resolved (contract §2.1) — VariableTypeFromString already answers
-							// None for them, and skipping here keeps them out of every place
-							// variables are enumerated. ParseVariable would otherwise leave the
-							// row at the enum's default type and make it look declarable.
-							FString TypeString;
-							VariableObject->TryGetStringField(TEXT("type"), TypeString);
-							if (VariableTypeFromString(TypeString) == EStoryFlowVariableType::None)
-							{
-								continue;
-							}
-							Def.Variables.Add(ParseVariable(VariableId, VariableObject));
-						}
-					}
-
-					ParsedSeed.Add(AssetPair.Key, MoveTemp(Def));
-				}
-
-				// Pass 2 — overrides against the now-complete chain, then the assets themselves.
-				for (const auto& AssetPair : AssetsObject->Values)
-				{
-					TSharedPtr<FJsonObject> AssetObject = AssetPair.Value->AsObject();
-					FStoryFlowDataAssetDef* Def = ParsedSeed.Find(AssetPair.Key);
-					if (!AssetObject.IsValid() || !Def)
-					{
-						continue;
-					}
-
-					// Every override's TYPE comes from an ANCESTOR's declaration, so the asset's
-					// own JSON is not the whole of its input: a base that flips a declaration
-					// from enum to string (or integer to float — the collector sanitizes neither
-					// across levels) leaves this asset's JSON byte-identical while changing how
-					// its override must be parsed. Collect the declarations each override
-					// actually resolved against and fold them into the skip hash below, so the
-					// parent's change dirties the child. Same spirit as the characters block's
-					// bPortraitOutstanding: a skip must never certify a payload that something
-					// else in this same import invalidated.
-					TArray<FString> OverrideDeclarationParts;
-
-					const TSharedPtr<FJsonObject>* OverridesObject = nullptr;
-					if (AssetObject->TryGetObjectField(TEXT("overrides"), OverridesObject))
-					{
-						for (const auto& OverridePair : (*OverridesObject)->Values)
-						{
-							const FStoryFlowVariable* Declaration = StoryFlowDataAssets::FindDeclaration(ParsedSeed, AssetPair.Key, OverridePair.Key);
-							if (!Declaration)
-							{
-								// The collector strips orphan overrides, so this is a legacy or
-								// hand-edited export. Trusting the seed means not repairing it —
-								// but an untyped value cannot be parsed, and the resolver ignores
-								// an override no level declares anyway (§4.3), so drop it.
-								UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Data Asset '%s' overrides '%s', which nothing on its chain declares - ignoring"), *AssetPair.Key, *OverridePair.Key);
-								continue;
-							}
-
-							// isArray and the map K/V join Type because all four steer the parse
-							// (and, at the accessors, the declMatches gate of contract §6.1). An
-							// orphan override contributes no part at all, so an ancestor that
-							// later declares the id also dirties this asset.
-							OverrideDeclarationParts.Add(FString::Printf(TEXT("decl:%s:%d:%d:%d:%d"),
-								*OverridePair.Key,
-								static_cast<int32>(Declaration->Type),
-								Declaration->bIsArray ? 1 : 0,
-								static_cast<int32>(Declaration->KeyType),
-								static_cast<int32>(Declaration->ValueType)));
-
-							FStoryFlowVariant OverrideValue;
-							if (Declaration->Type == EStoryFlowVariableType::Map)
-							{
-								// Map values are ORDERED ENTRY LISTS in every direction
-								// (contract §2.1), overrides included
-								const TArray<TSharedPtr<FJsonValue>>* EntriesArray = nullptr;
-								if (OverridePair.Value->TryGetArray(EntriesArray))
-								{
-									TArray<FStoryFlowMapEntry> Entries;
-									ParseMapEntries(*EntriesArray, Declaration->KeyType, Declaration->ValueType, Declaration->Name.IsEmpty() ? Declaration->Id : Declaration->Name, Entries);
-									OverrideValue.SetMap(Entries);
-								}
-							}
-							else
-							{
-								OverrideValue = ParseVariant(OverridePair.Value, Declaration->Type);
-							}
-							Def->Overrides.Add(OverridePair.Key, MoveTemp(OverrideValue));
-						}
-					}
-
-					// The asset is named by ID, not by display name: ids are unique and stable
-					// across re-imports while names are neither (two .sfd files in different
-					// folders can share a filename base, and the seed carries no path). A
-					// name-derived asset name would silently make two ids share one UObject.
-					UStoryFlowDataAssetAsset* DataAsset = CreateDataAssetAsset(DataAssetContentPath, NormalizeAssetPath(AssetPair.Key));
-					if (!DataAsset)
-					{
-						continue;
-					}
-
-					// Skip unchanged data assets (same pattern as scripts and characters), with
-					// the resolved ancestor declarations folded in. Sorted case-sensitively for
-					// the reason the project hash is: JSON object order is not map order, and an
-					// unstable part order would change the hash between identical runs.
-					OverrideDeclarationParts.Sort([](const FString& A, const FString& B) { return A.Compare(B, ESearchCase::CaseSensitive) < 0; });
-					TArray<FString> DataAssetHashParts;
-					DataAssetHashParts.Add(SerializeJsonCondensed(AssetObject.ToSharedRef()));
-					DataAssetHashParts.Add(AssetPair.Key);
-					DataAssetHashParts.Append(OverrideDeclarationParts);
-					const FString DataAssetSourceHash = HashImportSource(DataAssetHashParts);
-					if (DataAsset->ImportedSourceHash == DataAssetSourceHash && PackageFileExists(DataAsset->GetOutermost()))
-					{
-						DataAsset->GetOutermost()->SetDirtyFlag(false);
-						ProjectAsset->DataAssets.Add(AssetPair.Key, DataAsset);
-						UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Data Asset '%s' unchanged since last import, skipping save"), *AssetPair.Key);
-						continue;
-					}
-
-					// Clear containers for in-place update
-					DataAsset->Variables.Empty();
-					DataAsset->Overrides.Empty();
-
-					DataAsset->AssetId = Def->Id;
-					DataAsset->Name = Def->Name;
-					DataAsset->Parent = Def->Parent;
-					DataAsset->Variables = Def->Variables;
-					DataAsset->Overrides = Def->Overrides;
-
-					DataAsset->ImportedSourceHash = DataAssetSourceHash;
-					SaveAssetRecordingHash(DataAsset->GetOutermost(), DataAsset, DataAsset->ImportedSourceHash);
-
-					ProjectAsset->DataAssets.Add(AssetPair.Key, DataAsset);
-					UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Created data asset '%s' at %s"), *AssetPair.Key, *DataAsset->GetPathName());
-				}
-			}
-		}
-	}
+	// Load Data Assets (.sfd seed) — engine contract §2.1
+	ImportDataAssets(BuildDirectory, ContentPath, ProjectAsset, ProjectHashParts);
 
 	// Find and import all script files
 	TArray<FString> ScriptFiles;

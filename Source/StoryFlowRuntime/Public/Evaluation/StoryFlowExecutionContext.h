@@ -100,7 +100,7 @@ public:
 	void Initialize(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript);
 
 	/** Initialize the context with external global variables, characters, and once-only options (from subsystem) */
-	void InitializeWithSubsystem(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript, TMap<FString, FStoryFlowVariable>* InGlobalVariables, TMap<FString, FStoryFlowCharacterDef>* InCharacters = nullptr, TSet<FString>* InUsedOnceOnlyOptions = nullptr, const StoryFlowDataAssets::FSeed* InDataAssetSeed = nullptr, StoryFlowDataAssets::FOverlay* InDataAssetOverlay = nullptr);
+	void InitializeWithSubsystem(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript, TMap<FString, FStoryFlowVariable>* InGlobalVariables, TMap<FString, FStoryFlowCharacterDef>* InCharacters = nullptr, TSet<FString>* InUsedOnceOnlyOptions = nullptr, StoryFlowDataAssets::FStoreRef InDataAssetStore = {});
 
 	/** Reset the context to initial state */
 	void Reset();
@@ -185,16 +185,18 @@ public:
 	// === Data Assets (.sfd) ===
 
 	/**
-	 * Non-owning pointers to the subsystem-owned Data Asset store (engine contract §3): the
-	 * read-only SEED and this session's write OVERLAY. Same idiom, and same lifetime, as
-	 * ExternalGlobalVariables — valid as long as the subsystem exists (GameInstance scope).
+	 * Non-owning reference to the subsystem-owned Data Asset store (engine contract §3). Same
+	 * idiom, and same lifetime, as ExternalGlobalVariables — valid as long as the subsystem
+	 * exists (GameInstance scope). Pointing at the subsystem's maps rather than copying them
+	 * is what makes a write from one component visible to every other.
 	 *
-	 * They come as a PAIR because every resolution needs both (contract §4 reads the overlay
-	 * and the seed at each chain level), and pointing at the subsystem's maps rather than
-	 * copying them is what makes a write from one component visible to every other.
+	 * ONE ref, not a seed pointer beside an overlay pointer: every resolution needs both
+	 * (contract §4 consults the overlay and the seed at each chain level), and two fields two
+	 * callers could set independently is a mismatched pair waiting to happen.
+	 *
+	 * Prefer the TryResolveDataAsset / TrySetDataAsset accessors below over touching this.
 	 */
-	const StoryFlowDataAssets::FSeed* ExternalDataAssetSeed = nullptr;
-	StoryFlowDataAssets::FOverlay* ExternalDataAssetOverlay = nullptr;
+	StoryFlowDataAssets::FStoreRef DataAssetStore;
 
 	// === Once-Only Tracking ===
 
@@ -267,6 +269,25 @@ public:
 
 	/** Get variable value by ID (internal use) */
 	FStoryFlowVariant GetVariableValue(const FString& VariableId, bool bIsGlobal);
+
+	// === Data Asset Accessors ===
+	// Null-check-and-forward over DataAssetStore, the same shape FindVariable uses for the
+	// external globals: a context with no store answers "nothing resolves, nothing writes"
+	// instead of making every caller repeat the guard.
+
+	/**
+	 * Effective value of a Data Asset variable through its chain and this session's overlay
+	 * (contract §4). False when there is no store, the asset is unknown, or no chain level
+	 * declares the id; OutValue is untouched in that case.
+	 */
+	bool TryResolveDataAsset(const FString& AssetId, const FString& VariableId, FStoryFlowVariant& OutValue) const;
+
+	/**
+	 * Record a Data Asset write in the session overlay at the referenced asset's own level
+	 * (contract §5). False when there is no store, the asset is unknown, or no chain level
+	 * declares the id — the caller owns the warning.
+	 */
+	bool TrySetDataAsset(const FString& AssetId, const FString& VariableId, const FStoryFlowVariant& Value);
 
 	/** Build name-to-ID index for local variables */
 	void RebuildLocalNameIndex();
