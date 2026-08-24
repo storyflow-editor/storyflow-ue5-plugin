@@ -765,6 +765,18 @@ protected:
 
 	// Array Handlers
 	void HandleArraySet(FStoryFlowNode* Node);
+
+	/**
+	 * Set Array Element, resolved EDGE-FIRST rather than by variable name.
+	 *
+	 * These nodes carry no `variable` field in the export at all, so the name lookup
+	 * HandleArraySet uses for whole-array writes cannot resolve one and every such node was a
+	 * silent no-op. The array comes off the `<type>-array-2` pin and the result is written back
+	 * through whatever that pin is wired to (a `.sfd` accessor, a character array, or a script
+	 * variable), mirroring the reference runtime's updateConnectedArrayVariable.
+	 */
+	void HandleArraySetElement(FStoryFlowNode* Node);
+
 	void HandleArrayModify(FStoryFlowNode* Node);
 
 	// Loop Handlers

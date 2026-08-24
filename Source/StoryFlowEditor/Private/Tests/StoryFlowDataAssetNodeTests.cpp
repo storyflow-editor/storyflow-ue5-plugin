@@ -1318,6 +1318,396 @@ bool FStoryFlowDataAssetArrayOpTest::RunTest(const FString& Parameters)
 }
 
 // ============================================================================
+// ForEach Map over a `.sfd` map accessor: every entry once, and it terminates
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetForEachMapTest,
+	"StoryFlow.DataAssets.Nodes.ForEachMapOverAccessorTerminates",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowDataAssetForEachMapTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowDataAssetNodeTestHelpers;
+
+	// HandleForEachMap used to hold a reference into NodeRuntimeStates across EvaluateMapInput.
+	// Resolving a `.sfd` map accessor parks a snapshot on the ACCESSOR's own state, and a
+	// pill-bound accessor never executes, so that state is guaranteed absent before the first
+	// read: a first-time FindOrAdd, which can rehash the TMap and move every element. The loop
+	// bookkeeping written afterwards would land in the freed block, leaving bLoopInitialized
+	// false forever and replaying the loop from entry 0 on every re-entry.
+	//
+	// HONEST SCOPE: whether the rehash actually reproduces depends on the table's capacity at
+	// that moment, so this test is not a reliable reproducer of the crash-shaped variant. What it
+	// pins is the BEHAVIOUR the bug destroys — each entry visited exactly once, in authored
+	// order, and the loop terminating at all. A regression that reintroduces the ordering shows
+	// up here as a wrong accumulator or as a test that never returns.
+	FScopedWorld W;
+	if (!TestTrue(TEXT("fixture world initialized"), W.Init()))
+	{
+		return false;
+	}
+
+	StoryFlowDataAssets::FSeed ImportedSeed;
+	UStoryFlowProjectAsset* Project = ImportFixtureProject(*this, ImportedSeed);
+	if (!Project)
+	{
+		return false;
+	}
+	FGCObjectScopeGuard ProjectGuard(Project);
+
+	// start -> forEachMap(over the base's `loot`) -> body: append the entry's value to a GLOBAL
+	// int array -> completed: a waiting dialogue, so the context survives for the assertions.
+	UStoryFlowScriptAsset* Script = NewObject<UStoryFlowScriptAsset>(GetTransientPackage());
+	FGCObjectScopeGuard ScriptGuard(Script);
+	Script->StartNode = TEXT("0");
+	Script->Nodes.Add(TEXT("0"), MakeNode(TEXT("0"), EStoryFlowNodeType::Start, TEXT("start")));
+	Script->Nodes.Add(TEXT("pB"), MakePill(TEXT("pB"), BaseId));
+
+	{
+		FStoryFlowNode Getter = MakeNode(TEXT("g"), EStoryFlowNodeType::GetDataAssetVariable, TEXT("getDataAssetVariable"));
+		Getter.Data.VariableId = LootId;
+		Getter.Data.VariableName = TEXT("loot");
+		Getter.Data.Variable = TEXT("loot");
+		Getter.Data.VariableType = TEXT("map");
+		Getter.Data.KeyType = TEXT("string");
+		Getter.Data.ValueType = TEXT("integer");
+		Script->Nodes.Add(Getter.Id, Getter);
+	}
+	{
+		FStoryFlowNode Loop = MakeNode(TEXT("fem"), EStoryFlowNodeType::ForEachMap, TEXT("forEachMap"));
+		Loop.Data.KeyType = TEXT("string");
+		Loop.Data.ValueType = TEXT("integer");
+		Script->Nodes.Add(Loop.Id, Loop);
+	}
+	{
+		// The accumulator's reader. Global, so it outlives the dialogue for the assertions.
+		FStoryFlowNode Reader = MakeNode(TEXT("acc"), EStoryFlowNodeType::GetIntArray, TEXT("getIntArray"));
+		Reader.Data.Variable = TEXT("g_seen");
+		Reader.Data.bIsGlobal = true;
+		Script->Nodes.Add(Reader.Id, Reader);
+	}
+	Script->Nodes.Add(TEXT("add"), MakeNode(TEXT("add"), EStoryFlowNodeType::AddToIntArray, TEXT("addToIntArray")));
+	{
+		FStoryFlowNode Done = MakeNode(TEXT("d"), EStoryFlowNodeType::Dialogue, TEXT("dialogue"));
+		Done.Data.Text = TEXT("done");
+		FStoryFlowChoice Stay;
+		Stay.Id = TEXT("opt");
+		Stay.Text = TEXT("stay");
+		Done.Data.Options.Add(Stay);
+		Script->Nodes.Add(Done.Id, Done);
+	}
+
+	Script->Connections.Add(MakePillEdge(TEXT("pB"), TEXT("g")));
+	Script->Connections.Add(MakeEdge(TEXT("g"), TEXT("fem"),
+		StoryFlowHandles::Source(TEXT("g"), TEXT("map-string-integer")),
+		StoryFlowHandles::Target(TEXT("fem"), StoryFlowHandles::In_Map(TEXT("string"), TEXT("integer"), TEXT("map")))));
+	Script->Connections.Add(MakeEdge(TEXT("0"), TEXT("fem"),
+		StoryFlowHandles::Source(TEXT("0")), StoryFlowHandles::Target(TEXT("fem"), TEXT("0"))));
+	Script->Connections.Add(MakeEdge(TEXT("fem"), TEXT("add"),
+		StoryFlowHandles::Source(TEXT("fem"), StoryFlowHandles::Out_LoopBody), StoryFlowHandles::Target(TEXT("add"), TEXT("0"))));
+	Script->Connections.Add(MakeEdge(TEXT("fem"), TEXT("add"),
+		StoryFlowHandles::Source(TEXT("fem"), TEXT("integer-value")), StoryFlowHandles::Target(TEXT("add"), TEXT("integer-3"))));
+	Script->Connections.Add(MakeEdge(TEXT("acc"), TEXT("add"),
+		StoryFlowHandles::Source(TEXT("acc"), TEXT("integer-array-")), StoryFlowHandles::Target(TEXT("add"), TEXT("integer-array-2"))));
+	Script->Connections.Add(MakeEdge(TEXT("fem"), TEXT("d"),
+		StoryFlowHandles::Source(TEXT("fem"), StoryFlowHandles::Out_LoopCompleted), StoryFlowHandles::Target(TEXT("d"))));
+	Script->BuildConnectionIndices();
+
+	Project->Scripts.Add(TEXT("femtest"), Script);
+	W.Subsystem->SetProject(Project);
+
+	{
+		FStoryFlowVariable Seen;
+		Seen.Id = TEXT("g_seen");
+		Seen.Name = TEXT("g_seen");
+		Seen.Type = EStoryFlowVariableType::Integer;
+		Seen.bIsArray = true;
+		Seen.Value.SetArray(TArray<FStoryFlowVariant>(), EStoryFlowVariableType::Integer);
+		W.Subsystem->GetGlobalVariables().Add(Seen.Id, Seen);
+	}
+
+	// If the loop never terminates this call does not return — which is the bug, stated plainly.
+	W.Component->StartDialogueWithScript(TEXT("femtest"));
+
+	const FStoryFlowVariable* Seen = W.Subsystem->GetGlobalVariables().Find(TEXT("g_seen"));
+	if (TestNotNull(TEXT("the accumulator survived the run"), Seen))
+	{
+		// The base's loot is [gold=5, gems=1]: two entries, so two appends and no more
+		if (TestEqual(TEXT("the loop visited every entry exactly once"), Seen->Value.GetArray().Num(), 2))
+		{
+			TestEqual(TEXT("in authored entry order, first value"), Seen->Value.GetArray()[0].GetInt(), 5);
+			TestEqual(TEXT("and second"), Seen->Value.GetArray()[1].GetInt(), 1);
+		}
+	}
+	// Reaching the completed branch is the termination proof: the dialogue after it is live
+	TestEqual(TEXT("the loop ran to completion and reached the dialogue after it"),
+		W.Component->GetCurrentDialogue().Options.Num(), 1);
+
+	CleanUp();
+	return true;
+}
+
+// ============================================================================
+// Set Array Element resolves its target through the WIRE, not a variable name
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowSetArrayElementTargetTest,
+	"StoryFlow.DataAssets.Nodes.SetArrayElementWritesItsWiredTarget",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowSetArrayElementTargetTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowDataAssetNodeTestHelpers;
+
+	// THE PRE-EXISTING DEAD HANDLER, and the verification that it was dead. A set*ArrayElement
+	// node exports as { type, id, value1, value2 } with no `variable` field (the exporter's
+	// baseNode is type+id, and only the WHOLE-array set*Array cases add one), the importer fills
+	// Data.Variable from that field alone, and the old handler resolved its target by looking
+	// Data.Variable up. So the node warned and bailed for every project, whatever it was wired
+	// to. Step one asserts exactly that about a REAL imported node.
+	const FString ExportedJson = TEXT(R"JSON(
+	{
+		"startNode": "0",
+		"nodes": {
+			"0": { "type": "start", "id": "0" },
+			"s": { "type": "setIntArrayElement", "id": "s", "value1": 1, "value2": 99 }
+		},
+		"connections": [],
+		"variables": {}
+	}
+	)JSON");
+
+	TSharedPtr<FJsonObject> ExportedObject;
+	const TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(ExportedJson);
+	if (TestTrue(TEXT("the exported node JSON parses"), FJsonSerializer::Deserialize(Reader, ExportedObject) && ExportedObject.IsValid()))
+	{
+		UStoryFlowScriptAsset* Imported = UStoryFlowImporter::ImportScriptFromJson(ExportedObject, TEXT("setarrayelement_shape"), NodeTestRoot);
+		if (TestNotNull(TEXT("the exported script imports"), Imported))
+		{
+			FGCObjectScopeGuard ImportedGuard(Imported);
+			if (const FStoryFlowNode* SetNode = Imported->Nodes.Find(TEXT("s")))
+			{
+				TestTrue(TEXT("a real exported Set Array Element node carries NO variable name"), SetNode->Data.Variable.IsEmpty());
+				// ...while the index and value fallbacks do arrive, under the export's own names
+				TestEqual(TEXT("its index rides value1"), SetNode->Data.Value1.GetInt(), 1);
+				TestEqual(TEXT("and its value rides value2"), SetNode->Data.Value2.GetInt(), 99);
+			}
+			else
+			{
+				AddError(TEXT("the imported script lost its set node"));
+			}
+		}
+	}
+
+	// Step two: the node actually writes now, through the array pin's source.
+	FScopedWorld W;
+	if (!TestTrue(TEXT("fixture world initialized"), W.Init()))
+	{
+		return false;
+	}
+
+	StoryFlowDataAssets::FSeed ImportedSeed;
+	UStoryFlowProjectAsset* Project = ImportFixtureProject(*this, ImportedSeed);
+	if (!Project)
+	{
+		return false;
+	}
+	FGCObjectScopeGuard ProjectGuard(Project);
+
+	UStoryFlowScriptAsset* Script = NewObject<UStoryFlowScriptAsset>(GetTransientPackage());
+	FGCObjectScopeGuard ScriptGuard(Script);
+	Script->StartNode = TEXT("0");
+	Script->Nodes.Add(TEXT("0"), MakeNode(TEXT("0"), EStoryFlowNodeType::Start, TEXT("start")));
+	{
+		FStoryFlowNode Reader2 = MakeNode(TEXT("acc"), EStoryFlowNodeType::GetIntArray, TEXT("getIntArray"));
+		Reader2.Data.Variable = TEXT("g_nums");
+		Reader2.Data.bIsGlobal = true;
+		Script->Nodes.Add(Reader2.Id, Reader2);
+	}
+	{
+		FStoryFlowNode Set = MakeNode(TEXT("s"), EStoryFlowNodeType::SetIntArrayElement, TEXT("setIntArrayElement"));
+		// The export dialect: index in value1, value in value2, and NO variable field
+		Set.Data.Value1.SetInt(1);
+		Set.Data.Value2.SetInt(99);
+		Script->Nodes.Add(Set.Id, Set);
+	}
+	Script->Nodes.Add(TEXT("End"), MakeNode(TEXT("End"), EStoryFlowNodeType::End, TEXT("end")));
+	Script->Connections.Add(MakeEdge(TEXT("acc"), TEXT("s"),
+		StoryFlowHandles::Source(TEXT("acc"), TEXT("integer-array-")), StoryFlowHandles::Target(TEXT("s"), TEXT("integer-array-2"))));
+	Script->Connections.Add(MakeEdge(TEXT("0"), TEXT("s"),
+		StoryFlowHandles::Source(TEXT("0")), StoryFlowHandles::Target(TEXT("s"), TEXT("0"))));
+	Script->Connections.Add(MakeEdge(TEXT("s"), TEXT("End"),
+		StoryFlowHandles::Source(TEXT("s"), StoryFlowHandles::Out_Flow), StoryFlowHandles::Target(TEXT("End"), TEXT(""))));
+	Script->BuildConnectionIndices();
+
+	Project->Scripts.Add(TEXT("setelem"), Script);
+	W.Subsystem->SetProject(Project);
+
+	{
+		FStoryFlowVariable Nums;
+		Nums.Id = TEXT("g_nums");
+		Nums.Name = TEXT("g_nums");
+		Nums.Type = EStoryFlowVariableType::Integer;
+		Nums.bIsArray = true;
+		TArray<FStoryFlowVariant> Elements;
+		for (int32 Value : { 10, 20, 30 })
+		{
+			FStoryFlowVariant Element;
+			Element.SetInt(Value);
+			Elements.Add(Element);
+		}
+		Nums.Value.SetArray(Elements, EStoryFlowVariableType::Integer);
+		W.Subsystem->GetGlobalVariables().Add(Nums.Id, Nums);
+	}
+
+	W.Component->StartDialogueWithScript(TEXT("setelem"));
+
+	const FStoryFlowVariable* Nums = W.Subsystem->GetGlobalVariables().Find(TEXT("g_nums"));
+	if (TestNotNull(TEXT("the target array is still there"), Nums))
+	{
+		if (TestEqual(TEXT("the array kept its length"), Nums->Value.GetArray().Num(), 3))
+		{
+			TestEqual(TEXT("the element at the wired index was replaced"), Nums->Value.GetArray()[1].GetInt(), 99);
+			TestEqual(TEXT("and its neighbours were left alone"), Nums->Value.GetArray()[0].GetInt(), 10);
+			TestEqual(TEXT("both of them"), Nums->Value.GetArray()[2].GetInt(), 30);
+		}
+	}
+
+	CleanUp();
+	return true;
+}
+
+// ============================================================================
+// Set Array Element into a `.sfd` array: overlay write, cascade, and refusal
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowSetArrayElementDataAssetTest,
+	"StoryFlow.DataAssets.Nodes.SetArrayElementWritesTheOverlay",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowSetArrayElementDataAssetTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowDataAssetNodeTestHelpers;
+
+	FScopedWorld W;
+	if (!TestTrue(TEXT("fixture world initialized"), W.Init()))
+	{
+		return false;
+	}
+
+	StoryFlowDataAssets::FSeed ImportedSeed;
+	UStoryFlowProjectAsset* Project = ImportFixtureProject(*this, ImportedSeed);
+	if (!Project)
+	{
+		return false;
+	}
+	FGCObjectScopeGuard ProjectGuard(Project);
+
+	// Through the CHILD, whose own tags override is ["mob","elite"]. The grandchild declares no
+	// tags of its own, so it is where the cascade is observable.
+	UStoryFlowScriptAsset* Script = NewObject<UStoryFlowScriptAsset>(GetTransientPackage());
+	FGCObjectScopeGuard ScriptGuard(Script);
+	Script->StartNode = TEXT("0");
+	Script->Nodes.Add(TEXT("0"), MakeNode(TEXT("0"), EStoryFlowNodeType::Start, TEXT("start")));
+	Script->Nodes.Add(TEXT("pC"), MakePill(TEXT("pC"), ChildId));
+	{
+		FStoryFlowNode Getter = MakeNode(TEXT("g"), EStoryFlowNodeType::GetDataAssetVariable, TEXT("getDataAssetVariable"));
+		Getter.Data.VariableId = TagsId;
+		Getter.Data.VariableName = TEXT("tags");
+		Getter.Data.Variable = TEXT("tags");
+		Getter.Data.VariableType = TEXT("string");
+		Getter.Data.bIsArray = true;
+		Script->Nodes.Add(Getter.Id, Getter);
+	}
+	{
+		FStoryFlowNode Set = MakeNode(TEXT("s"), EStoryFlowNodeType::SetStringArrayElement, TEXT("setStringArrayElement"));
+		Set.Data.Value1.SetInt(1);
+		Set.Data.Value2.SetString(TEXT("chieftain"));
+		Script->Nodes.Add(Set.Id, Set);
+	}
+	Script->Nodes.Add(TEXT("End"), MakeNode(TEXT("End"), EStoryFlowNodeType::End, TEXT("end")));
+	Script->Connections.Add(MakePillEdge(TEXT("pC"), TEXT("g")));
+	Script->Connections.Add(MakeEdge(TEXT("g"), TEXT("s"),
+		StoryFlowHandles::Source(TEXT("g"), TEXT("string-array-")), StoryFlowHandles::Target(TEXT("s"), TEXT("string-array-2"))));
+	Script->Connections.Add(MakeEdge(TEXT("0"), TEXT("s"),
+		StoryFlowHandles::Source(TEXT("0")), StoryFlowHandles::Target(TEXT("s"), TEXT("0"))));
+	Script->Connections.Add(MakeEdge(TEXT("s"), TEXT("End"),
+		StoryFlowHandles::Source(TEXT("s"), StoryFlowHandles::Out_Flow), StoryFlowHandles::Target(TEXT("End"), TEXT(""))));
+	Script->BuildConnectionIndices();
+
+	Project->Scripts.Add(TEXT("sfdelem"), Script);
+	W.Subsystem->SetProject(Project);
+	W.Component->StartDialogueWithScript(TEXT("sfdelem"));
+
+	const StoryFlowDataAssets::FSeed& Seed = W.Subsystem->GetDataAssetSeed();
+	const StoryFlowDataAssets::FOverlay& Overlay = W.Subsystem->GetDataAssetOverlay();
+
+	const FStoryFlowVariant ChildTags = StoryFlowDataAssets::Resolve(Seed, Overlay, ChildId, TagsId);
+	if (TestEqual(TEXT("the element write kept the array's length"), ChildTags.GetArray().Num(), 2))
+	{
+		TestEqual(TEXT("the wired index was replaced in the overlay"), ChildTags.GetArray()[1].GetString(), TEXT("chieftain"));
+		TestEqual(TEXT("and the element beside it survived"), ChildTags.GetArray()[0].GetString(), TEXT("mob"));
+	}
+	TestTrue(TEXT("the written array kept its declared element type"),
+		ChildTags.GetType() == EStoryFlowVariableType::String);
+
+	// The write landed at the CHILD's level, so the grandchild inherits it and the base does not
+	TestEqual(TEXT("the overlay write cascades to the grandchild"),
+		StoryFlowDataAssets::Resolve(Seed, Overlay, GrandChildId, TagsId).GetArray()[1].GetString(), TEXT("chieftain"));
+	TestEqual(TEXT("and leaves the base's own value alone"),
+		StoryFlowDataAssets::Resolve(Seed, Overlay, BaseId, TagsId).GetArray()[1].GetString(), TEXT("melee"));
+
+	// --- the refusal: an accessor bound to a SCALAR is not a legal array target ---
+	UStoryFlowScriptAsset* Refused = NewObject<UStoryFlowScriptAsset>(GetTransientPackage());
+	FGCObjectScopeGuard RefusedGuard(Refused);
+	Refused->StartNode = TEXT("0");
+	Refused->Nodes.Add(TEXT("0"), MakeNode(TEXT("0"), EStoryFlowNodeType::Start, TEXT("start")));
+	Refused->Nodes.Add(TEXT("pB"), MakePill(TEXT("pB"), BaseId));
+	{
+		// `title` is a plain string on the base, not an array
+		FStoryFlowNode Getter = MakeNode(TEXT("g"), EStoryFlowNodeType::GetDataAssetVariable, TEXT("getDataAssetVariable"));
+		Getter.Data.VariableId = TEXT("5b1d8a04c6e2493fa72c9d0f31e6b8a7");
+		Getter.Data.VariableName = TEXT("title");
+		Getter.Data.Variable = TEXT("title");
+		Getter.Data.VariableType = TEXT("string");
+		Getter.Data.bIsArray = false;
+		Refused->Nodes.Add(Getter.Id, Getter);
+	}
+	{
+		FStoryFlowNode Set = MakeNode(TEXT("s"), EStoryFlowNodeType::SetStringArrayElement, TEXT("setStringArrayElement"));
+		Set.Data.Value1.SetInt(0);
+		Set.Data.Value2.SetString(TEXT("clobbered"));
+		Refused->Nodes.Add(Set.Id, Set);
+	}
+	Refused->Nodes.Add(TEXT("End"), MakeNode(TEXT("End"), EStoryFlowNodeType::End, TEXT("end")));
+	Refused->Connections.Add(MakePillEdge(TEXT("pB"), TEXT("g")));
+	Refused->Connections.Add(MakeEdge(TEXT("g"), TEXT("s"),
+		StoryFlowHandles::Source(TEXT("g"), TEXT("string-")), StoryFlowHandles::Target(TEXT("s"), TEXT("string-array-2"))));
+	Refused->Connections.Add(MakeEdge(TEXT("0"), TEXT("s"),
+		StoryFlowHandles::Source(TEXT("0")), StoryFlowHandles::Target(TEXT("s"), TEXT("0"))));
+	Refused->Connections.Add(MakeEdge(TEXT("s"), TEXT("End"),
+		StoryFlowHandles::Source(TEXT("s"), StoryFlowHandles::Out_Flow), StoryFlowHandles::Target(TEXT("End"), TEXT(""))));
+	Refused->BuildConnectionIndices();
+
+	Project->Scripts.Add(TEXT("sfdrefuse"), Refused);
+	W.Component->StartDialogueWithScript(TEXT("sfdrefuse"));
+
+	// Nothing written, and the scalar still reads its file value. Writing an ARRAY over a scalar
+	// the declaration promises is exactly what the store's callers must never do.
+	if (const TMap<FString, FStoryFlowVariant>* BaseEntries = W.Subsystem->GetDataAssetOverlay().Find(BaseId))
+	{
+		TestFalse(TEXT("a scalar-bound accessor got no overlay entry"),
+			BaseEntries->Contains(TEXT("5b1d8a04c6e2493fa72c9d0f31e6b8a7")));
+	}
+	TestEqual(TEXT("and the scalar still reads its declared value"),
+		StoryFlowDataAssets::Resolve(W.Subsystem->GetDataAssetSeed(), W.Subsystem->GetDataAssetOverlay(),
+			BaseId, TEXT("5b1d8a04c6e2493fa72c9d0f31e6b8a7")).GetString(), TEXT("Grunt"));
+
+	CleanUp();
+	return true;
+}
+
+// ============================================================================
 // An enum ARRAY written by the Set node lands in the importer's storage shape
 // ============================================================================
 

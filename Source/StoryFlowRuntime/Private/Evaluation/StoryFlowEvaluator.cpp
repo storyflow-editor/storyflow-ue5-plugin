@@ -520,11 +520,19 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 
 	SF_EVAL_TRACE("EVAL %s %s result=%s", *Node->Id, *Node->TypeString, Result ? TEXT("true") : TEXT("false"));
 
-	// Cache result (map and data-asset reads excluded — see bNeverCache above)
+	// Cache result (map and data-asset reads excluded — see bNeverCache above).
+	//
+	// RE-TAKEN, not the NodeState above: every arm of the switch can recurse into another
+	// evaluation, and GetNodeState is a TMap FindOrAdd — one first-time node state anywhere down
+	// that recursion rehashes the table and moves every element, leaving the reference taken
+	// before the switch pointing into a freed block. Writing through it is not a dropped cache
+	// entry, it is a write into freed memory. The cache read above is safe as it stands: it
+	// happens before anything can grow the table.
 	if (!bNeverCache)
 	{
-		NodeState.CachedOutput.SetBool(Result);
-		NodeState.bHasCachedOutput = true;
+		FNodeRuntimeState& CacheState = Context->GetNodeState(Node->Id);
+		CacheState.CachedOutput.SetBool(Result);
+		CacheState.bHasCachedOutput = true;
 	}
 
 	return Result;
@@ -2287,8 +2295,12 @@ void FStoryFlowEvaluator::ProcessBooleanChain(FStoryFlowNode* Node)
 		}
 		// Then evaluate
 		bool Input = EvaluateBooleanInput(Node, StoryFlowHandles::In_Boolean, Node->Data.Value.GetBool(false));
-		NodeState.CachedOutput.SetBool(!Input);
-		NodeState.bHasCachedOutput = true;
+		// Re-taken after the two calls above, for the reason EvaluateBooleanFromNode's tail
+		// spells out: either can add a node state, and a TMap rehash turns the reference held
+		// since the top of this function into a pointer at freed memory.
+		FNodeRuntimeState& NotState = Context->GetNodeState(Node->Id);
+		NotState.CachedOutput.SetBool(!Input);
+		NotState.bHasCachedOutput = true;
 		break;
 	}
 
