@@ -370,11 +370,10 @@ FStoryFlowCharacterDef CharacterDefFromJson(const TSharedPtr<FJsonObject>& Obj)
 /**
  * One overlay value as a BARE JSON value.
  *
- * Shape comes from the VARIANT (a map is an ordered entry list, a populated array is a JSON
- * array), with the DECLARATION consulted for the one case a variant cannot answer: an EMPTY
- * array and a scalar are the same variant here, because FStoryFlowVariant stores the ELEMENT
- * type for arrays and has no "is an array" flag of its own. Without the declaration a cleared
- * array would persist as `""` and reload as a scalar.
+ * A map is told by the variant (only SetMap produces one). Array vs scalar is told by the
+ * DECLARATION, which is the only thing that can: FStoryFlowVariant stores the ELEMENT type for
+ * arrays and has no "is an array" flag, so an EMPTY array and a scalar are the same variant, and
+ * a cleared array would otherwise persist as `""` and reload as a scalar.
  *
  * Declaration may be null — a save written after the variable was deleted from the .sfd. Such an
  * entry is dropped on the way back IN (it can never resolve), so the fallback here only has to
@@ -397,7 +396,17 @@ TSharedPtr<FJsonValue> BareValueToJson(const FStoryFlowVariant& Value, const FSt
 		return MakeShared<FJsonValueArray>(Entries);
 	}
 
-	if (Value.GetArray().Num() > 0 || (Declaration && Declaration->bIsArray))
+	// THE DECLARATION DECIDES, and it can say NO as well as yes. FStoryFlowVariant's scalar
+	// setters do not clear ArrayValue (only SetArray / SetMap do), so a variant that once held an
+	// array and was re-set as a scalar still carries the old elements — trusting "there are
+	// elements" over the declaration would persist that residue as a JSON array under a scalar
+	// declaration, and it would reload as a scalar, silently losing the value. No writer produces
+	// that state today; the rule costs nothing and does not depend on that staying true.
+	//
+	// The element count only answers for a value with NO declaration at all (deleted from the
+	// .sfd since the write), which is dropped on the way back in anyway.
+	const bool bIsArray = Declaration ? Declaration->bIsArray : Value.GetArray().Num() > 0;
+	if (bIsArray)
 	{
 		TArray<TSharedPtr<FJsonValue>> Elements;
 		for (const FStoryFlowVariant& Element : Value.GetArray())

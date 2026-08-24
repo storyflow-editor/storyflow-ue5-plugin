@@ -585,6 +585,24 @@ bool FStoryFlowDataAssetSaveValueShapesTest::RunTest(const FString& Parameters)
 	EmptyArrayWrite.SetArray(TArray<FStoryFlowVariant>(), EStoryFlowVariableType::String);
 	TestTrue(TEXT("an empty array write lands"), StoryFlowDataAssets::TrySet(Seed, Overlay, BaseId, TagsId, EmptyArrayWrite));
 
+	// AND THE OTHER DIRECTION: the declaration must be able to say "not an array" too. A variant
+	// that once held an array and was re-set as a scalar KEEPS its old elements — only SetArray
+	// and SetMap clear the containers, the scalar setters do not — so a serializer that trusted
+	// "there are elements" over the declaration would write this scalar as a JSON array, and it
+	// would reload as a scalar, silently losing the value.
+	FStoryFlowVariant ResidualArrayWrite;
+	{
+		TArray<FStoryFlowVariant> Leftovers;
+		FStoryFlowVariant Leftover;
+		Leftover.SetInt(9);
+		Leftovers.Add(Leftover);
+		ResidualArrayWrite.SetArray(Leftovers, EStoryFlowVariableType::Integer);
+		ResidualArrayWrite.SetInt(11);
+	}
+	TestEqual(TEXT("a re-set variant really does keep its old array elements"), ResidualArrayWrite.GetArray().Num(), 1);
+	TestTrue(TEXT("a scalar write carrying residual array storage lands"),
+		StoryFlowDataAssets::TrySet(Seed, Overlay, BaseId, HpId, ResidualArrayWrite));
+
 	const FString SaveJson = SerializeOverlayOnly(Seed, Overlay);
 	const TSharedPtr<FJsonObject> Key = SavedDataAssetKey(SaveJson);
 	if (!TestTrue(TEXT("the save carries a dataAssets key"), Key.IsValid()))
@@ -604,6 +622,11 @@ bool FStoryFlowDataAssetSaveValueShapesTest::RunTest(const FString& Parameters)
 		{
 			TestEqual(TEXT("and it is empty"), EmptyTags->Num(), 0);
 		}
+		// The declaration vetoing the variant's residual array storage
+		TestEqual(TEXT("a scalar under a scalar declaration persists as a bare number, residue or not"),
+			static_cast<int32>(JsonTypeOf(*BaseEntry, FString(HpId))), static_cast<int32>(EJson::Number));
+		TestEqual(TEXT("with its scalar value, not its leftover element"),
+			static_cast<int32>((*BaseEntry)->GetNumberField(FString(HpId))), 11);
 	}
 
 	StoryFlowDataAssets::FOverlay Loaded;
@@ -622,6 +645,12 @@ bool FStoryFlowDataAssetSaveValueShapesTest::RunTest(const FString& Parameters)
 			{
 				TestTrue(TEXT("a loaded float is typed Float, not Integer"), Speed->GetType() == EStoryFlowVariableType::Float);
 				TestNearlyEqual(TEXT("a loaded float keeps its value"), Speed->GetFloat(), 3.5f, 1.e-4f);
+			}
+			if (const FStoryFlowVariant* Hp = BaseEntries->Find(HpId))
+			{
+				TestTrue(TEXT("the residual-array scalar comes back a scalar"), Hp->GetType() == EStoryFlowVariableType::Integer);
+				TestEqual(TEXT("with its value intact"), Hp->GetInt(), 11);
+				TestEqual(TEXT("and no array storage behind it"), Hp->GetArray().Num(), 0);
 			}
 			if (const FStoryFlowVariant* Tags = BaseEntries->Find(TagsId))
 			{
