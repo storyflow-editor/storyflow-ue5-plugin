@@ -6,6 +6,7 @@
 #include "Data/StoryFlowScriptAsset.h"
 #include "Data/StoryFlowCharacterAsset.h"
 #include "Data/StoryFlowHandles.h"
+#include "Data/StoryFlowDataAssetStore.h"
 #include "Evaluation/StoryFlowEvaluator.h"
 #include "Subsystems/StoryFlowSubsystem.h"
 #include "Engine/GameInstance.h"
@@ -2938,60 +2939,76 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 	default: break;
 	}
 
-	// Try direct variable reference first, then fall back to edge-based discovery.
-	// Array modify nodes in the HTML runtime don't have a variable field — they discover
-	// the target array through the input edge (matching getArrayInput + updateConnectedArrayVariable).
-	FStoryFlowVariable* Var = nullptr;
-	if (!Node->Data.Variable.IsEmpty())
-	{
-		Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
-	}
-
-	// A `.sfd` accessor on the array input routes the whole op INTO the session overlay: the
-	// array is read out of the store (a copy), mutated below like any other, and written back
-	// through the same guarded path the Set node uses. This branch MUST come before the
-	// name-based lookup underneath it — an accessor carries no isGlobal and its Data.Variable is
-	// the `.sfd` variable's display NAME, so falling through would silently clobber a same-named
-	// LOCAL script array. Mirrors the HTML runtime's updateConnectedArrayVariable / clearArray,
-	// which draw the same line for the same reason.
-	FStoryFlowVariable DataAssetScratch;
-	FStoryFlowNode* DataAssetAccessor = nullptr;
-	FString DataAssetId;
-	if (!Var && Evaluator && !ArrayHandleSuffix.IsEmpty())
+	// Resolve the array input edge FIRST and ask what is on the far end, because a `.sfd`
+	// accessor there outranks EVERY name-based lookup — including this node's own Data.Variable.
+	// That is the reference's guard shape (updateConnectedArrayVariable / clearArray both test
+	// the source node's type immediately after resolving the edge, ahead of any name lookup).
+	// Array modify nodes carry no variable field today, so ordering them the other way round
+	// happens to behave identically — but only until an exporter emits one, at which point
+	// Unreal would write a script variable where the reference writes the store.
+	FStoryFlowNode* ArrayInputSource = nullptr;
+	if (Evaluator && !ArrayHandleSuffix.IsEmpty())
 	{
 		if (const FStoryFlowConnection* Edge = ExecutionContext.FindInputEdge(Node->Id, ArrayHandleSuffix))
 		{
-			if (FStoryFlowNode* SourceNode = ExecutionContext.GetNode(Edge->Source))
+			ArrayInputSource = ExecutionContext.GetNode(Edge->Source);
+		}
+	}
+
+	FStoryFlowVariable* Var = nullptr;
+	FStoryFlowVariable DataAssetScratch;
+	FStoryFlowNode* DataAssetAccessor = nullptr;
+	FString DataAssetId;
+
+	if (ArrayInputSource && FStoryFlowEvaluator::IsDataAssetAccessor(ArrayInputSource->Type))
+	{
+		// The whole op routes INTO the session overlay: the array is read out of the store (a
+		// copy), mutated below like any other, and written back through the same guarded path
+		// the Set node uses. An accessor carries no isGlobal and its Data.Variable is the `.sfd`
+		// variable's display NAME, so a fall-through to a name lookup would silently clobber a
+		// same-named LOCAL script array — which is why nothing below this branch runs for one.
+		//
+		// A bound-but-not-array accessor keeps the refusal: its pins could not have fed this op
+		// an array, and writing one over a scalar the declaration promises is exactly what the
+		// store's callers must never do. Var stays null and the miss below ends the node.
+		if (!ArrayInputSource->Data.bIsArray)
+		{
+			ExecutionContext.MaybeWarnDataAsset(ArrayInputSource->Id, TEXT("arrayop"),
+				FString::Printf(TEXT("Data Asset array op refused: node %s is not bound to an array variable"), *ArrayInputSource->Id));
+		}
+		else if (ExecutionContext.TryResolveDataAssetBinding(*ArrayInputSource, DataAssetId))
+		{
+			FStoryFlowVariant Resolved;
+			if (ExecutionContext.TryResolveDataAsset(DataAssetId, ArrayInputSource->Data.VariableId, Resolved))
 			{
-				if (FStoryFlowEvaluator::IsDataAssetAccessor(SourceNode->Type))
-				{
-					// A bound-but-not-array accessor keeps the refusal: its pins could not have
-					// fed this op an array, and writing one over a scalar the declaration
-					// promises is exactly what the store's callers must never do.
-					if (!SourceNode->Data.bIsArray)
-					{
-						ExecutionContext.MaybeWarnDataAsset(SourceNode->Id, TEXT("arrayop"),
-							FString::Printf(TEXT("Data Asset array op refused: node %s is not bound to an array variable"), *SourceNode->Id));
-					}
-					else if (ExecutionContext.TryResolveDataAssetBinding(*SourceNode, DataAssetId))
-					{
-						FStoryFlowVariant Resolved;
-						if (ExecutionContext.TryResolveDataAsset(DataAssetId, SourceNode->Data.VariableId, Resolved))
-						{
-							DataAssetScratch.Id = SourceNode->Data.VariableId;
-							DataAssetScratch.Name = SourceNode->Data.VariableName;
-							DataAssetScratch.bIsArray = true;
-							DataAssetScratch.Value.SetArray(Resolved.GetArray());
-							DataAssetAccessor = SourceNode;
-							Var = &DataAssetScratch;
-						}
-					}
-				}
-				else if (!SourceNode->Data.Variable.IsEmpty())
-				{
-					Var = ExecutionContext.FindVariable(SourceNode->Data.Variable, SourceNode->Data.bIsGlobal);
-				}
+				// The ELEMENT TYPE is stated, not inferred: an empty resolved array leaves the
+				// plain SetArray typed None, so a `.sfd` array would read back typed or untyped
+				// purely by whether the last writer emptied it. The accessor's snapshot is the
+				// right source for it — the ladder above has just proved DeclMatches, so the
+				// snapshot type IS the chain's declared type.
+				const EStoryFlowVariableType ElementType = StoryFlowDataAssets::WireTypeToVariableType(ArrayInputSource->Data.VariableType);
+				DataAssetScratch.Id = ArrayInputSource->Data.VariableId;
+				DataAssetScratch.Name = ArrayInputSource->Data.VariableName;
+				DataAssetScratch.Type = ElementType;
+				DataAssetScratch.bIsArray = true;
+				DataAssetScratch.Value.SetArray(Resolved.GetArray(), ElementType);
+				DataAssetAccessor = ArrayInputSource;
+				Var = &DataAssetScratch;
 			}
+		}
+	}
+	else
+	{
+		// Try this node's direct variable reference first, then fall back to the edge source's.
+		// Array modify nodes in the HTML runtime don't have a variable field — they discover the
+		// target array through the input edge (matching getArrayInput + updateConnectedArrayVariable).
+		if (!Node->Data.Variable.IsEmpty())
+		{
+			Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
+		}
+		if (!Var && ArrayInputSource && !ArrayInputSource->Data.Variable.IsEmpty())
+		{
+			Var = ExecutionContext.FindVariable(ArrayInputSource->Data.Variable, ArrayInputSource->Data.bIsGlobal);
 		}
 	}
 

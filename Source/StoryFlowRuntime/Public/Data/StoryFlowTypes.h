@@ -381,6 +381,21 @@ public:
 		}
 	}
 
+	/**
+	 * SetArray with the element type STATED rather than inferred. An empty array carries no
+	 * element to infer from, so the overload above leaves the variant typed None — harmless for a
+	 * script variable, whose FStoryFlowVariable carries the declared type in the field beside the
+	 * value, but wrong for a value that travels on its own. A `.sfd` read resolves through a
+	 * declaration the caller already holds, so it can state the type and must: otherwise the same
+	 * variable reads back typed or untyped depending only on whether the last writer happened to
+	 * leave the array empty.
+	 */
+	void SetArray(const TArray<FStoryFlowVariant>& Value, EStoryFlowVariableType ElementType)
+	{
+		SetArray(Value);
+		Type = ElementType;
+	}
+
 	// Defined below FStoryFlowMapEntry (assigning the entry array needs the complete type)
 	void SetMap(const TArray<FStoryFlowMapEntry>& Value);
 

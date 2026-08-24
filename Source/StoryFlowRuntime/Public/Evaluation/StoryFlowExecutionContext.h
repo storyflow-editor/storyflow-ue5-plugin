@@ -265,6 +265,16 @@ public:
 	 */
 	TSet<FString> WarnedDataAssetNodes;
 
+	/**
+	 * How many Data Asset warnings this context has actually EMITTED. The latch set above cannot
+	 * answer that on its own: TSet::Add is idempotent, so a MaybeWarnDataAsset that dropped its
+	 * early-out would still leave exactly one key per node-and-reason while logging on every
+	 * evaluation. Suppression is the property contract §6 is about — an option condition
+	 * re-evaluates every render — so it needs a counter that only moves when a line is written.
+	 * Reset() clears it with the latches.
+	 */
+	int32 DataAssetWarningsEmitted = 0;
+
 public:
 	// === Node Accessors ===
 
@@ -343,8 +353,12 @@ public:
 	 * unlatched warning would be a line per frame. Re-armed by Reset(), i.e. by a game restart.
 	 * The Set's value-pin refusal deliberately does NOT come through here: it names a wiring
 	 * mistake on an exec node the author just ran, and exec fires far less often than a condition.
+	 *
+	 * Returns whether a line was actually EMITTED (false = the latch swallowed it). Production
+	 * callers ignore it; it exists so the suppression is observable rather than merely implied by
+	 * the latch set, which TSet::Add would keep looking correct without it.
 	 */
-	void MaybeWarnDataAsset(const FString& NodeId, const TCHAR* Reason, const FString& Message);
+	bool MaybeWarnDataAsset(const FString& NodeId, const TCHAR* Reason, const FString& Message);
 
 	/** Build name-to-ID index for local variables */
 	void RebuildLocalNameIndex();

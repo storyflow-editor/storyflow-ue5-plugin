@@ -410,6 +410,7 @@ bool FStoryFlowDataAssetDegradedReadsTest::RunTest(const FString& Parameters)
 		const FString Type = Accessor->Data.VariableType;
 		// TWICE, always: the second read is what proves the warning LATCHED rather than the
 		// first one merely having been the only read.
+		int32 EmittedAfterFirstRead = 0;
 		for (int32 Pass = 0; Pass < 2; ++Pass)
 		{
 			const FString PassLabel = FString::Printf(TEXT("%s pass %d"), *Label, Pass);
@@ -445,7 +446,21 @@ bool FStoryFlowDataAssetDegradedReadsTest::RunTest(const FString& Parameters)
 				TestEqual(PassLabel + TEXT(" (string family)"),
 					Evaluator.EvaluateStringFromNode(Accessor, TEXT(""), TEXT("")), Expected->AsString());
 			}
+
+			if (Pass == 0)
+			{
+				EmittedAfterFirstRead = Context.DataAssetWarningsEmitted;
+			}
 		}
+
+		// SUPPRESSION, not merely latching. The latch-count assertion further down cannot see
+		// this: WarnedDataAssetNodes is a TSet, so a MaybeWarnDataAsset that dropped its early-out
+		// would still hold exactly one key while writing a line on every single evaluation — and
+		// an option condition re-evaluates every render. Only a counter that moves when a line is
+		// actually written tells the two apart.
+		const bool bWarnOnce = Case->GetBoolField(TEXT("warnOnce"));
+		TestEqual(Label + TEXT(" emitted its warning on the first read"), EmittedAfterFirstRead, bWarnOnce ? 1 : 0);
+		TestEqual(Label + TEXT(" emitted NOTHING on the second read"), Context.DataAssetWarningsEmitted, EmittedAfterFirstRead);
 
 		// The WRITE side's gate is this same ladder, so assert its verdict per case here rather
 		// than inferring it from the Set chain's end state: a case the fixture refuses for any
@@ -460,8 +475,11 @@ bool FStoryFlowDataAssetDegradedReadsTest::RunTest(const FString& Parameters)
 
 		// Once-ness across BOTH reads and the ladder call above: one latch, or none for a case
 		// the fixture marks healthy (contract §6, re-armed by a context Reset).
-		TestEqual(Label + TEXT(" warned exactly once per node"),
-			WarnLatchCount(Context, AccessorId), Case->GetBoolField(TEXT("warnOnce")) ? 1 : 0);
+		TestEqual(Label + TEXT(" holds exactly one latch per node"),
+			WarnLatchCount(Context, AccessorId), bWarnOnce ? 1 : 0);
+		// ...and the ladder call above emitted nothing new either, since it hits the same rung.
+		TestEqual(Label + TEXT(" emitted nothing more for the write-side ladder call"),
+			Context.DataAssetWarningsEmitted, EmittedAfterFirstRead);
 		++Asserted;
 	}
 	TestEqual(TEXT("every degraded case was asserted"), Asserted, Cases->Num());
@@ -1007,7 +1025,8 @@ bool FStoryFlowDataAssetArrayOpTest::RunTest(const FString& Parameters)
 	// variable also named "tags". The accessor carries no isGlobal and its Data.Variable is that
 	// same display name, so an arm that fell through to the name lookup would append to the
 	// local array and leave the `.sfd` untouched — silently, and in the one place an author
-	// would never think to look.
+	// would never think to look — the `.sfd` assertions below read 2 (the untouched override)
+	// instead of 3 in that case.
 	UStoryFlowScriptAsset* Script = NewObject<UStoryFlowScriptAsset>(GetTransientPackage());
 	FGCObjectScopeGuard ScriptGuard(Script);
 	Script->StartNode = TEXT("0");
@@ -1033,6 +1052,11 @@ bool FStoryFlowDataAssetArrayOpTest::RunTest(const FString& Parameters)
 
 	FStoryFlowNode Add = MakeNode(TEXT("add"), EStoryFlowNodeType::AddToStringArray, TEXT("addToStringArray"));
 	Add.Data.Value.SetString(TEXT("boss"));
+	// The op node ALSO names the decoy directly. Today's exporter writes no variable field on an
+	// array-op node, so this is a graph the editor does not currently emit — but it is what makes
+	// the ORDER observable: the wired `.sfd` accessor has to outrank the node's own name lookup,
+	// not merely act as the fallback when that lookup misses.
+	Add.Data.Variable = TEXT("tags");
 	Script->Nodes.Add(Add.Id, Add);
 
 	Script->Nodes.Add(TEXT("End"), MakeNode(TEXT("End"), EStoryFlowNodeType::End, TEXT("end")));
@@ -1060,6 +1084,45 @@ bool FStoryFlowDataAssetArrayOpTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("the base's tags are untouched by a child-level append"),
 		StoryFlowDataAssets::Resolve(Seed, Overlay, BaseId, TagsId).GetArray().Num(), 2);
+
+
+	// --- an op over an ALREADY-EMPTY array still writes a typed value ---
+	// A separate run, because a clear would wipe the append above. FStoryFlowVariant::SetArray
+	// infers its type from element [0], so an array that is empty WHEN READ is the one case where
+	// the type tag has nothing to come from — and a `.sfd` value travels on its own, without an
+	// FStoryFlowVariable beside it carrying the declaration. Untyped here means the same variable
+	// reads back typed or untyped depending only on whether the last writer left it empty, and
+	// the save key U3 writes would inherit that inconsistency.
+	UStoryFlowScriptAsset* ClearScript = NewObject<UStoryFlowScriptAsset>(GetTransientPackage());
+	FGCObjectScopeGuard ClearGuard(ClearScript);
+	ClearScript->StartNode = TEXT("0");
+	ClearScript->Nodes.Add(TEXT("0"), MakeNode(TEXT("0"), EStoryFlowNodeType::Start, TEXT("start")));
+	ClearScript->Nodes.Add(TEXT("pC"), MakePill(TEXT("pC"), ChildId));
+	ClearScript->Nodes.Add(Getter.Id, Getter);
+	ClearScript->Nodes.Add(TEXT("clr"), MakeNode(TEXT("clr"), EStoryFlowNodeType::ClearStringArray, TEXT("clearStringArray")));
+	ClearScript->Nodes.Add(TEXT("End"), MakeNode(TEXT("End"), EStoryFlowNodeType::End, TEXT("end")));
+	ClearScript->Connections.Add(MakePillEdge(TEXT("pC"), TEXT("g")));
+	ClearScript->Connections.Add(MakeEdge(TEXT("g"), TEXT("clr"),
+		StoryFlowHandles::Source(TEXT("g"), TEXT("string-array-")), StoryFlowHandles::Target(TEXT("clr"), StoryFlowHandles::In_StringArray)));
+	ClearScript->Connections.Add(MakeEdge(TEXT("0"), TEXT("clr"), StoryFlowHandles::Source(TEXT("0")), StoryFlowHandles::Target(TEXT("clr"), TEXT("0"))));
+	ClearScript->Connections.Add(MakeEdge(TEXT("clr"), TEXT("End"),
+		StoryFlowHandles::Source(TEXT("clr"), StoryFlowHandles::Out_Flow), StoryFlowHandles::Target(TEXT("End"), TEXT(""))));
+	ClearScript->BuildConnectionIndices();
+
+	Project->Scripts.Add(TEXT("arrayclear"), ClearScript);
+
+	// TWICE, and the second run is the one that asserts. The first clear still READS the three
+	// appended elements, so its type tag infers correctly no matter what — only a run whose read
+	// comes back already empty has nothing to infer from.
+	W.Component->StartDialogueWithScript(TEXT("arrayclear"));
+	TestEqual(TEXT("the first clear emptied the child's tags"),
+		StoryFlowDataAssets::Resolve(Seed, W.Subsystem->GetDataAssetOverlay(), ChildId, TagsId).GetArray().Num(), 0);
+
+	W.Component->StartDialogueWithScript(TEXT("arrayclear"));
+	const FStoryFlowVariant Cleared = StoryFlowDataAssets::Resolve(Seed, W.Subsystem->GetDataAssetOverlay(), ChildId, TagsId);
+	TestEqual(TEXT("the second clear left it empty"), Cleared.GetArray().Num(), 0);
+	TestTrue(TEXT("an op over an already-empty .sfd array still writes its declared element type"),
+		Cleared.GetType() == EStoryFlowVariableType::String);
 
 	CleanUp();
 	return true;
