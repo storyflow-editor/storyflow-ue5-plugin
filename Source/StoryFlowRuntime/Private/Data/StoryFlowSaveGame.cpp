@@ -1,7 +1,9 @@
 // Copyright 2026 StoryFlow. All Rights Reserved.
 
 #include "Data/StoryFlowSaveGame.h"
+#include "Data/StoryFlowDataAssetStore.h"
 #include "Data/StoryFlowTypes.h"
+#include "StoryFlowRuntime.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
 #include "Serialization/JsonReader.h"
@@ -358,12 +360,216 @@ FStoryFlowCharacterDef CharacterDefFromJson(const TSharedPtr<FJsonObject>& Obj)
 	return CharDef;
 }
 
+// --- The Data Asset overlay: the sparse `dataAssets` key (contract §7) ---
+//
+// NORMATIVE SOURCE: the HTML runtime's runtime-data-assets.js snapshot()/restore(), whose table
+// this key is byte-shape-identical to. BARE values, not the typed records VariableToJson writes
+// for globals and characters: the seed is schema-authoritative and always ships with the game, so
+// a save that pinned types would freeze content the author later edited.
+
+/**
+ * One overlay value as a BARE JSON value.
+ *
+ * Shape comes from the VARIANT (a map is an ordered entry list, a populated array is a JSON
+ * array), with the DECLARATION consulted for the one case a variant cannot answer: an EMPTY
+ * array and a scalar are the same variant here, because FStoryFlowVariant stores the ELEMENT
+ * type for arrays and has no "is an array" flag of its own. Without the declaration a cleared
+ * array would persist as `""` and reload as a scalar.
+ *
+ * Declaration may be null — a save written after the variable was deleted from the .sfd. Such an
+ * entry is dropped on the way back IN (it can never resolve), so the fallback here only has to
+ * be harmless.
+ */
+TSharedPtr<FJsonValue> BareValueToJson(const FStoryFlowVariant& Value, const FStoryFlowVariable* Declaration)
+{
+	if (Value.IsMap())
+	{
+		// Ordered entry list (contract §2.1) — the same writer the typed map path uses, minus
+		// the keyType/valueType record around it. Entry ORDER is authored and observable.
+		TArray<TSharedPtr<FJsonValue>> Entries;
+		for (const FStoryFlowMapEntry& Entry : Value.GetMap())
+		{
+			TSharedPtr<FJsonObject> EntryObj = MakeShared<FJsonObject>();
+			EntryObj->SetField(TEXT("key"), VariantToJson(Entry.Key));
+			EntryObj->SetField(TEXT("value"), VariantToJson(Entry.Value));
+			Entries.Add(MakeShared<FJsonValueObject>(EntryObj));
+		}
+		return MakeShared<FJsonValueArray>(Entries);
+	}
+
+	if (Value.GetArray().Num() > 0 || (Declaration && Declaration->bIsArray))
+	{
+		TArray<TSharedPtr<FJsonValue>> Elements;
+		for (const FStoryFlowVariant& Element : Value.GetArray())
+		{
+			Elements.Add(VariantToJson(Element));
+		}
+		return MakeShared<FJsonValueArray>(Elements);
+	}
+
+	return VariantToJson(Value);
+}
+
+/**
+ * One saved bare value back into a variant, TYPED FROM THE DECLARATION.
+ *
+ * The save carries no types, so the declaration is the only authority — the same rule the
+ * importer applies to overrides in its second pass. Getting this wrong is invisible to a read
+ * (an enum and a string both answer GetString) and visible in the NEXT save, so a save -> load
+ * -> save cycle would not be stable.
+ */
+FStoryFlowVariant BareValueFromJson(const TSharedPtr<FJsonValue>& JsonValue, const FStoryFlowVariable& Declaration)
+{
+	if (Declaration.Type == EStoryFlowVariableType::Map)
+	{
+		TArray<FStoryFlowMapEntry> Entries;
+		const TArray<TSharedPtr<FJsonValue>>* EntryValues;
+		if (JsonValue.IsValid() && JsonValue->TryGetArray(EntryValues))
+		{
+			for (const TSharedPtr<FJsonValue>& EntryValue : *EntryValues)
+			{
+				const TSharedPtr<FJsonObject>* EntryObj;
+				if (!EntryValue->TryGetObject(EntryObj))
+				{
+					continue;
+				}
+				// An entry without a key is unaddressable — skip it (matches the importer)
+				const TSharedPtr<FJsonValue> KeyField = (*EntryObj)->TryGetField(TEXT("key"));
+				if (!KeyField.IsValid())
+				{
+					continue;
+				}
+				FStoryFlowMapEntry Entry;
+				Entry.Key = VariantFromJson(KeyField, Declaration.KeyType);
+				Entry.Value = VariantFromJson((*EntryObj)->TryGetField(TEXT("value")), Declaration.ValueType);
+				Entries.Add(Entry);
+			}
+		}
+		FStoryFlowVariant Result;
+		Result.SetMap(Entries);
+		return Result;
+	}
+
+	if (Declaration.bIsArray)
+	{
+		TArray<FStoryFlowVariant> Elements;
+		const TArray<TSharedPtr<FJsonValue>>* ArrayValues;
+		if (JsonValue.IsValid() && JsonValue->TryGetArray(ArrayValues))
+		{
+			for (const TSharedPtr<FJsonValue>& Element : *ArrayValues)
+			{
+				Elements.Add(VariantFromJson(Element, Declaration.Type));
+			}
+		}
+		FStoryFlowVariant Result;
+		// The ELEMENT-TYPE overload, always: an emptied array carries nothing to infer from, and
+		// a variant that reads back typed or untyped depending on the last writer is a variant
+		// whose next save has a different shape.
+		Result.SetArray(Elements, Declaration.Type);
+		return Result;
+	}
+
+	return VariantFromJson(JsonValue, Declaration.Type);
+}
+
+/** The sparse overlay table: `{ assetId: { variableId: bare value } }`, `{}` when untouched. */
+TSharedPtr<FJsonObject> DataAssetOverlayToJson(
+	const StoryFlowDataAssets::FSeed& Seed,
+	const StoryFlowDataAssets::FOverlay& Overlay)
+{
+	TSharedPtr<FJsonObject> Root = MakeShared<FJsonObject>();
+	for (const auto& AssetPair : Overlay)
+	{
+		TSharedPtr<FJsonObject> AssetObj = MakeShared<FJsonObject>();
+		for (const auto& ValuePair : AssetPair.Value)
+		{
+			const FStoryFlowVariable* Declaration = StoryFlowDataAssets::FindDeclaration(Seed, AssetPair.Key, ValuePair.Key);
+			AssetObj->SetField(ValuePair.Key, BareValueToJson(ValuePair.Value, Declaration));
+		}
+		Root->SetObjectField(AssetPair.Key, AssetObj);
+	}
+	return Root;
+}
+
+/**
+ * REPLACE the overlay with the saved table (contract §7). Clears FIRST and unconditionally: an
+ * absent or malformed key clears, which is seed state, which is exactly the state such a save was
+ * made in. Merging instead would let the pre-load session's writes survive into the loaded game.
+ *
+ * Two kinds of entry are DROPPED rather than restored:
+ *  - an asset the current seed does not carry (deleted since the save). Mirrors the reference's
+ *    restore(): resolution starts its walk at seed[assetId], so the entry can never be read, and
+ *    keeping it would make it ride every subsequent save forever.
+ *  - a variable no level of that asset's chain declares any more. The reference keeps such an
+ *    entry because JS values need no declaration; a variant does — with no declaration there is
+ *    no type to restore it AS, and the same read rule (a value is honored only where the chain
+ *    declares the id) already makes it dead data. Dropping it is the typed-language shape of the
+ *    same "it can never be read" argument.
+ *
+ * Values are NOT otherwise re-validated: a stale-typed entry degrades at the accessor via §6.1,
+ * exactly as a stale session write does.
+ */
+void DataAssetOverlayFromJson(
+	const TSharedPtr<FJsonObject>& Root,
+	const StoryFlowDataAssets::FSeed& Seed,
+	StoryFlowDataAssets::FOverlay& OutOverlay)
+{
+	OutOverlay.Empty();
+
+	const TSharedPtr<FJsonObject>* TableObj = nullptr;
+	if (!Root.IsValid() || !Root->TryGetObjectField(TEXT("dataAssets"), TableObj))
+	{
+		return;
+	}
+
+	for (const auto& AssetPair : (*TableObj)->Values)
+	{
+		const FString AssetId(*AssetPair.Key);
+		if (!StoryFlowDataAssets::HasAsset(Seed, AssetId))
+		{
+			// Deliberately not the write path's wording: a load-time drop (the save outlived the
+			// asset) and a script write to a dead reference are different problems with
+			// different fixes, and they would otherwise read as the same line.
+			UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Save load dropped Data Asset '%s' - no such asset in this project"), *AssetId);
+			continue;
+		}
+
+		const TSharedPtr<FJsonObject>* AssetObj;
+		if (!AssetPair.Value->TryGetObject(AssetObj))
+		{
+			continue;
+		}
+
+		TMap<FString, FStoryFlowVariant> Values;
+		for (const auto& ValuePair : (*AssetObj)->Values)
+		{
+			const FString VariableId(*ValuePair.Key);
+			const FStoryFlowVariable* Declaration = StoryFlowDataAssets::FindDeclaration(Seed, AssetId, VariableId);
+			if (!Declaration)
+			{
+				UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Save load dropped Data Asset value '%s.%s' - the chain no longer declares it"), *AssetId, *VariableId);
+				continue;
+			}
+			Values.Add(VariableId, BareValueFromJson(ValuePair.Value, *Declaration));
+		}
+
+		// An asset whose every entry was dropped leaves NO entry behind — an empty inner table
+		// would ride every subsequent save carrying nothing.
+		if (Values.Num() > 0)
+		{
+			OutOverlay.Add(AssetId, MoveTemp(Values));
+		}
+	}
+}
+
 // --- Top-level serialize/deserialize ---
 
 FString SerializeSaveData(
 	const TMap<FString, FStoryFlowVariable>& GlobalVariables,
 	const TMap<FString, FStoryFlowCharacterDef>& RuntimeCharacters,
-	const TSet<FString>& UsedOnceOnlyOptions)
+	const TSet<FString>& UsedOnceOnlyOptions,
+	const StoryFlowDataAssets::FSeed& DataAssetSeed,
+	const StoryFlowDataAssets::FOverlay& DataAssetOverlay)
 {
 	TSharedPtr<FJsonObject> Root = MakeShared<FJsonObject>();
 	Root->SetStringField(TEXT("version"), TEXT("1"));
@@ -392,6 +598,12 @@ FString SerializeSaveData(
 	}
 	Root->SetArrayField(TEXT("usedOnceOnlyOptions"), OnceOnlyArray);
 
+	// Data Asset overlay (contract §7). ALWAYS written, `{}` when nothing was written this
+	// session — the `characters` convention, and the shape runtime-save.js persists. Additive:
+	// SaveVersion stays "1", older plugin builds ignore the key, and this build reads its
+	// absence as "clear the overlay".
+	Root->SetObjectField(TEXT("dataAssets"), DataAssetOverlayToJson(DataAssetSeed, DataAssetOverlay));
+
 	FString OutputString;
 	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutputString);
 	FJsonSerializer::Serialize(Root.ToSharedRef(), Writer);
@@ -403,7 +615,9 @@ bool DeserializeSaveData(
 	const FString& JsonString,
 	TMap<FString, FStoryFlowVariable>& OutGlobalVariables,
 	TMap<FString, FStoryFlowCharacterDef>& OutRuntimeCharacters,
-	TSet<FString>& OutUsedOnceOnlyOptions)
+	TSet<FString>& OutUsedOnceOnlyOptions,
+	const StoryFlowDataAssets::FSeed& DataAssetSeed,
+	StoryFlowDataAssets::FOverlay& OutDataAssetOverlay)
 {
 	TSharedPtr<FJsonObject> Root;
 	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(JsonString);
@@ -452,6 +666,9 @@ bool DeserializeSaveData(
 			OutUsedOnceOnlyOptions.Add(Val->AsString());
 		}
 	}
+
+	// Data Asset overlay: REPLACE, and an absent key clears (contract §7)
+	DataAssetOverlayFromJson(Root, DataAssetSeed, OutDataAssetOverlay);
 
 	return true;
 }

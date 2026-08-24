@@ -105,6 +105,27 @@ namespace StoryFlowDataAssets
 		return Declared;
 	}
 
+	const FStoryFlowVariable* FindDeclarationByName(const FSeed& Seed, const FString& AssetId, const FString& VariableName)
+	{
+		// Same walk, same root-most-wins rule as FindDeclaration — only the match differs. A
+		// descendant that re-declares an inherited NAME therefore resolves to the ancestor's
+		// declaration, which is the id its value actually lives under.
+		const FStoryFlowVariable* Declared = nullptr;
+		WalkChain(Seed, AssetId, [&](const FStoryFlowDataAssetDef& Level)
+		{
+			for (const FStoryFlowVariable& Variable : Level.Variables)
+			{
+				if (Variable.Name == VariableName)
+				{
+					Declared = &Variable;
+					break;
+				}
+			}
+			return true;
+		});
+		return Declared;
+	}
+
 	bool TryResolve(const FSeed& Seed, const FOverlay& Overlay, const FString& AssetId, const FString& VariableId, FStoryFlowVariant& OutValue)
 	{
 		// resolveEntry's two accumulators, kept apart on purpose:

@@ -12,6 +12,7 @@
 class UStoryFlowProjectAsset;
 class UStoryFlowScriptAsset;
 class UStoryFlowCharacterAsset;
+class UStoryFlowDataAssetAsset;
 class UStoryFlowSubsystem;
 class UStoryFlowDialogueWidget;
 class UAudioComponent;
@@ -621,6 +622,86 @@ public:
 	void SetCharacterEnumVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName, const FString& Value);
 
 	// ========================================================================
+	// Data Asset Variable Access (typed, with asset picker)
+	// ========================================================================
+	//
+	// The Blueprint half of the .sfd system (engine contract §4/§5), mirroring the character
+	// accessors above: an asset reference plus the variable NAME an author typed in the editor.
+	//
+	// Three things differ from the character shape, on purpose:
+	//  - READS GO THROUGH THE RESOLVER, so a Blueprint sees the same value a dialogue does:
+	//    inherited defaults, ancestor overrides, and this session's writes, with an ancestor's
+	//    write cascading down. Never a cached copy of anything.
+	//  - FAILURE IS REPORTED, not logged. A Blueprint call has no node id, so it cannot join the
+	//    graph accessors' warn-once ladder (contract §6, which is latched PER NODE) — an
+	//    unlatched log line on a getter a Blueprint ticks would be a line per frame. The `bFound`
+	//    / return-value flag is the whole report.
+	//  - THE DECLARED TYPE MUST MATCH the accessor, with no coercion (the §6.1 rule at this
+	//    surface): reading an integer variable through the float getter reports not-found rather
+	//    than converting, because within the string family especially a value carries no
+	//    evidence of the type it was declared as.
+	//
+	// Writes land at the referenced asset's OWN level and cascade to its descendants (§5), which
+	// is also why there is no "write to the base" variant: reference the base to write there.
+
+	/** Get a Data Asset's boolean variable, resolved through its parent chain and this session's writes */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool GetDataAssetBoolVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound);
+
+	/** Set a Data Asset's boolean variable for this session. False when the variable is unknown or not a boolean. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetBoolVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool bValue);
+
+	/** Get a Data Asset's integer variable, resolved through its parent chain and this session's writes */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	int32 GetDataAssetIntVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound);
+
+	/** Set a Data Asset's integer variable for this session. False when the variable is unknown or not an integer. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetIntVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, int32 Value);
+
+	/** Get a Data Asset's float variable, resolved through its parent chain and this session's writes */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	float GetDataAssetFloatVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound);
+
+	/** Set a Data Asset's float variable for this session. False when the variable is unknown or not a float. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetFloatVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, float Value);
+
+	/**
+	 * Get a Data Asset's string variable, resolved through its parent chain and this session's writes.
+	 *
+	 * Also serves image, character and audio variables: all four are declared distinctly in the
+	 * editor but hold a plain string (an asset key or a path) at runtime. ENUM is the exception —
+	 * it stores a distinct type tag, so it has its own accessor rather than being coerced here.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	FString GetDataAssetStringVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound);
+
+	/** Set a Data Asset's string (or image / character / audio) variable for this session. False when the variable is unknown or a different type. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetStringVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, const FString& Value);
+
+	/** Get a Data Asset's enum variable (as string), resolved through its parent chain and this session's writes */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	FString GetDataAssetEnumVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound);
+
+	/** Set a Data Asset's enum variable (as string) for this session. False when the variable is unknown or not an enum. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetEnumVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, const FString& Value);
+
+	/**
+	 * Get a Data Asset's variable as a raw variant — the ARRAY and MAP path.
+	 *
+	 * Arrays and maps have no typed accessor of their own: feed the variant to
+	 * UStoryFlowVariantLibrary (GetVariantArray / GetVariantMap / GetVariantAs*), the same
+	 * library the character and script variable nodes use, rather than growing a second set of
+	 * container nodes here. Scalars come through it too, untyped.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	FStoryFlowVariant GetDataAssetVariantVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound);
+
+	// ========================================================================
 	// Utility Functions
 	// ========================================================================
 
@@ -766,6 +847,31 @@ protected:
 
 	/** Find a character def from an asset reference */
 	FStoryFlowCharacterDef* FindCharacterFromAsset(UStoryFlowCharacterAsset* CharacterAsset);
+
+	/**
+	 * Resolve a Blueprint (asset, variable NAME) pair to the chain declaration it names, handing
+	 * back the store to read or write it through. Null when there is no subsystem, no asset, or
+	 * no level of the chain declares that name.
+	 *
+	 * The store comes from the SUBSYSTEM, not from ExecutionContext: the context only points at
+	 * it once a dialogue has started, and a Blueprint may read or write a .sfd value at any time.
+	 * Both are the same subsystem-owned maps, so a Blueprint write is visible to the next graph
+	 * read and vice versa.
+	 */
+	const FStoryFlowVariable* FindDataAssetDeclaration(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, StoryFlowDataAssets::FStoreRef& OutStore) const;
+
+	/**
+	 * FindDataAssetDeclaration plus the typed-accessor gate: the declaration must be a NON-ARRAY
+	 * of `ExpectedType` (the string accessor additionally taking image / character / audio, which
+	 * are stored as plain strings), because these accessors never coerce — contract §6.1's rule
+	 * at the Blueprint surface. Null also means "report not-found" to the caller.
+	 */
+	const FStoryFlowVariable* FindDataAssetScalarDeclaration(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
+		EStoryFlowVariableType ExpectedType, StoryFlowDataAssets::FStoreRef& OutStore) const;
+
+	/** The shared tail of every typed Data Asset setter: gate, then write at the asset's own level. */
+	bool SetDataAssetScalar(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
+		EStoryFlowVariableType ExpectedType, const FStoryFlowVariant& Value);
 
 	/** Resolve a string table key to localized text using LanguageCode */
 	FString ResolveString(const FString& Key) const;

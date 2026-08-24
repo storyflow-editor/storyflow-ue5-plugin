@@ -236,12 +236,15 @@ void UStoryFlowSubsystem::TryAutoLoadProject()
 bool UStoryFlowSubsystem::SaveToSlot(const FString& SlotName, int32 UserIndex)
 {
 	UStoryFlowSaveGame* SaveGameInstance = NewObject<UStoryFlowSaveGame>();
-	SaveGameInstance->SaveDataJson = StoryFlowSaveHelpers::SerializeSaveData(GlobalVariables, RuntimeCharacters, UsedOnceOnlyOptions);
+	// The Data Asset overlay joins the same call (contract §7): the SEED goes with it for shape
+	// only — an empty array and a scalar are the same variant, and only a declaration tells them
+	// apart. The seed's VALUES never reach a save; the export carries those.
+	SaveGameInstance->SaveDataJson = StoryFlowSaveHelpers::SerializeSaveData(GlobalVariables, RuntimeCharacters, UsedOnceOnlyOptions, DataAssetSeed, DataAssetOverlay);
 
 	if (UGameplayStatics::SaveGameToSlot(SaveGameInstance, SlotName, UserIndex))
 	{
-		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Saved to slot '%s' (%d globals, %d characters, %d once-only)"),
-			*SlotName, GlobalVariables.Num(), RuntimeCharacters.Num(), UsedOnceOnlyOptions.Num());
+		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Saved to slot '%s' (%d globals, %d characters, %d once-only, %d data assets written)"),
+			*SlotName, GlobalVariables.Num(), RuntimeCharacters.Num(), UsedOnceOnlyOptions.Num(), DataAssetOverlay.Num());
 		return true;
 	}
 
@@ -271,21 +274,18 @@ bool UStoryFlowSubsystem::LoadFromSlot(const FString& SlotName, int32 UserIndex)
 		return false;
 	}
 
-	if (!StoryFlowSaveHelpers::DeserializeSaveData(SaveGameInstance->SaveDataJson, GlobalVariables, RuntimeCharacters, UsedOnceOnlyOptions))
+	// The overlay is REPLACED in place, never merged (contract §7): DeserializeSaveData clears it
+	// before applying the saved table, so a save from before this key existed — or one whose key
+	// is malformed — restores seed state rather than leaving this session's writes layered over
+	// freshly loaded state. The seed goes in as the type authority for the saved bare values.
+	if (!StoryFlowSaveHelpers::DeserializeSaveData(SaveGameInstance->SaveDataJson, GlobalVariables, RuntimeCharacters, UsedOnceOnlyOptions, DataAssetSeed, DataAssetOverlay))
 	{
 		UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Failed to parse save data from slot '%s'"), *SlotName);
 		return false;
 	}
 
-	// Contract §7 is "load = REPLACE, not merge", and an absent or malformed dataAssets key
-	// clears — so a save that carries none correctly restores seed state. Until Task U3 adds
-	// the sparse persistence, every save is such a save, and clearing here is the whole of
-	// that rule that applies. Leaving the overlay alone would layer the pre-load session's
-	// writes over freshly loaded state, which is the one outcome §7 names as wrong.
-	StoryFlowDataAssets::ResetOverlay(DataAssetOverlay);
-
-	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Loaded from slot '%s' (%d globals, %d characters, %d once-only)"),
-		*SlotName, GlobalVariables.Num(), RuntimeCharacters.Num(), UsedOnceOnlyOptions.Num());
+	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Loaded from slot '%s' (%d globals, %d characters, %d once-only, %d data assets written)"),
+		*SlotName, GlobalVariables.Num(), RuntimeCharacters.Num(), UsedOnceOnlyOptions.Num(), DataAssetOverlay.Num());
 	return true;
 }
 

@@ -95,6 +95,20 @@ namespace StoryFlowDataAssets
 	STORYFLOWRUNTIME_API const FStoryFlowVariable* FindDeclaration(const FSeed& Seed, const FString& AssetId, const FString& VariableId);
 
 	/**
+	 * FindDeclaration's twin for the BLUEPRINT surface, matching on the display NAME instead of
+	 * the id, with the same root-most-wins rule.
+	 *
+	 * Two lookups exist because two audiences do: everything the exporter emits is keyed by id
+	 * (the contract keys the whole system that way, and ids survive a rename), while a Blueprint
+	 * author holds an asset reference and the name they typed in the editor. The declaration the
+	 * caller gets back carries the id, so a name is resolved to an id exactly once, at the
+	 * boundary — nothing downstream of here knows names exist.
+	 *
+	 * Returned by pointer INTO the seed; see FindDeclaration.
+	 */
+	STORYFLOWRUNTIME_API const FStoryFlowVariable* FindDeclarationByName(const FSeed& Seed, const FString& AssetId, const FString& VariableName);
+
+	/**
 	 * Effective value of `VariableId` as seen by `AssetId` (contract §4), mirroring
 	 * runtime-data-assets.js resolveEntry. Walks leaf -> root taking, per level and in order,
 	 * the overlay entry, else that level's override; first hit wins, and an ancestor's entry
