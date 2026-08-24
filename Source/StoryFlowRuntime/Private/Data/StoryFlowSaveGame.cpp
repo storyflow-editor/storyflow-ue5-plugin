@@ -533,12 +533,17 @@ void DataAssetOverlayFromJson(
 
 	for (const auto& AssetPair : (*TableObj)->Values)
 	{
-		const FString AssetId(*AssetPair.Key);
+		const FString& AssetId = AssetPair.Key;
 		if (!StoryFlowDataAssets::HasAsset(Seed, AssetId))
 		{
 			// Deliberately not the write path's wording: a load-time drop (the save outlived the
 			// asset) and a script write to a dead reference are different problems with
 			// different fixes, and they would otherwise read as the same line.
+			//
+			// WARNING, where the per-variable drop below is Verbose: a whole asset gone means the
+			// save outlived the .sfd, which is a project-shape change worth surfacing once, and it
+			// can fire at most once per saved asset. The variable-level drop is one line per
+			// stale entry and is the expected residue of any variable rename, so it stays quiet.
 			UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Save load dropped Data Asset '%s' - no such asset in this project"), *AssetId);
 			continue;
 		}
@@ -552,7 +557,7 @@ void DataAssetOverlayFromJson(
 		TMap<FString, FStoryFlowVariant> Values;
 		for (const auto& ValuePair : (*AssetObj)->Values)
 		{
-			const FString VariableId(*ValuePair.Key);
+			const FString& VariableId = ValuePair.Key;
 			const FStoryFlowVariable* Declaration = StoryFlowDataAssets::FindDeclaration(Seed, AssetId, VariableId);
 			if (!Declaration)
 			{

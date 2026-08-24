@@ -1808,6 +1808,13 @@ namespace
 	 * coercion — it is the value. Enum is NOT in that set: it carries its own type tag, and
 	 * folding it in here would make a Blueprint write land in the overlay typed String while the
 	 * file value it shadows is typed Enum — invisible to a read, visible in the save key.
+	 *
+	 * NOT the same set as StoryFlowEngineContract::IsStringFamily (the test fixtures' helper),
+	 * which has FIVE members because it answers a different question: it asks what STORAGE a
+	 * value ended up in, where Enum does live in StringValue alongside the other four. This one
+	 * asks which DECLARATION an accessor may reach, and Enum has its own accessor. The two must
+	 * not be merged: doing it would either open enum writes to the string setter (above) or shut
+	 * the fixture comparator out of every enum value it checks.
 	 */
 	bool DataAssetAccessorTypeMatches(EStoryFlowVariableType DeclaredType, EStoryFlowVariableType ExpectedType)
 	{
@@ -1894,20 +1901,25 @@ bool UStoryFlowComponent::SetDataAssetScalar(UStoryFlowDataAssetAsset* DataAsset
 	return StoryFlowDataAssets::TrySet(*Store.Seed, *Store.Overlay, DataAsset->AssetId, Declaration->Id, Value);
 }
 
-bool UStoryFlowComponent::GetDataAssetBoolVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound)
+bool UStoryFlowComponent::TryGetDataAssetScalar(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
+	EStoryFlowVariableType ExpectedType, FStoryFlowVariant& OutValue) const
 {
-	bFound = false;
 	StoryFlowDataAssets::FStoreRef Store;
-	const FStoryFlowVariable* Declaration = FindDataAssetScalarDeclaration(DataAsset, VariableName, EStoryFlowVariableType::Boolean, Store);
+	const FStoryFlowVariable* Declaration = FindDataAssetScalarDeclaration(DataAsset, VariableName, ExpectedType, Store);
 	if (!Declaration)
 	{
 		return false;
 	}
 
-	FStoryFlowVariant Value;
 	// Through the RESOLVER, never a cached copy: chain defaults, ancestor overrides and this
 	// session's writes all have to be visible here (contract §4).
-	bFound = StoryFlowDataAssets::TryResolve(*Store.Seed, *Store.Overlay, DataAsset->AssetId, Declaration->Id, Value);
+	return StoryFlowDataAssets::TryResolve(*Store.Seed, *Store.Overlay, DataAsset->AssetId, Declaration->Id, OutValue);
+}
+
+bool UStoryFlowComponent::GetDataAssetBoolVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound)
+{
+	FStoryFlowVariant Value;
+	bFound = TryGetDataAssetScalar(DataAsset, VariableName, EStoryFlowVariableType::Boolean, Value);
 	return bFound ? Value.GetBool() : false;
 }
 
@@ -1920,16 +1932,8 @@ bool UStoryFlowComponent::SetDataAssetBoolVariable(UStoryFlowDataAssetAsset* Dat
 
 int32 UStoryFlowComponent::GetDataAssetIntVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound)
 {
-	bFound = false;
-	StoryFlowDataAssets::FStoreRef Store;
-	const FStoryFlowVariable* Declaration = FindDataAssetScalarDeclaration(DataAsset, VariableName, EStoryFlowVariableType::Integer, Store);
-	if (!Declaration)
-	{
-		return 0;
-	}
-
 	FStoryFlowVariant Value;
-	bFound = StoryFlowDataAssets::TryResolve(*Store.Seed, *Store.Overlay, DataAsset->AssetId, Declaration->Id, Value);
+	bFound = TryGetDataAssetScalar(DataAsset, VariableName, EStoryFlowVariableType::Integer, Value);
 	return bFound ? Value.GetInt() : 0;
 }
 
@@ -1942,16 +1946,8 @@ bool UStoryFlowComponent::SetDataAssetIntVariable(UStoryFlowDataAssetAsset* Data
 
 float UStoryFlowComponent::GetDataAssetFloatVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound)
 {
-	bFound = false;
-	StoryFlowDataAssets::FStoreRef Store;
-	const FStoryFlowVariable* Declaration = FindDataAssetScalarDeclaration(DataAsset, VariableName, EStoryFlowVariableType::Float, Store);
-	if (!Declaration)
-	{
-		return 0.0f;
-	}
-
 	FStoryFlowVariant Value;
-	bFound = StoryFlowDataAssets::TryResolve(*Store.Seed, *Store.Overlay, DataAsset->AssetId, Declaration->Id, Value);
+	bFound = TryGetDataAssetScalar(DataAsset, VariableName, EStoryFlowVariableType::Float, Value);
 	return bFound ? Value.GetFloat() : 0.0f;
 }
 
@@ -1964,16 +1960,8 @@ bool UStoryFlowComponent::SetDataAssetFloatVariable(UStoryFlowDataAssetAsset* Da
 
 FString UStoryFlowComponent::GetDataAssetStringVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound)
 {
-	bFound = false;
-	StoryFlowDataAssets::FStoreRef Store;
-	const FStoryFlowVariable* Declaration = FindDataAssetScalarDeclaration(DataAsset, VariableName, EStoryFlowVariableType::String, Store);
-	if (!Declaration)
-	{
-		return FString();
-	}
-
 	FStoryFlowVariant Value;
-	bFound = StoryFlowDataAssets::TryResolve(*Store.Seed, *Store.Overlay, DataAsset->AssetId, Declaration->Id, Value);
+	bFound = TryGetDataAssetScalar(DataAsset, VariableName, EStoryFlowVariableType::String, Value);
 	return bFound ? Value.GetString() : FString();
 }
 
@@ -1986,16 +1974,8 @@ bool UStoryFlowComponent::SetDataAssetStringVariable(UStoryFlowDataAssetAsset* D
 
 FString UStoryFlowComponent::GetDataAssetEnumVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound)
 {
-	bFound = false;
-	StoryFlowDataAssets::FStoreRef Store;
-	const FStoryFlowVariable* Declaration = FindDataAssetScalarDeclaration(DataAsset, VariableName, EStoryFlowVariableType::Enum, Store);
-	if (!Declaration)
-	{
-		return FString();
-	}
-
 	FStoryFlowVariant Value;
-	bFound = StoryFlowDataAssets::TryResolve(*Store.Seed, *Store.Overlay, DataAsset->AssetId, Declaration->Id, Value);
+	bFound = TryGetDataAssetScalar(DataAsset, VariableName, EStoryFlowVariableType::Enum, Value);
 	return bFound ? Value.GetString() : FString();
 }
 

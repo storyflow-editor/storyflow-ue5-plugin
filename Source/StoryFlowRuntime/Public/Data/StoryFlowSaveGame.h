@@ -40,7 +40,13 @@ namespace StoryFlowSaveHelpers
 	 *
 	 * The overlay rides the `dataAssets` root key (contract §7): sparse, BARE values, always
 	 * present and `{}` when nothing was written — the shape the HTML runtime already persists
-	 * (runtime-save.js buildEnvelope), byte-shape-identical across the four runtimes.
+	 * (runtime-save.js buildEnvelope), and the first envelope section all four runtimes share.
+	 *
+	 * SHAPE-identical, not byte-identical: the keys inside each object come out in TMap iteration
+	 * order, which is neither sorted nor the order they were written, and the other runtimes use
+	 * their own containers. A porter checking parity must compare STRUCTURALLY (the golden save
+	 * test's JsonEquals is the reference for what that means: object keys unordered, ARRAY and
+	 * map-entry order significant), never by diffing the two documents as text.
 	 *
 	 * The SEED is passed for shape, never for values: an empty array and a scalar are the same
 	 * variant in C++ (FStoryFlowVariant carries the ELEMENT type, with no "is an array" flag),

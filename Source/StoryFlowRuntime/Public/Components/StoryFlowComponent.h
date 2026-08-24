@@ -628,7 +628,7 @@ public:
 	// The Blueprint half of the .sfd system (engine contract §4/§5), mirroring the character
 	// accessors above: an asset reference plus the variable NAME an author typed in the editor.
 	//
-	// Three things differ from the character shape, on purpose:
+	// Four things differ from the character shape, on purpose:
 	//  - READS GO THROUGH THE RESOLVER, so a Blueprint sees the same value a dialogue does:
 	//    inherited defaults, ancestor overrides, and this session's writes, with an ancestor's
 	//    write cascading down. Never a cached copy of anything.
@@ -640,6 +640,13 @@ public:
 	//    surface): reading an integer variable through the float getter reports not-found rather
 	//    than converting, because within the string family especially a value carries no
 	//    evidence of the type it was declared as.
+	//  - THE SURFACE IS ASYMMETRIC: read ANY type, write SCALARS ONLY. Every declaration is
+	//    readable (scalars typed, arrays and maps through GetDataAssetVariantVariable), but there
+	//    is no SetDataAssetVariantVariable — arrays and maps are written by the graph's Set node
+	//    alone. A variant setter cannot use the scalar gate: it would have to check the
+	//    declaration's SHAPE too (isArray, and a map's key/value types) or a Blueprint could drop
+	//    a scalar over a declared map and leave a value nothing can read. That gate is buildable
+	//    and was deliberately left out of V2 scope rather than half-built.
 	//
 	// Writes land at the referenced asset's OWN level and cascade to its descendants (§5), which
 	// is also why there is no "write to the base" variant: reference the base to write there.
@@ -872,6 +879,14 @@ protected:
 	/** The shared tail of every typed Data Asset setter: gate, then write at the asset's own level. */
 	bool SetDataAssetScalar(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
 		EStoryFlowVariableType ExpectedType, const FStoryFlowVariant& Value);
+
+	/**
+	 * The shared tail of every typed Data Asset getter: gate, then resolve through the chain.
+	 * False leaves OutValue untouched and means "report not found" — each typed getter turns that
+	 * into its own zero. The VARIANT getter does not come through here: it has no type gate.
+	 */
+	bool TryGetDataAssetScalar(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
+		EStoryFlowVariableType ExpectedType, FStoryFlowVariant& OutValue) const;
 
 	/** Resolve a string table key to localized text using LanguageCode */
 	FString ResolveString(const FString& Key) const;

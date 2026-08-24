@@ -15,6 +15,7 @@
 #include "Import/StoryFlowImporter.h"
 #include "StoryFlowEngineContractFixtures.h"
 #include "StoryFlowRuntime.h"
+#include "StoryFlowScopedWorld.h"
 #include "Subsystems/StoryFlowSubsystem.h"
 #include "EditorAssetLibrary.h"
 #include "GameFramework/Actor.h"
@@ -33,7 +34,8 @@
  *  - `writes` + `postWriteResolutions` .. owned by StoryFlow.DataAssets.Resolution (§5)
  *  - `saveKey` .......................... OWNED HERE: the exact sparse table snapshot() produces
  *    in the HTML runtime after those same six writes. It is the first envelope section all four
- *    runtimes share byte-shape-identically, so a drift here is a save an engine cannot read.
+ *    runtimes share, so a drift here is a save an engine cannot read. SHAPE-identical, not
+ *    byte-identical — see JsonEquals below for what is compared and what is not.
  *
  * WHY A GOLDEN COMPARE AND NOT SPOT CHECKS: the key carries BARE values (contract §7) — no types,
  * no declarations. Every way of getting that wrong (writing the typed record globals use, writing
@@ -151,6 +153,24 @@ namespace StoryFlowDataAssetSaveTestHelpers
 		TMap<FString, FStoryFlowCharacterDef> Characters;
 		TSet<FString> OnceOnly;
 		return StoryFlowSaveHelpers::DeserializeSaveData(Json, Globals, Characters, OnceOnly, Seed, OutOverlay);
+	}
+
+	/**
+	 * A hand-doctored save document, with the fixture's ids substituted for NAMED TOKENS.
+	 *
+	 * Token replacement rather than FString::Printf, the same idiom RoundTripSeedJson uses in the
+	 * resolution suite: a positional %s list over a JSON literal is unreadable at five arguments
+	 * (which id is the undeclared one?) and a single future percent sign anywhere in the body
+	 * would silently corrupt a Printf-built string.
+	 */
+	FString DoctorSaveJson(const FString& Template)
+	{
+		return Template
+			.Replace(TEXT("BASE_ID"), BaseId, ESearchCase::CaseSensitive)
+			.Replace(TEXT("ABSENT_ID"), AbsentId, ESearchCase::CaseSensitive)
+			.Replace(TEXT("HP_ID"), HpId, ESearchCase::CaseSensitive)
+			.Replace(TEXT("NOWHERE_ID"), NowhereId, ESearchCase::CaseSensitive)
+			.Replace(TEXT("LORE_ID"), LoreId, ESearchCase::CaseSensitive);
 	}
 
 	/** The JSON type of one field, or EJson::None when the field is absent — never a null deref. */
@@ -278,37 +298,13 @@ namespace StoryFlowDataAssetSaveTestHelpers
 		}
 	}
 
-	/** A standalone game instance with a registered component, the shape the runtime tests share. */
-	struct FScopedWorld
-	{
-		UGameInstance* GameInstance = nullptr;
-		UWorld* World = nullptr;
-		UStoryFlowComponent* Component = nullptr;
-		UStoryFlowSubsystem* Subsystem = nullptr;
-
-		bool Init()
-		{
-			GameInstance = NewObject<UGameInstance>(GEngine);
-			GameInstance->InitializeStandalone();
-			World = GameInstance->GetWorld();
-			if (!World) { return false; }
-			AActor* Owner = World->SpawnActor<AActor>();
-			if (!Owner) { return false; }
-			Component = NewObject<UStoryFlowComponent>(Owner);
-			Component->RegisterComponent();
-			Subsystem = GameInstance->GetSubsystem<UStoryFlowSubsystem>();
-			return Component != nullptr && Subsystem != nullptr;
-		}
-
-		~FScopedWorld()
-		{
-			if (World) { World->DestroyWorld(false); }
-		}
-	};
+	// FScopedWorld — the standalone game instance with a registered component — lives in
+	// StoryFlowScopedWorld.h, shared with the node suite.
+	using StoryFlowTestWorld::FScopedWorld;
 }
 
 // ============================================================================
-// The golden save key (§7) — the fixture's `saveKey`, byte-shape
+// The golden save key (§7) — the fixture's `saveKey`, compared structurally
 // ============================================================================
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetSaveKeyFixtureTest,
@@ -712,12 +708,12 @@ bool FStoryFlowDataAssetSaveLoadRulesTest::RunTest(const FString& Parameters)
 
 	// --- Entries the current project cannot reach are DROPPED ---
 	SeedOverlay(Overlay);
-	const FString DoctoredSave = FString::Printf(TEXT(R"JSON({"version":"1","dataAssets":{
-			"%s": { "%s": 3, "%s": true, "%s": false },
-			"%s": { "%s": 5 }
-		}})JSON"),
-		BaseId, HpId, NowhereId, LoreId,   // a real write, an undeclared id, a category row
-		AbsentId, HpId);                   // an asset this project does not carry
+	// A real write, an undeclared id and a category row on a reachable asset, then a whole asset
+	// this project does not carry
+	const FString DoctoredSave = DoctorSaveJson(TEXT(R"JSON({"version":"1","dataAssets":{
+			"BASE_ID": { "HP_ID": 3, "NOWHERE_ID": true, "LORE_ID": false },
+			"ABSENT_ID": { "HP_ID": 5 }
+		}})JSON"));
 	// The dropped-asset line is a Warning by design (a save that outlived an asset is worth
 	// saying out loud), so the harness is told to expect it rather than failing on it.
 	AddExpectedError(TEXT("Save load dropped Data Asset"), EAutomationExpectedErrorFlags::Contains, 1);
@@ -742,8 +738,7 @@ bool FStoryFlowDataAssetSaveLoadRulesTest::RunTest(const FString& Parameters)
 
 	// --- An asset whose every entry was dropped leaves NO entry behind ---
 	SeedOverlay(Overlay);
-	const FString AllDroppedSave = FString::Printf(TEXT(R"JSON({"version":"1","dataAssets":{ "%s": { "%s": 1 } }})JSON"),
-		BaseId, NowhereId);
+	const FString AllDroppedSave = DoctorSaveJson(TEXT(R"JSON({"version":"1","dataAssets":{ "BASE_ID": { "NOWHERE_ID": 1 } }})JSON"));
 	TestTrue(TEXT("a save whose only entry is undeclared loads"), DeserializeOverlayOnly(AllDroppedSave, Seed, Overlay));
 	TestEqual(TEXT("and leaves an empty overlay, not an empty asset table"), Overlay.Num(), 0);
 
@@ -839,8 +834,12 @@ bool FStoryFlowDataAssetBlueprintSurfaceTest::RunTest(const FString& Parameters)
 	TestNearlyEqual(TEXT("a float reads through the root's own override"), W.Component->GetDataAssetFloatVariable(Base, TEXT("speed"), bFound), 2.25f, 1.e-4f);
 	TestEqual(TEXT("an enum reads through the child's override"), W.Component->GetDataAssetEnumVariable(Child, TEXT("rank"), bFound), TEXT("Elite"));
 	TestEqual(TEXT("a string reads from the base"), W.Component->GetDataAssetStringVariable(Base, TEXT("title"), bFound), TEXT("Grunt"));
-	// Root-most declaration owns the slot: the grandchild re-declares `title`, and loses
-	TestEqual(TEXT("a re-declared name still resolves to the ROOT-most declaration"),
+	// Root-most declaration owns the slot (§4.3): the grandchild re-declares `title` under the
+	// SAME id with a different value, and the base's wins. This is the shared chain walk, not the
+	// name lookup's tiebreak — with one id there is nothing for a name to disambiguate. That
+	// tiebreak (one name, two different ids) needs a seed the editor cannot author and is pinned
+	// in StoryFlow.DataAssets.Resolution.NameLookup.
+	TestEqual(TEXT("a re-declared id still resolves to the ROOT-most declaration"),
 		W.Component->GetDataAssetStringVariable(GrandChild, TEXT("title"), bFound), TEXT("Grunt"));
 	// image / character / audio are declared distinctly and stored as plain strings
 	TestEqual(TEXT("an image variable reads through the string accessor"),

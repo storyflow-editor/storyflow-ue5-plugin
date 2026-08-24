@@ -522,6 +522,80 @@ bool FStoryFlowDataAssetChainGuardTest::RunTest(const FString& Parameters)
 }
 
 // ============================================================================
+// Name lookup: the root-most tiebreak when one NAME sits on two different ids
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetNameLookupTest,
+	"StoryFlow.DataAssets.Resolution.NameLookup",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowDataAssetNameLookupTest::RunTest(const FString& Parameters)
+{
+	// FindDeclarationByName is the BLUEPRINT surface's entry point — the one place a name is
+	// turned into an id, after which everything (the resolver, the overlay, the save key) is keyed
+	// by id. It carries the same root-most-wins tiebreak the id lookup does, and this is the only
+	// test that can prove it: the seed fixture's re-declared `title` reuses the SAME id at both
+	// levels, so nearest-wins and root-most-wins agree there whatever the walk does. Only one name
+	// over two DIFFERENT ids tells them apart, which is a shape the editor does not author (it
+	// keeps names unique per asset) and no fixture carries.
+	//
+	// It matters because a Blueprint WRITE goes through the same lookup: pick the leaf's id and
+	// the write lands in the overlay under an id no read of that name will ever resolve, while
+	// the value the author meant to change sits untouched under the ancestor's.
+	StoryFlowDataAssets::FSeed Seed;
+
+	FStoryFlowVariable AncestorDeclaration;
+	AncestorDeclaration.Id = TEXT("v_ancestor");
+	AncestorDeclaration.Name = TEXT("hp");
+	AncestorDeclaration.Type = EStoryFlowVariableType::Integer;
+	AncestorDeclaration.Value.SetInt(10);
+
+	FStoryFlowVariable DescendantDeclaration;
+	DescendantDeclaration.Id = TEXT("v_descendant");
+	DescendantDeclaration.Name = TEXT("hp");
+	DescendantDeclaration.Type = EStoryFlowVariableType::Integer;
+	DescendantDeclaration.Value.SetInt(99);
+
+	FStoryFlowDataAssetDef Root;
+	Root.Id = TEXT("Root");
+	Root.Variables.Add(AncestorDeclaration);
+	FStoryFlowDataAssetDef Leaf;
+	Leaf.Id = TEXT("Leaf");
+	Leaf.Parent = Root.Id;
+	Leaf.Variables.Add(DescendantDeclaration);
+	Seed.Add(Root.Id, Root);
+	Seed.Add(Leaf.Id, Leaf);
+
+	const FStoryFlowVariable* FromLeaf = StoryFlowDataAssets::FindDeclarationByName(Seed, TEXT("Leaf"), TEXT("hp"));
+	if (TestNotNull(TEXT("a name declared on the chain resolves to a declaration"), FromLeaf))
+	{
+		// THE TIEBREAK. Nearest-wins would answer v_descendant / 99 here.
+		TestEqual(TEXT("a name on two levels resolves to the ROOT-most id"), FromLeaf->Id, TEXT("v_ancestor"));
+		TestEqual(TEXT("and therefore to the root-most declaration's value"), FromLeaf->Value.GetInt(), 10);
+	}
+
+	// The shadowed declaration is not gone, only unreachable BY NAME — the tiebreak is about
+	// names, and an id keeps addressing exactly what it always did.
+	const FStoryFlowVariable* ById = StoryFlowDataAssets::FindDeclaration(Seed, TEXT("Leaf"), TEXT("v_descendant"));
+	if (TestNotNull(TEXT("the shadowed declaration is still on the leaf"), ById))
+	{
+		TestEqual(TEXT("and the id lookup still reaches it"), ById->Value.GetInt(), 99);
+	}
+
+	// From the root only its own declaration is in reach, and it is the same one the leaf found
+	const FStoryFlowVariable* FromRoot = StoryFlowDataAssets::FindDeclarationByName(Seed, TEXT("Root"), TEXT("hp"));
+	if (TestNotNull(TEXT("the root resolves the name too"), FromRoot))
+	{
+		TestEqual(TEXT("to the declaration both levels agree on"), FromRoot->Id, TEXT("v_ancestor"));
+	}
+
+	TestNull(TEXT("a name no level of the chain declares resolves to nothing"),
+		StoryFlowDataAssets::FindDeclarationByName(Seed, TEXT("Leaf"), TEXT("nope")));
+
+	return true;
+}
+
+// ============================================================================
 // Import round trip, the packed-blob save/load contract, and parent-driven skips
 // ============================================================================
 

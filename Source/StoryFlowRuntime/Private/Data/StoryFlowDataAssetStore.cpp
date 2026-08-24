@@ -21,6 +21,27 @@ namespace StoryFlowDataAssets
 		}
 
 		/**
+		 * The same lookup by DISPLAY NAME — the Blueprint surface's entry point, where an author
+		 * types a name rather than an id.
+		 *
+		 * FIRST DECLARED WINS within a level, which only matters because names, unlike ids, are
+		 * not unique by construction: the editor keeps them unique per asset, but nothing in the
+		 * seed format enforces it and a hand-edited export can carry two. Between LEVELS the
+		 * root-most declaration still wins — that rule lives in the walk, not here.
+		 */
+		const FStoryFlowVariable* FindDeclaredOnLevelByName(const FStoryFlowDataAssetDef& Level, const FString& VariableName)
+		{
+			for (const FStoryFlowVariable& Variable : Level.Variables)
+			{
+				if (Variable.Name == VariableName)
+				{
+					return &Variable;
+				}
+			}
+			return nullptr;
+		}
+
+		/**
 		 * THE chain walk, leaf -> root, shared by every function in this file so none of them can
 		 * disagree about chain order, the depth cap or the cycle guard. Calls Visit(Level) per
 		 * level and stops early when Visit returns false.
@@ -113,13 +134,9 @@ namespace StoryFlowDataAssets
 		const FStoryFlowVariable* Declared = nullptr;
 		WalkChain(Seed, AssetId, [&](const FStoryFlowDataAssetDef& Level)
 		{
-			for (const FStoryFlowVariable& Variable : Level.Variables)
+			if (const FStoryFlowVariable* Decl = FindDeclaredOnLevelByName(Level, VariableName))
 			{
-				if (Variable.Name == VariableName)
-				{
-					Declared = &Variable;
-					break;
-				}
+				Declared = Decl;
 			}
 			return true;
 		});

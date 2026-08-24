@@ -18,6 +18,7 @@
 #include "Import/StoryFlowImporter.h"
 #include "StoryFlowEngineContractFixtures.h"
 #include "StoryFlowRuntime.h"
+#include "StoryFlowScopedWorld.h"
 #include "Subsystems/StoryFlowSubsystem.h"
 #include "EditorAssetLibrary.h"
 #include "GameFramework/Actor.h"
@@ -223,33 +224,9 @@ namespace StoryFlowDataAssetNodeTestHelpers
 		return Count;
 	}
 
-	/** A standalone game instance with a registered component, the shape the runtime tests share. */
-	struct FScopedWorld
-	{
-		UGameInstance* GameInstance = nullptr;
-		UWorld* World = nullptr;
-		UStoryFlowComponent* Component = nullptr;
-		UStoryFlowSubsystem* Subsystem = nullptr;
-
-		bool Init()
-		{
-			GameInstance = NewObject<UGameInstance>(GEngine);
-			GameInstance->InitializeStandalone();
-			World = GameInstance->GetWorld();
-			if (!World) { return false; }
-			AActor* Owner = World->SpawnActor<AActor>();
-			if (!Owner) { return false; }
-			Component = NewObject<UStoryFlowComponent>(Owner);
-			Component->RegisterComponent();
-			Subsystem = GameInstance->GetSubsystem<UStoryFlowSubsystem>();
-			return Component != nullptr && Subsystem != nullptr;
-		}
-
-		~FScopedWorld()
-		{
-			if (World) { World->DestroyWorld(false); }
-		}
-	};
+	// FScopedWorld — the standalone game instance with a registered component — lives in
+	// StoryFlowScopedWorld.h, shared with the save suite.
+	using StoryFlowTestWorld::FScopedWorld;
 }
 
 // ============================================================================

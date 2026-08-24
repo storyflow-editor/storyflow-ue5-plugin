@@ -106,7 +106,16 @@ namespace StoryFlowEngineContract
 	// the same fixtures now (resolution, nodes, save) and a second copy of the comparison rules
 	// is a second chance to disagree with the reference about what "equal" means.
 
-	/** True for the string family — every one of these stores its value in StringValue. */
+	/**
+	 * True for the string family — every one of these stores its value in StringValue.
+	 *
+	 * FIVE members, Enum included, because this asks about STORAGE: a resolved variant is compared
+	 * against a fixture's bare JSON string, and an enum's value lives in StringValue like the rest.
+	 * Deliberately NOT the same set as DataAssetAccessorTypeMatches in StoryFlowComponent.cpp,
+	 * which has four and excludes Enum because it asks which DECLARATION a typed Blueprint
+	 * accessor may reach — and Enum has an accessor of its own there. Same-looking lists, opposite
+	 * questions; unifying them would break one side or the other.
+	 */
 	inline bool IsStringFamily(EStoryFlowVariableType Type)
 	{
 		return Type == EStoryFlowVariableType::String || Type == EStoryFlowVariableType::Enum
