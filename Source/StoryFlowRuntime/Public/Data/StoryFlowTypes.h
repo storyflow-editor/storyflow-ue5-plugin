@@ -1477,6 +1477,11 @@ STORYFLOWRUNTIME_API EStoryFlowNodeType ParseNodeType(const FString& TypeString)
  * including "category" — a declaration the editor refuses to give a value, so nothing downstream
  * ever resolves one.
  *
+ * MATCHING IS CASE-SENSITIVE (ordinal) on the nine exact lowercase tokens — the wire rule of the
+ * data-asset engine contract §2.1, ruled 2026-08-24, mirroring the Unity port's ordinal table.
+ * The exporter writes those tokens and only those, so a differently cased string is not a type
+ * this format has; accepting one would resolve payloads the other runtimes call unknown.
+ *
  * THE table, not a copy of it. It used to exist twice: privately in the importer, and again in
  * the data-asset store for the accessor snapshot gate. The two were character-identical, which is
  * exactly what made the drift expensive — adding a wire type to the importer alone would import

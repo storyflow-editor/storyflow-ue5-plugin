@@ -324,7 +324,19 @@ void DeepCopyMapVariants(TMap<FString, FStoryFlowVariant>& Variants)
 
 EStoryFlowVariableType ParseVariableType(const FString& TypeString)
 {
-	static const TMap<FString, EStoryFlowVariableType> TypeMap = {
+	// A scanned table, not a TMap, BECAUSE it must be exact: FString's TMap key funcs hash and
+	// compare case-INSENSITIVELY, so a lookup here happily resolved "Boolean" and the plugin
+	// accepted payloads the other runtimes reject. The nine tokens match case-sensitively per
+	// the data-asset engine contract §2.1 (ruled 2026-08-24) — the Unity port's table is
+	// StringComparer.Ordinal for the same reason. Nine compares that mostly die on their first
+	// character, against a hash that read the whole string anyway: not a path that needs a map.
+	struct FWireType
+	{
+		FString Token;
+		EStoryFlowVariableType Type;
+	};
+
+	static const FWireType WireTypes[] = {
 		{ TEXT("boolean"),   EStoryFlowVariableType::Boolean },
 		{ TEXT("integer"),   EStoryFlowVariableType::Integer },
 		{ TEXT("float"),     EStoryFlowVariableType::Float },
@@ -336,8 +348,14 @@ EStoryFlowVariableType ParseVariableType(const FString& TypeString)
 		{ TEXT("map"),       EStoryFlowVariableType::Map },
 	};
 
-	const EStoryFlowVariableType* Found = TypeMap.Find(TypeString);
-	return Found ? *Found : EStoryFlowVariableType::None;
+	for (const FWireType& WireType : WireTypes)
+	{
+		if (TypeString.Equals(WireType.Token, ESearchCase::CaseSensitive))
+		{
+			return WireType.Type;
+		}
+	}
+	return EStoryFlowVariableType::None;
 }
 
 EStoryFlowNodeType ParseNodeType(const FString& TypeString)

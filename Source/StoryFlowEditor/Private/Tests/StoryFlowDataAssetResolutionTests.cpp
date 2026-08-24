@@ -434,6 +434,29 @@ bool FStoryFlowDataAssetDeclMatchesTest::RunTest(const FString& Parameters)
 			bMatches == Case.bAgree);
 	}
 
+	// The rows above are enum to enum, so the wire strings never enter. Unity and Godot carry
+	// two more rows their string-fed tables can fail, and so can this one through the node-data
+	// gate: an unknown wire type, and a CASE VARIANT of a known one. The nine tokens match
+	// case-sensitively (contract §2.1, ruled 2026-08-24) — a case variant is an unknown type,
+	// not a lenient spelling — and this is what would notice ParseVariableType going lenient
+	// again (a TMap<FString, ...> lookup is case-insensitive and used to accept "Boolean").
+	TestTrue(TEXT("wire table: the parse itself is case-sensitive"),
+		ParseVariableType(TEXT("Integer")) == EStoryFlowVariableType::None);
+
+	FStoryFlowVariable BoolDeclaration;
+	BoolDeclaration.Id = TEXT("v");
+	BoolDeclaration.Type = EStoryFlowVariableType::Boolean;
+
+	FStoryFlowNodeData CaseVariantSnapshot;
+	CaseVariantSnapshot.VariableType = TEXT("Boolean");
+	TestFalse(TEXT("declMatches: a case variant of a known wire type is still unknown"),
+		StoryFlowDataAssets::DeclMatchesNodeData(BoolDeclaration, CaseVariantSnapshot));
+
+	FStoryFlowNodeData UnknownSnapshot;
+	UnknownSnapshot.VariableType = TEXT("widget");
+	TestFalse(TEXT("declMatches: an unknown wire type matches nothing"),
+		StoryFlowDataAssets::DeclMatchesNodeData(BoolDeclaration, UnknownSnapshot));
+
 	return true;
 }
 
