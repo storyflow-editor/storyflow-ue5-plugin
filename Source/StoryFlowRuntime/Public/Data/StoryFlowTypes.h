@@ -1473,6 +1473,19 @@ struct STORYFLOWRUNTIME_API FStoryFlowProjectMetadata
 STORYFLOWRUNTIME_API EStoryFlowNodeType ParseNodeType(const FString& TypeString);
 
 /**
+ * Parse an exported WIRE type string ("boolean", "map", ...) to enum. None for anything else,
+ * including "category" — a declaration the editor refuses to give a value, so nothing downstream
+ * ever resolves one.
+ *
+ * THE table, not a copy of it. It used to exist twice: privately in the importer, and again in
+ * the data-asset store for the accessor snapshot gate. The two were character-identical, which is
+ * exactly what made the drift expensive — adding a wire type to the importer alone would import
+ * variables of that type correctly and then degrade every accessor bound to one with a "type
+ * changed" warning naming a type that had not changed.
+ */
+STORYFLOWRUNTIME_API EStoryFlowVariableType ParseVariableType(const FString& TypeString);
+
+/**
  * Parse handle string to components
  */
 USTRUCT()

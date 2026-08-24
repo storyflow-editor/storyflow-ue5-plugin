@@ -9,6 +9,7 @@
 #include "Data/StoryFlowProjectAsset.h"
 #include "Data/StoryFlowScriptAsset.h"
 #include "Import/StoryFlowImporter.h"
+#include "StoryFlowEngineContractFixtures.h"
 #include "StoryFlowRuntime.h"
 #include "EditorAssetLibrary.h"
 #include "HAL/FileManager.h"
@@ -53,23 +54,10 @@ namespace StoryFlowDataAssetTestHelpers
 {
 	const TCHAR* TestRoot = TEXT("/Game/StoryFlowDataAssetTests");
 
-	// The seed fixture's three assets, base -> child -> grandchild (contract §9.1)
-	const TCHAR* BaseId = TEXT("da_0a1b2c3d4e5f60718293a4b5c6d7e8f9");
-	const TCHAR* ChildId = TEXT("da_1b2c3d4e5f60718293a4b5c6d7e8f90a");
-	const TCHAR* AbsentId = TEXT("da_ff00ff00ff00ff00ff00ff00ff00ff00");
-
-	// The seed fixture's variable ids, each annotated with where it lives on the chain —
-	// without this the assertions below are unreadable hex.
-	/** boolean, declared on the base, overridden nowhere */
-	const TCHAR* AliveId = TEXT("7f3a1c9e4b2d40518a6f0c3e7d1b5a29");
-	/** string array, declared on the base, overridden on the child */
-	const TCHAR* TagsId = TEXT("c58e2f13a0d64c9b871e3f05d2a76b48");
-	/** map<string,integer>, declared on the base, overridden on the grandchild */
-	const TCHAR* LootId = TEXT("6d0f39a8b21e47c5903af8d61c72e504");
-	/** category, declared on the base — never resolves, and can never be written */
-	const TCHAR* LoreId = TEXT("ae41b70c95d84e2fa3608c1b5f2d97e0");
-	/** declared by no level of the chain at all */
-	const TCHAR* NowhereId = TEXT("4c9a1e07b38f42d6a1057e2c93bd48f0");
+	// The seed family's asset and variable ids, each annotated with where it lives on the chain,
+	// live in StoryFlowEngineContractFixtures.h — shared with the node tests so the two files
+	// cannot disagree about which hex string is which variable.
+	using namespace StoryFlowEngineContract;
 
 	FString FixtureBuildDir()
 	{
@@ -77,34 +65,6 @@ namespace StoryFlowDataAssetTestHelpers
 	}
 
 	/** The plugin-relative home of the shared cross-engine fixtures. */
-	FString GoldenFixturePath(const FString& FileName)
-	{
-		const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("StoryFlowPlugin"));
-		if (!Plugin.IsValid())
-		{
-			return FString();
-		}
-		return FPaths::Combine(Plugin->GetBaseDir(), TEXT("TestContent"), TEXT("engine-contract"), FileName);
-	}
-
-	/** Load one golden fixture. Mirrors UStoryFlowImporter::LoadJsonFile, which is private. */
-	TSharedPtr<FJsonObject> LoadGoldenFixture(const FString& FileName)
-	{
-		const FString Path = GoldenFixturePath(FileName);
-		FString JsonString;
-		if (Path.IsEmpty() || !FFileHelper::LoadFileToString(JsonString, *Path))
-		{
-			return nullptr;
-		}
-
-		TSharedPtr<FJsonObject> JsonObject;
-		TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(JsonString);
-		if (!FJsonSerializer::Deserialize(Reader, JsonObject))
-		{
-			return nullptr;
-		}
-		return JsonObject;
-	}
 
 	/** The smallest project.json ImportProject accepts, so a seed can ride a real import. */
 	bool WriteMinimalProject(const FString& Dir)
@@ -148,7 +108,7 @@ namespace StoryFlowDataAssetTestHelpers
 	 */
 	bool LoadFixtureSeed(FAutomationTestBase& Test, StoryFlowDataAssets::FSeed& OutSeed)
 	{
-		const FString SeedPath = GoldenFixturePath(TEXT("data-assets-seed.json"));
+		const FString SeedPath = FixturePath(TEXT("data-assets-seed.json"));
 		FString SeedJson;
 		if (!Test.TestTrue(TEXT("data-assets-seed.json is readable"), !SeedPath.IsEmpty() && FFileHelper::LoadFileToString(SeedJson, *SeedPath)))
 		{
@@ -349,7 +309,7 @@ bool FStoryFlowDataAssetResolutionFixtureTest::RunTest(const FString& Parameters
 {
 	using namespace StoryFlowDataAssetTestHelpers;
 
-	TSharedPtr<FJsonObject> ResolutionFixture = LoadGoldenFixture(TEXT("data-assets-resolution.json"));
+	TSharedPtr<FJsonObject> ResolutionFixture = LoadFixture(TEXT("data-assets-resolution.json"));
 	if (!TestTrue(TEXT("data-assets-resolution.json parses"), ResolutionFixture.IsValid()))
 	{
 		return false;
@@ -505,7 +465,7 @@ bool FStoryFlowDataAssetWritesFixtureTest::RunTest(const FString& Parameters)
 {
 	using namespace StoryFlowDataAssetTestHelpers;
 
-	TSharedPtr<FJsonObject> WritesFixture = LoadGoldenFixture(TEXT("data-assets-writes.json"));
+	TSharedPtr<FJsonObject> WritesFixture = LoadFixture(TEXT("data-assets-writes.json"));
 	if (!TestTrue(TEXT("data-assets-writes.json parses"), WritesFixture.IsValid()))
 	{
 		return false;

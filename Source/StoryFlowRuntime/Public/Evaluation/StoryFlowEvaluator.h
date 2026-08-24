@@ -216,7 +216,10 @@ public:
 	 * or entry list it read cannot corrupt the seed for the rest of the session.
 	 *
 	 * The Set accessor reads through here too: its pass-through output is the same value its Get
-	 * twin would answer, which is why both node types share one arm everywhere below.
+	 * twin would answer, which is why every typed evaluator below carries ONE arm listing both
+	 * node types. Those arms are deliberately three lines each and point back here rather than
+	 * restating this: four copies of a paragraph drift, and the arms have nothing of their own to
+	 * say beyond which type default they leave Result at when this returns false (contract §6).
 	 */
 	bool TryReadDataAssetVariable(FStoryFlowNode* Node, FStoryFlowVariant& OutValue);
 

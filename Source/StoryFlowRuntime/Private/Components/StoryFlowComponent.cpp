@@ -2946,6 +2946,9 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 	// Array modify nodes carry no variable field today, so ordering them the other way round
 	// happens to behave identically — but only until an exporter emits one, at which point
 	// Unreal would write a script variable where the reference writes the store.
+	// The `Evaluator &&` guard is the old edge-based fallback's, kept verbatim: without an
+	// evaluator none of the ops below can read their inputs anyway, so discovering a target here
+	// would only produce a half-applied one.
 	FStoryFlowNode* ArrayInputSource = nullptr;
 	if (Evaluator && !ArrayHandleSuffix.IsEmpty())
 	{
@@ -2986,7 +2989,7 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 				// purely by whether the last writer emptied it. The accessor's snapshot is the
 				// right source for it — the ladder above has just proved DeclMatches, so the
 				// snapshot type IS the chain's declared type.
-				const EStoryFlowVariableType ElementType = StoryFlowDataAssets::WireTypeToVariableType(ArrayInputSource->Data.VariableType);
+				const EStoryFlowVariableType ElementType = ParseVariableType(ArrayInputSource->Data.VariableType);
 				DataAssetScratch.Id = ArrayInputSource->Data.VariableId;
 				DataAssetScratch.Name = ArrayInputSource->Data.VariableName;
 				DataAssetScratch.Type = ElementType;
@@ -3115,15 +3118,15 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 		break;
 	}
 
-	// Store result array in CachedOutput so downstream nodes connected to this
-	// node's output can read it (matches HTML's setNodeOutputValue pattern)
-	FNodeRuntimeState& ArrayNodeState = ExecutionContext.GetNodeState(Node->Id);
-	ArrayNodeState.CachedOutput.SetArray(Arr);
-	ArrayNodeState.bHasCachedOutput = true;
-
-	// A `.sfd` target is not a script variable: it gets the store write and the boolean-cache
+	// A `.sfd` target is not a script variable: it gets the store write and the evaluation-cache
 	// drop (arrayLength / arrayContains producers feed boolean chains) instead of the variable
 	// trace and the variable-changed broadcast, which name a script/global scope it has none of.
+	//
+	// ORDER IS LOAD-BEARING: the drop lands BEFORE this node stamps its own output below.
+	// ClearCache is a full evaluation-cache drop, wider than the reference's clearNotBoolCache
+	// (which drops only the notBool memo and leaves node outputs alone) - so running it after the
+	// stamp wiped the stamp, leaving anything wired to this op's OUTPUT pin reading an empty
+	// array, and only ever when the target was a `.sfd` accessor.
 	if (DataAssetAccessor)
 	{
 		SF_TRACE(ExecutionContext, "DA SET \"%s.%s\" size=%d", *DataAssetId, *DataAssetAccessor->Data.VariableId, Arr.Num());
@@ -3132,6 +3135,16 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 		{
 			Evaluator->ClearCache();
 		}
+	}
+
+	// Store result array in CachedOutput so downstream nodes connected to this
+	// node's output can read it (matches HTML's setNodeOutputValue pattern)
+	FNodeRuntimeState& ArrayNodeState = ExecutionContext.GetNodeState(Node->Id);
+	ArrayNodeState.CachedOutput.SetArray(Arr);
+	ArrayNodeState.bHasCachedOutput = true;
+
+	if (DataAssetAccessor)
+	{
 		HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 		return;
 	}
@@ -3931,7 +3944,7 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 	{
 		if (InputEdge && Evaluator)
 		{
-			NewValue.SetArray(EvaluateCharacterVarArrayInput(Node, VariableType, InputHandleSuffix));
+			NewValue.SetArray(EvaluateTypedArrayInput(Node, VariableType, InputHandleSuffix));
 		}
 		else if (Node->Data.Value.GetArray().Num() > 0)
 		{
@@ -4090,9 +4103,9 @@ bool UStoryFlowComponent::TryReadDataAssetSetInput(FStoryFlowNode* Node, FStoryF
 		return true;
 	}
 
-	// ARRAY: "{type}-array-2". EvaluateCharacterVarArrayInput is named for its first caller but
-	// is a plain element-type dispatch over the evaluator's typed array readers, and its TArray
-	// return is already a copy — exactly what the store wants handed to it.
+	// ARRAY: "{type}-array-2". EvaluateTypedArrayInput is a plain element-type dispatch over the
+	// evaluator's typed array readers, and its TArray return is already a copy — exactly what the
+	// store wants handed to it.
 	if (Data.bIsArray)
 	{
 		const FString ArraySuffix = Data.VariableType + TEXT("-array-") + ValueOptionId;
@@ -4100,7 +4113,11 @@ bool UStoryFlowComponent::TryReadDataAssetSetInput(FStoryFlowNode* Node, FStoryF
 		{
 			return false;
 		}
-		OutValue.SetArray(EvaluateCharacterVarArrayInput(Node, Data.VariableType, ArraySuffix));
+		// The element type is STATED, not inferred: an empty wired array has no element [0] for
+		// FStoryFlowVariant::SetArray to read one off, and this node is the LAST writer before the
+		// store, so an untyped value here is what U3's save key would serialize. The ladder has
+		// already proved DeclMatches, so the snapshot type IS the chain's declared type.
+		OutValue.SetArray(EvaluateTypedArrayInput(Node, Data.VariableType, ArraySuffix), ParseVariableType(Data.VariableType));
 		return true;
 	}
 
@@ -4129,6 +4146,15 @@ bool UStoryFlowComponent::TryReadDataAssetSetInput(FStoryFlowNode* Node, FStoryF
 	else if (Data.VariableType == TEXT("float"))
 	{
 		OutValue.SetFloat(Evaluator->EvaluateFloatFromNode(SourceNode, Node->Id, Edge->SourceHandle));
+	}
+	else if (Data.VariableType == TEXT("enum"))
+	{
+		// Enum travels as a string but is NOT String-typed: the seed stores an enum declaration's
+		// value as EStoryFlowVariableType::Enum, so writing one as String makes the overlay entry
+		// differ in type from the file value it shadows - invisible to a read (both answer
+		// GetString) and visible in U3's save key. image / character / audio genuinely ARE stored
+		// as String by the importer, so they keep the string branch below.
+		OutValue.SetEnum(Evaluator->EvaluateStringFromNode(SourceNode, Node->Id, Edge->SourceHandle));
 	}
 	else
 	{
@@ -4189,9 +4215,12 @@ void UStoryFlowComponent::HandleSetDataAssetVariable(FStoryFlowNode* Node)
 	// the declaration, so a false here would be a store bug, not an authoring one.
 	ExecutionContext.TrySetDataAsset(AssetId, Node->Data.VariableId, NewValue);
 
-	// Drop cached boolean results so option conditions re-evaluate against the new value
-	// (contract §5), the analog of the HTML arm's clearNotBoolCache. Data-asset reads are never
-	// memoized themselves, but a notBool / comparison ABOVE one is.
+	// Drop cached results so option conditions re-evaluate against the new value (contract §5).
+	// Data asset reads are never memoized themselves, but a notBool / comparison ABOVE one is,
+	// and that is what the HTML arm's clearNotBoolCache exists for. ClearCache is WIDER than
+	// that: it drops the whole evaluation cache, not just the notBool memo. Strictly safe (every
+	// dropped entry is recomputed on demand), and this node has no output stamp for the drop to
+	// erase, unlike HandleArrayModify - see the ordering note there.
 	if (Evaluator)
 	{
 		Evaluator->ClearCache();
@@ -4200,7 +4229,7 @@ void UStoryFlowComponent::HandleSetDataAssetVariable(FStoryFlowNode* Node)
 	HandleSetNodeEnd(Node, FlowHandle);
 }
 
-TArray<FStoryFlowVariant> UStoryFlowComponent::EvaluateCharacterVarArrayInput(FStoryFlowNode* Node, const FString& VariableType, const FString& HandleSuffix)
+TArray<FStoryFlowVariant> UStoryFlowComponent::EvaluateTypedArrayInput(FStoryFlowNode* Node, const FString& VariableType, const FString& HandleSuffix)
 {
 	if (VariableType == TEXT("boolean"))
 	{

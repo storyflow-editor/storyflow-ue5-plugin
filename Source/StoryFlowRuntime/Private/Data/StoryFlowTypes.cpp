@@ -322,6 +322,24 @@ void DeepCopyMapVariants(TMap<FString, FStoryFlowVariant>& Variants)
 	}
 }
 
+EStoryFlowVariableType ParseVariableType(const FString& TypeString)
+{
+	static const TMap<FString, EStoryFlowVariableType> TypeMap = {
+		{ TEXT("boolean"),   EStoryFlowVariableType::Boolean },
+		{ TEXT("integer"),   EStoryFlowVariableType::Integer },
+		{ TEXT("float"),     EStoryFlowVariableType::Float },
+		{ TEXT("string"),    EStoryFlowVariableType::String },
+		{ TEXT("enum"),      EStoryFlowVariableType::Enum },
+		{ TEXT("image"),     EStoryFlowVariableType::Image },
+		{ TEXT("audio"),     EStoryFlowVariableType::Audio },
+		{ TEXT("character"), EStoryFlowVariableType::Character },
+		{ TEXT("map"),       EStoryFlowVariableType::Map },
+	};
+
+	const EStoryFlowVariableType* Found = TypeMap.Find(TypeString);
+	return Found ? *Found : EStoryFlowVariableType::None;
+}
+
 EStoryFlowNodeType ParseNodeType(const FString& TypeString)
 {
 	static TMap<FString, EStoryFlowNodeType> TypeMap = {

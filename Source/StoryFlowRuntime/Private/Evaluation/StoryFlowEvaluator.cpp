@@ -501,9 +501,7 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 		break;
 	}
 
-	// The two `.sfd` accessors (contract §2.2). ONE arm for both: the Set's pass-through output
-	// answers exactly what its Get twin would. Every degraded case leaves Result at the type
-	// default (§6) — TryReadDataAssetVariable warned once on the way out.
+	// The two `.sfd` accessors — see TryReadDataAssetVariable.
 	case EStoryFlowNodeType::GetDataAssetVariable:
 	case EStoryFlowNodeType::SetDataAssetVariable:
 	{
@@ -951,9 +949,7 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 		break;
 	}
 
-	// The two `.sfd` accessors (contract §2.2). ONE arm for both: the Set's pass-through output
-	// answers exactly what its Get twin would. Every degraded case leaves Result at the type
-	// default (§6) — TryReadDataAssetVariable warned once on the way out.
+	// The two `.sfd` accessors — see TryReadDataAssetVariable.
 	case EStoryFlowNodeType::GetDataAssetVariable:
 	case EStoryFlowNodeType::SetDataAssetVariable:
 	{
@@ -1223,9 +1219,7 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 		break;
 	}
 
-	// The two `.sfd` accessors (contract §2.2). ONE arm for both: the Set's pass-through output
-	// answers exactly what its Get twin would. Every degraded case leaves Result at the type
-	// default (§6) — TryReadDataAssetVariable warned once on the way out.
+	// The two `.sfd` accessors — see TryReadDataAssetVariable.
 	case EStoryFlowNodeType::GetDataAssetVariable:
 	case EStoryFlowNodeType::SetDataAssetVariable:
 	{
@@ -1621,9 +1615,7 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 		break;
 	}
 
-	// The two `.sfd` accessors (contract §2.2). ONE arm for both: the Set's pass-through output
-	// answers exactly what its Get twin would. Every degraded case leaves Result at the type
-	// default (§6) — TryReadDataAssetVariable warned once on the way out.
+	// The two `.sfd` accessors — see TryReadDataAssetVariable.
 	case EStoryFlowNodeType::GetDataAssetVariable:
 	case EStoryFlowNodeType::SetDataAssetVariable:
 	{

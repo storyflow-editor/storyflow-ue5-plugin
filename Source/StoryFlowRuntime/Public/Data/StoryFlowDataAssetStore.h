@@ -150,21 +150,14 @@ namespace StoryFlowDataAssets
 	STORYFLOWRUNTIME_API bool DeclMatches(const FStoryFlowVariable& Declaration, EStoryFlowVariableType VariableType, bool bIsArray, EStoryFlowVariableType KeyType, EStoryFlowVariableType ValueType);
 
 	/**
-	 * The exported WIRE type string ("boolean", "map", ...) as an engine enum, or None for
-	 * anything else — including "category", which the seed never carries a resolvable row for.
+	 * DeclMatches against an accessor node's spawn-time snapshot (contract §6.1). THE gate every
+	 * data-asset read and write goes through.
 	 *
 	 * Node data keeps its types as the wire strings the exporter wrote (the whole evaluator
-	 * compares them that way), while the seed's declarations are enums. This is that seam, and
-	 * it lives beside DeclMatches because DeclMatchesNodeData below is its only reason to exist.
-	 * Mirrors the importer's own VariableTypeFromString, which is private to the editor module.
-	 */
-	STORYFLOWRUNTIME_API EStoryFlowVariableType WireTypeToVariableType(const FString& WireType);
-
-	/**
-	 * DeclMatches against an accessor node's spawn-time snapshot (contract §6.1), converting the
-	 * node's wire strings on the way in. THE gate every data-asset read and write goes through:
-	 * an unknown wire type converts to None and therefore never matches a real declaration, so a
-	 * garbled snapshot degrades instead of resolving.
+	 * compares them that way) while the seed's declarations are enums, so this converts through
+	 * ParseVariableType (StoryFlowTypes.h) on the way in — the ONE shared table, also the
+	 * importer's. An unknown wire type converts to None and therefore never matches a real
+	 * declaration, so a garbled snapshot degrades instead of resolving.
 	 */
 	STORYFLOWRUNTIME_API bool DeclMatchesNodeData(const FStoryFlowVariable& Declaration, const FStoryFlowNodeData& Data);
 

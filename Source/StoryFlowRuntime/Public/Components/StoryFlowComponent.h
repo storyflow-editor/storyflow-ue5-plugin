@@ -724,13 +724,15 @@ protected:
 	void HandleMapPureNode(FStoryFlowNode* Node);
 
 	/**
-	 * Evaluate the wired array input of a setCharacterVar node, dispatching to the
-	 * evaluator's typed array reader for the variable's element type. TArray value
-	 * semantics return a container copy, so the character variable never aliases
-	 * the source array (matches the HTML runtime's .slice() semantics).
+	 * Evaluate a node's wired array input, dispatching to the evaluator's typed array reader for
+	 * the given element type. TArray value semantics return a container copy, so the destination
+	 * never aliases the source array (matches the HTML runtime's .slice() semantics).
 	 * Caller must ensure Evaluator is valid.
+	 *
+	 * Shared by the setCharacterVar and setDataAssetVariable handlers — it knows nothing of
+	 * either, only of element types and handle suffixes.
 	 */
-	TArray<FStoryFlowVariant> EvaluateCharacterVarArrayInput(FStoryFlowNode* Node, const FString& VariableType, const FString& HandleSuffix);
+	TArray<FStoryFlowVariant> EvaluateTypedArrayInput(FStoryFlowNode* Node, const FString& VariableType, const FString& HandleSuffix);
 
 	// === Helper Functions ===
 

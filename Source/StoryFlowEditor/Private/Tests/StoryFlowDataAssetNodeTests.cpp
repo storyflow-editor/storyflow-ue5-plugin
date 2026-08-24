@@ -16,6 +16,7 @@
 #include "Evaluation/StoryFlowEvaluator.h"
 #include "Evaluation/StoryFlowExecutionContext.h"
 #include "Import/StoryFlowImporter.h"
+#include "StoryFlowEngineContractFixtures.h"
 #include "StoryFlowRuntime.h"
 #include "Subsystems/StoryFlowSubsystem.h"
 #include "EditorAssetLibrary.h"
@@ -56,52 +57,13 @@ namespace StoryFlowDataAssetNodeTestHelpers
 {
 	const TCHAR* NodeTestRoot = TEXT("/Game/StoryFlowDataAssetNodeTests");
 
-	// The seed fixture's assets and the ids the tests below name (see the seed dump in
-	// StoryFlowDataAssetResolutionTests.cpp for the full table).
-	const TCHAR* BaseId = TEXT("da_0a1b2c3d4e5f60718293a4b5c6d7e8f9");
-	const TCHAR* ChildId = TEXT("da_1b2c3d4e5f60718293a4b5c6d7e8f90a");
-	const TCHAR* GrandChildId = TEXT("da_2c3d4e5f60718293a4b5c6d7e8f90a1b");
-
-	/** boolean, declared and valued TRUE on the base — the option-gating condition */
-	const TCHAR* AliveId = TEXT("7f3a1c9e4b2d40518a6f0c3e7d1b5a29");
-	/** integer, base 100, overridden to 150 on the child */
-	const TCHAR* HpId = TEXT("2e8b6d0a1f4c47d3b95e2a70c6f81d34");
-	/** string array, base ["mob","melee"], overridden to ["mob","elite"] on the child */
-	const TCHAR* TagsId = TEXT("c58e2f13a0d64c9b871e3f05d2a76b48");
-	/** map<string,integer>, base 2 entries, overridden to 2 other entries on the grandchild */
-	const TCHAR* LootId = TEXT("6d0f39a8b21e47c5903af8d61c72e504");
+	// The seed family's ids, annotated, live in StoryFlowEngineContractFixtures.h — shared with
+	// the resolution tests.
+	using namespace StoryFlowEngineContract;
 
 	FString FixtureBuildDir()
 	{
 		return FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Temp/StoryFlowDataAssetNodeFixture"));
-	}
-
-	FString GoldenFixturePath(const FString& FileName)
-	{
-		const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("StoryFlowPlugin"));
-		if (!Plugin.IsValid())
-		{
-			return FString();
-		}
-		return FPaths::Combine(Plugin->GetBaseDir(), TEXT("TestContent"), TEXT("engine-contract"), FileName);
-	}
-
-	TSharedPtr<FJsonObject> LoadGoldenFixture(const FString& FileName)
-	{
-		const FString Path = GoldenFixturePath(FileName);
-		FString JsonString;
-		if (Path.IsEmpty() || !FFileHelper::LoadFileToString(JsonString, *Path))
-		{
-			return nullptr;
-		}
-
-		TSharedPtr<FJsonObject> JsonObject;
-		TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(JsonString);
-		if (!FJsonSerializer::Deserialize(Reader, JsonObject))
-		{
-			return nullptr;
-		}
-		return JsonObject;
 	}
 
 	void CleanUp()
@@ -118,7 +80,7 @@ namespace StoryFlowDataAssetNodeTestHelpers
 	 */
 	UStoryFlowProjectAsset* ImportFixtureProject(FAutomationTestBase& Test, StoryFlowDataAssets::FSeed& OutSeed)
 	{
-		const FString SeedPath = GoldenFixturePath(TEXT("data-assets-seed.json"));
+		const FString SeedPath = FixturePath(TEXT("data-assets-seed.json"));
 		FString SeedJson;
 		if (!Test.TestTrue(TEXT("data-assets-seed.json is readable"), !SeedPath.IsEmpty() && FFileHelper::LoadFileToString(SeedJson, *SeedPath)))
 		{
@@ -190,6 +152,25 @@ namespace StoryFlowDataAssetNodeTestHelpers
 		Accessor->TryGetBoolField(TEXT("isArray"), N.Data.bIsArray);
 		Accessor->TryGetStringField(TEXT("keyType"), N.Data.KeyType);
 		Accessor->TryGetStringField(TEXT("valueType"), N.Data.ValueType);
+		return N;
+	}
+
+	/**
+	 * A Set accessor with its §2.2 snapshot spelled out. The fixture-driven tests build theirs
+	 * from JSON (MakeAccessor); the hand-written ones need array and map snapshots the degraded
+	 * fixture never carries in a form that reaches a WRITE.
+	 */
+	FStoryFlowNode MakeSetter(const FString& Id, const TCHAR* VariableId, const TCHAR* Name,
+		const TCHAR* VariableType, bool bIsArray = false, const TCHAR* KeyType = TEXT(""), const TCHAR* ValueType = TEXT(""))
+	{
+		FStoryFlowNode N = MakeNode(Id, EStoryFlowNodeType::SetDataAssetVariable, TEXT("setDataAssetVariable"));
+		N.Data.VariableId = VariableId;
+		N.Data.VariableName = Name;
+		N.Data.Variable = Name;
+		N.Data.VariableType = VariableType;
+		N.Data.bIsArray = bIsArray;
+		N.Data.KeyType = KeyType;
+		N.Data.ValueType = ValueType;
 		return N;
 	}
 
@@ -283,7 +264,7 @@ bool FStoryFlowDataAssetDegradedReadsTest::RunTest(const FString& Parameters)
 {
 	using namespace StoryFlowDataAssetNodeTestHelpers;
 
-	TSharedPtr<FJsonObject> Fixture = LoadGoldenFixture(TEXT("data-assets-degraded.json"));
+	TSharedPtr<FJsonObject> Fixture = LoadFixture(TEXT("data-assets-degraded.json"));
 	if (!TestTrue(TEXT("data-assets-degraded.json parses"), Fixture.IsValid()))
 	{
 		return false;
@@ -500,7 +481,7 @@ bool FStoryFlowDataAssetDegradedSetsTest::RunTest(const FString& Parameters)
 {
 	using namespace StoryFlowDataAssetNodeTestHelpers;
 
-	TSharedPtr<FJsonObject> Fixture = LoadGoldenFixture(TEXT("data-assets-degraded.json"));
+	TSharedPtr<FJsonObject> Fixture = LoadFixture(TEXT("data-assets-degraded.json"));
 	if (!TestTrue(TEXT("data-assets-degraded.json parses"), Fixture.IsValid()))
 	{
 		return false;
@@ -852,12 +833,95 @@ bool FStoryFlowDataAssetSetNodeTest::RunTest(const FString& Parameters)
 		StoryFlowHandles::Source(TEXT("V"), TEXT("integer-")),
 		StoryFlowHandles::Target(TEXT("sWrite"), TEXT("integer-2"))));
 
+	// --- the ARRAY, MAP and ENUM setters ---
+	// The degraded fixture reaches none of these: every one of its array and map cases refuses at
+	// the LADDER, so the value-pin handle strings those branches build (In_Map(K,V,"2"),
+	// "{type}-array-2"), the map K/V empty guard and the EvaluateMapInput copy were never once
+	// executed successfully. A handle string is exactly the kind of thing that is either right or
+	// silently refuses forever.
+	{
+		FStoryFlowVariable ArrayVar;
+		ArrayVar.Id = TEXT("srcTags");
+		ArrayVar.Name = TEXT("srcTags");
+		ArrayVar.Type = EStoryFlowVariableType::String;
+		ArrayVar.bIsArray = true;
+		TArray<FStoryFlowVariant> Elements;
+		Elements.Add(FStoryFlowVariant::FromString(TEXT("alpha")));
+		Elements.Add(FStoryFlowVariant::FromString(TEXT("beta")));
+		ArrayVar.Value.SetArray(Elements, EStoryFlowVariableType::String);
+		Script->Variables.Add(ArrayVar.Id, ArrayVar);
+
+		FStoryFlowVariable MapVar;
+		MapVar.Id = TEXT("srcLoot");
+		MapVar.Name = TEXT("srcLoot");
+		MapVar.Type = EStoryFlowVariableType::Map;
+		MapVar.KeyType = EStoryFlowVariableType::String;
+		MapVar.ValueType = EStoryFlowVariableType::Integer;
+		TArray<FStoryFlowMapEntry> Entries;
+		// AUTHORED ORDER, deliberately not alphabetical: contract §2.1 makes map values ordered
+		// entry lists, so a write that round-tripped through anything unordered shows up here.
+		for (const TPair<FString, int32>& Pair : TArray<TPair<FString, int32>>{ { TEXT("zinc"), 3 }, { TEXT("amber"), 11 } })
+		{
+			FStoryFlowMapEntry Entry;
+			Entry.Key.SetString(Pair.Key);
+			Entry.Value.SetInt(Pair.Value);
+			Entries.Add(Entry);
+		}
+		MapVar.Value.SetMap(Entries);
+		Script->Variables.Add(MapVar.Id, MapVar);
+
+		FStoryFlowVariable EnumVar;
+		EnumVar.Id = TEXT("srcRank");
+		EnumVar.Name = TEXT("srcRank");
+		EnumVar.Type = EStoryFlowVariableType::Enum;
+		EnumVar.Value.SetEnum(TEXT("Champion"));
+		Script->Variables.Add(EnumVar.Id, EnumVar);
+	}
+	{
+		FStoryFlowNode ArraySource = MakeNode(TEXT("VArr"), EStoryFlowNodeType::GetStringArray, TEXT("getStringArray"));
+		ArraySource.Data.Variable = TEXT("srcTags");
+		Script->Nodes.Add(ArraySource.Id, ArraySource);
+
+		FStoryFlowNode MapSource = MakeNode(TEXT("VMap"), EStoryFlowNodeType::GetMap, TEXT("getMap"));
+		MapSource.Data.Variable = TEXT("srcLoot");
+		MapSource.Data.KeyType = TEXT("string");
+		MapSource.Data.ValueType = TEXT("integer");
+		Script->Nodes.Add(MapSource.Id, MapSource);
+
+		FStoryFlowNode EnumSource = MakeNode(TEXT("VEnum"), EStoryFlowNodeType::GetEnum, TEXT("getEnum"));
+		EnumSource.Data.Variable = TEXT("srcRank");
+		Script->Nodes.Add(EnumSource.Id, EnumSource);
+	}
+
+	Script->Nodes.Add(TEXT("sTags"), MakeSetter(TEXT("sTags"), TagsId, TEXT("tags"), TEXT("string"), /*bIsArray*/ true));
+	Script->Nodes.Add(TEXT("sLoot"), MakeSetter(TEXT("sLoot"), LootId, TEXT("loot"), TEXT("map"), false, TEXT("string"), TEXT("integer")));
+	Script->Nodes.Add(TEXT("sRank"), MakeSetter(TEXT("sRank"), RankId, TEXT("rank"), TEXT("enum")));
+	for (const TCHAR* SetId : { TEXT("sTags"), TEXT("sLoot"), TEXT("sRank") })
+	{
+		Script->Connections.Add(MakePillEdge(TEXT("pB"), SetId));
+	}
+	Script->Connections.Add(MakeEdge(TEXT("VArr"), TEXT("sTags"),
+		StoryFlowHandles::Source(TEXT("VArr"), TEXT("string-array-")),
+		StoryFlowHandles::Target(TEXT("sTags"), TEXT("string-array-2"))));
+	Script->Connections.Add(MakeEdge(TEXT("VMap"), TEXT("sLoot"),
+		StoryFlowHandles::Source(TEXT("VMap"), TEXT("map-string-integer")),
+		StoryFlowHandles::Target(TEXT("sLoot"), StoryFlowHandles::In_Map(TEXT("string"), TEXT("integer"), TEXT("2")))));
+	Script->Connections.Add(MakeEdge(TEXT("VEnum"), TEXT("sRank"),
+		StoryFlowHandles::Source(TEXT("VEnum"), TEXT("enum-")),
+		StoryFlowHandles::Target(TEXT("sRank"), TEXT("enum-2"))));
+
 	Script->Nodes.Add(TEXT("End"), MakeNode(TEXT("End"), EStoryFlowNodeType::End, TEXT("end")));
 	Script->Connections.Add(MakeEdge(TEXT("0"), TEXT("sWrite"), StoryFlowHandles::Source(TEXT("0")), StoryFlowHandles::Target(TEXT("sWrite"), TEXT("0"))));
 	Script->Connections.Add(MakeEdge(TEXT("sWrite"), TEXT("sRefuse"),
 		StoryFlowHandles::Source(TEXT("sWrite"), StoryFlowHandles::Out_Flow), StoryFlowHandles::Target(TEXT("sRefuse"), TEXT("0"))));
-	Script->Connections.Add(MakeEdge(TEXT("sRefuse"), TEXT("End"),
-		StoryFlowHandles::Source(TEXT("sRefuse"), StoryFlowHandles::Out_Flow), StoryFlowHandles::Target(TEXT("End"), TEXT(""))));
+	Script->Connections.Add(MakeEdge(TEXT("sRefuse"), TEXT("sTags"),
+		StoryFlowHandles::Source(TEXT("sRefuse"), StoryFlowHandles::Out_Flow), StoryFlowHandles::Target(TEXT("sTags"), TEXT("0"))));
+	Script->Connections.Add(MakeEdge(TEXT("sTags"), TEXT("sLoot"),
+		StoryFlowHandles::Source(TEXT("sTags"), StoryFlowHandles::Out_Flow), StoryFlowHandles::Target(TEXT("sLoot"), TEXT("0"))));
+	Script->Connections.Add(MakeEdge(TEXT("sLoot"), TEXT("sRank"),
+		StoryFlowHandles::Source(TEXT("sLoot"), StoryFlowHandles::Out_Flow), StoryFlowHandles::Target(TEXT("sRank"), TEXT("0"))));
+	Script->Connections.Add(MakeEdge(TEXT("sRank"), TEXT("End"),
+		StoryFlowHandles::Source(TEXT("sRank"), StoryFlowHandles::Out_Flow), StoryFlowHandles::Target(TEXT("End"), TEXT(""))));
 	Script->BuildConnectionIndices();
 
 	Project->Scripts.Add(TEXT("setnodes"), Script);
@@ -867,8 +931,8 @@ bool FStoryFlowDataAssetSetNodeTest::RunTest(const FString& Parameters)
 	const StoryFlowDataAssets::FSeed& Seed = W.Subsystem->GetDataAssetSeed();
 	const StoryFlowDataAssets::FOverlay& Overlay = W.Subsystem->GetDataAssetOverlay();
 
-	// The write landed at the level the PILL names — the base — and nowhere else.
-	TestEqual(TEXT("the write touched exactly one asset"), Overlay.Num(), 1);
+	// Every write landed at the level the PILL names — the base — and nowhere else.
+	TestEqual(TEXT("the writes touched exactly one asset"), Overlay.Num(), 1);
 	TestEqual(TEXT("the base's hp resolves to the written value"),
 		StoryFlowDataAssets::Resolve(Seed, Overlay, BaseId, HpId).GetInt(), 7);
 
@@ -885,8 +949,43 @@ bool FStoryFlowDataAssetSetNodeTest::RunTest(const FString& Parameters)
 	// is still 7 rather than the integer zero an inline-value fallback would have written.
 	if (const TMap<FString, FStoryFlowVariant>* BaseEntries = Overlay.Find(BaseId))
 	{
-		TestEqual(TEXT("the unwired Set added no second overlay entry"), BaseEntries->Num(), 1);
+		// hp, tags, loot, rank — and NOT a second hp from the refusing setter.
+		TestEqual(TEXT("the unwired Set added no extra overlay entry"), BaseEntries->Num(), 4);
 	}
+
+	// --- the ARRAY branch of the value read ---
+	const FStoryFlowVariant WrittenTags = StoryFlowDataAssets::Resolve(Seed, Overlay, BaseId, TagsId);
+	if (TestEqual(TEXT("the array Set wrote both wired elements"), WrittenTags.GetArray().Num(), 2))
+	{
+		TestEqual(TEXT("the array Set kept element order"), WrittenTags.GetArray()[0].GetString(), TEXT("alpha"));
+		TestEqual(TEXT("and its second element"), WrittenTags.GetArray()[1].GetString(), TEXT("beta"));
+	}
+	TestTrue(TEXT("the array Set wrote a String-typed value"), WrittenTags.GetType() == EStoryFlowVariableType::String);
+	TestEqual(TEXT("the child's own tags override still shadows the base write"),
+		StoryFlowDataAssets::Resolve(Seed, Overlay, ChildId, TagsId).GetArray()[1].GetString(), TEXT("elite"));
+
+	// --- the MAP branch: whole-value replace, authored key order preserved ---
+	const FStoryFlowVariant WrittenLoot = StoryFlowDataAssets::Resolve(Seed, Overlay, BaseId, LootId);
+	if (TestEqual(TEXT("the map Set REPLACED the whole value"), WrittenLoot.GetMap().Num(), 2))
+	{
+		TestEqual(TEXT("the map Set kept the authored key order"), WrittenLoot.GetMap()[0].Key.GetString(), TEXT("zinc"));
+		TestEqual(TEXT("and did not sort it"), WrittenLoot.GetMap()[1].Key.GetString(), TEXT("amber"));
+		TestEqual(TEXT("the map Set kept its integer values"), WrittenLoot.GetMap()[1].Value.GetInt(), 11);
+		TestTrue(TEXT("the map values stayed Integer-typed"),
+			WrittenLoot.GetMap()[0].Value.GetType() == EStoryFlowVariableType::Integer);
+	}
+	// The grandchild overrides loot in the seed, so nearest-wins keeps its own entries.
+	TestEqual(TEXT("the grandchild's loot override still wins over the base write"),
+		StoryFlowDataAssets::Resolve(Seed, Overlay, GrandChildId, LootId).GetMap()[0].Value.GetInt(), 50);
+
+	// --- the ENUM branch: written as Enum, not String ---
+	// The seed stores rank as EStoryFlowVariableType::Enum, so an overlay entry typed String
+	// would differ from the file value it shadows. Invisible to any read (both answer GetString)
+	// and visible in U3's save key, which is why the type is asserted and not just the text.
+	const FStoryFlowVariant WrittenRank = StoryFlowDataAssets::Resolve(Seed, Overlay, BaseId, RankId);
+	TestEqual(TEXT("the enum Set wrote its wired value"), WrittenRank.GetString(), TEXT("Champion"));
+	TestTrue(TEXT("the enum Set wrote an Enum-typed value, not a String one"),
+		WrittenRank.GetType() == EStoryFlowVariableType::Enum);
 
 	// A base write DOES cascade where nothing shadows it: alive is declared and valued on the
 	// base only, so flipping it there must be visible from the grandchild.
@@ -897,6 +996,48 @@ bool FStoryFlowDataAssetSetNodeTest::RunTest(const FString& Parameters)
 		StoryFlowDataAssets::TrySet(Seed, MutableOverlay, BaseId, AliveId, FStoryFlowVariant::FromBool(false)));
 	TestFalse(TEXT("and cascades all the way to the grandchild"),
 		StoryFlowDataAssets::Resolve(Seed, MutableOverlay, GrandChildId, AliveId).GetBool(true));
+
+	// --- an EMPTY wired array still writes a typed value ---
+	// Its own run, because it overwrites the array asserted above. SetArray infers the element
+	// type from element [0], so an empty wired array is the one case with nothing to infer from,
+	// and the Set node is the LAST writer before the store — an untyped value here is what U3's
+	// save key would serialize.
+	UStoryFlowScriptAsset* EmptyScript = NewObject<UStoryFlowScriptAsset>(GetTransientPackage());
+	FGCObjectScopeGuard EmptyGuard(EmptyScript);
+	EmptyScript->StartNode = TEXT("0");
+	EmptyScript->Nodes.Add(TEXT("0"), MakeNode(TEXT("0"), EStoryFlowNodeType::Start, TEXT("start")));
+	EmptyScript->Nodes.Add(TEXT("pB"), MakePill(TEXT("pB"), BaseId));
+	{
+		FStoryFlowVariable EmptyVar;
+		EmptyVar.Id = TEXT("srcEmpty");
+		EmptyVar.Name = TEXT("srcEmpty");
+		EmptyVar.Type = EStoryFlowVariableType::String;
+		EmptyVar.bIsArray = true;
+		EmptyVar.Value.SetArray(TArray<FStoryFlowVariant>(), EStoryFlowVariableType::String);
+		EmptyScript->Variables.Add(EmptyVar.Id, EmptyVar);
+
+		FStoryFlowNode EmptySource = MakeNode(TEXT("VArr"), EStoryFlowNodeType::GetStringArray, TEXT("getStringArray"));
+		EmptySource.Data.Variable = TEXT("srcEmpty");
+		EmptyScript->Nodes.Add(EmptySource.Id, EmptySource);
+	}
+	EmptyScript->Nodes.Add(TEXT("sTags"), MakeSetter(TEXT("sTags"), TagsId, TEXT("tags"), TEXT("string"), /*bIsArray*/ true));
+	EmptyScript->Nodes.Add(TEXT("End"), MakeNode(TEXT("End"), EStoryFlowNodeType::End, TEXT("end")));
+	EmptyScript->Connections.Add(MakePillEdge(TEXT("pB"), TEXT("sTags")));
+	EmptyScript->Connections.Add(MakeEdge(TEXT("VArr"), TEXT("sTags"),
+		StoryFlowHandles::Source(TEXT("VArr"), TEXT("string-array-")),
+		StoryFlowHandles::Target(TEXT("sTags"), TEXT("string-array-2"))));
+	EmptyScript->Connections.Add(MakeEdge(TEXT("0"), TEXT("sTags"), StoryFlowHandles::Source(TEXT("0")), StoryFlowHandles::Target(TEXT("sTags"), TEXT("0"))));
+	EmptyScript->Connections.Add(MakeEdge(TEXT("sTags"), TEXT("End"),
+		StoryFlowHandles::Source(TEXT("sTags"), StoryFlowHandles::Out_Flow), StoryFlowHandles::Target(TEXT("End"), TEXT(""))));
+	EmptyScript->BuildConnectionIndices();
+
+	Project->Scripts.Add(TEXT("emptyarray"), EmptyScript);
+	W.Component->StartDialogueWithScript(TEXT("emptyarray"));
+
+	const FStoryFlowVariant EmptyWritten = StoryFlowDataAssets::Resolve(Seed, W.Subsystem->GetDataAssetOverlay(), BaseId, TagsId);
+	TestEqual(TEXT("the empty wired array was written, not refused"), EmptyWritten.GetArray().Num(), 0);
+	TestTrue(TEXT("an empty wired array still writes its declared element type"),
+		EmptyWritten.GetType() == EStoryFlowVariableType::String);
 
 	CleanUp();
 	return true;
@@ -1059,15 +1200,39 @@ bool FStoryFlowDataAssetArrayOpTest::RunTest(const FString& Parameters)
 	Add.Data.Variable = TEXT("tags");
 	Script->Nodes.Add(Add.Id, Add);
 
+	// The op node's OUTPUT pin, copied into a GLOBAL so the assertion can see it: a component's
+	// execution context (and therefore its locals) is private, globals live on the subsystem.
+	// This is the half of the node the store write does not cover — the array op both writes its
+	// target AND publishes the result for anything wired downstream, and only the second half
+	// went missing when the `.sfd` path dropped the evaluation cache after stamping it.
+	FStoryFlowNode Sink = MakeNode(TEXT("sink"), EStoryFlowNodeType::SetStringArray, TEXT("setStringArray"));
+	Sink.Data.Variable = TEXT("gSink");
+	Sink.Data.bIsGlobal = true;
+	Script->Nodes.Add(Sink.Id, Sink);
+
 	Script->Nodes.Add(TEXT("End"), MakeNode(TEXT("End"), EStoryFlowNodeType::End, TEXT("end")));
 
 	Script->Connections.Add(MakePillEdge(TEXT("pC"), TEXT("g")));
 	Script->Connections.Add(MakeEdge(TEXT("g"), TEXT("add"),
 		StoryFlowHandles::Source(TEXT("g"), TEXT("string-array-")), StoryFlowHandles::Target(TEXT("add"), StoryFlowHandles::In_StringArray)));
+	Script->Connections.Add(MakeEdge(TEXT("add"), TEXT("sink"),
+		StoryFlowHandles::Source(TEXT("add"), TEXT("string-array-")), StoryFlowHandles::Target(TEXT("sink"), StoryFlowHandles::In_StringArray)));
 	Script->Connections.Add(MakeEdge(TEXT("0"), TEXT("add"), StoryFlowHandles::Source(TEXT("0")), StoryFlowHandles::Target(TEXT("add"), TEXT("0"))));
-	Script->Connections.Add(MakeEdge(TEXT("add"), TEXT("End"),
-		StoryFlowHandles::Source(TEXT("add"), StoryFlowHandles::Out_Flow), StoryFlowHandles::Target(TEXT("End"), TEXT(""))));
+	Script->Connections.Add(MakeEdge(TEXT("add"), TEXT("sink"),
+		StoryFlowHandles::Source(TEXT("add"), StoryFlowHandles::Out_Flow), StoryFlowHandles::Target(TEXT("sink"), TEXT("0"))));
+	Script->Connections.Add(MakeEdge(TEXT("sink"), TEXT("End"),
+		StoryFlowHandles::Source(TEXT("sink"), StoryFlowHandles::Out_Flow), StoryFlowHandles::Target(TEXT("End"), TEXT(""))));
 	Script->BuildConnectionIndices();
+
+	{
+		FStoryFlowVariable SinkVar;
+		SinkVar.Id = TEXT("gSink");
+		SinkVar.Name = TEXT("gSink");
+		SinkVar.Type = EStoryFlowVariableType::String;
+		SinkVar.bIsArray = true;
+		SinkVar.Value.SetArray(TArray<FStoryFlowVariant>(), EStoryFlowVariableType::String);
+		Project->GlobalVariables.Add(SinkVar.Id, SinkVar);
+	}
 
 	Project->Scripts.Add(TEXT("arrayop"), Script);
 	W.Subsystem->SetProject(Project);
@@ -1084,6 +1249,24 @@ bool FStoryFlowDataAssetArrayOpTest::RunTest(const FString& Parameters)
 	}
 	TestEqual(TEXT("the base's tags are untouched by a child-level append"),
 		StoryFlowDataAssets::Resolve(Seed, Overlay, BaseId, TagsId).GetArray().Num(), 2);
+
+	// The op node's OUTPUT pin still carries the result. The `.sfd` path drops the evaluation
+	// cache (a notBool over an arrayLength on this array would otherwise answer stale), and
+	// ClearCache is a FULL drop, so doing it after the output stamp erased the stamp and every
+	// downstream reader saw an empty array — on the `.sfd` path only, which is what made it easy
+	// to miss. The script-variable path is the behavioral reference: it publishes its result here.
+	if (const FStoryFlowVariable* Published = W.Subsystem->GetGlobalVariables().Find(TEXT("gSink")))
+	{
+		if (TestEqual(TEXT("the op node published its result on its output pin"), Published->Value.GetArray().Num(), 3))
+		{
+			TestEqual(TEXT("and it is the appended array, not some other one"),
+				Published->Value.GetArray()[2].GetString(), TEXT("boss"));
+		}
+	}
+	else
+	{
+		AddError(TEXT("the global sink variable is missing from the subsystem"));
+	}
 
 
 	// --- an op over an ALREADY-EMPTY array still writes a typed value ---

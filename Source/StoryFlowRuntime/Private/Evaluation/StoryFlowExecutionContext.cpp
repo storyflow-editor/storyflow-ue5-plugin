@@ -160,19 +160,18 @@ bool FStoryFlowExecutionContext::TrySetDataAsset(const FString& AssetId, const F
 	return StoryFlowDataAssets::TrySet(*DataAssetStore.Seed, *DataAssetStore.Overlay, AssetId, VariableId, Value);
 }
 
-bool FStoryFlowExecutionContext::MaybeWarnDataAsset(const FString& NodeId, const TCHAR* Reason, const FString& Message)
+void FStoryFlowExecutionContext::MaybeWarnDataAsset(const FString& NodeId, const TCHAR* Reason, const FString& Message)
 {
 	// The key is node AND reason, so a node with two problems reports both once,
 	// and a fixed-then-broken-again node stays quiet until the next game restart.
 	const FString Key = NodeId + TEXT("|") + Reason;
 	if (WarnedDataAssetNodes.Contains(Key))
 	{
-		return false;
+		return;
 	}
 	WarnedDataAssetNodes.Add(Key);
 	++DataAssetWarningsEmitted;
 	UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: %s"), *Message);
-	return true;
 }
 
 FString FStoryFlowExecutionContext::ResolveDataAssetId(const FStoryFlowNode& Accessor) const

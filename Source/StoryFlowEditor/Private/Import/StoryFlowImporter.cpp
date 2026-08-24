@@ -154,47 +154,6 @@ namespace
 		return TryGetPackageFilename(Package, Filename) && FPaths::FileExists(Filename);
 	}
 
-	/** Map an exported type string to EStoryFlowVariableType. Returns None for unknown strings. */
-	EStoryFlowVariableType VariableTypeFromString(const FString& TypeString)
-	{
-		if (TypeString == TEXT("boolean"))
-		{
-			return EStoryFlowVariableType::Boolean;
-		}
-		if (TypeString == TEXT("integer"))
-		{
-			return EStoryFlowVariableType::Integer;
-		}
-		if (TypeString == TEXT("float"))
-		{
-			return EStoryFlowVariableType::Float;
-		}
-		if (TypeString == TEXT("string"))
-		{
-			return EStoryFlowVariableType::String;
-		}
-		if (TypeString == TEXT("enum"))
-		{
-			return EStoryFlowVariableType::Enum;
-		}
-		if (TypeString == TEXT("image"))
-		{
-			return EStoryFlowVariableType::Image;
-		}
-		if (TypeString == TEXT("audio"))
-		{
-			return EStoryFlowVariableType::Audio;
-		}
-		if (TypeString == TEXT("character"))
-		{
-			return EStoryFlowVariableType::Character;
-		}
-		if (TypeString == TEXT("map"))
-		{
-			return EStoryFlowVariableType::Map;
-		}
-		return EStoryFlowVariableType::None;
-	}
 }
 
 UStoryFlowProjectAsset* UStoryFlowImporter::ImportProject(const FString& BuildDirectory, const FString& ContentPath)
@@ -295,13 +254,13 @@ void UStoryFlowImporter::ImportDataAssets(const FString& BuildDirectory, const F
 								continue;
 							}
 							// CATEGORY rows are section headers with no value and are never
-							// resolved (contract §2.1) — VariableTypeFromString already answers
+							// resolved (contract §2.1) — ParseVariableType already answers
 							// None for them, and skipping here keeps them out of every place
 							// variables are enumerated. ParseVariable would otherwise leave the
 							// row at the enum's default type and make it look declarable.
 							FString TypeString;
 							VariableObject->TryGetStringField(TEXT("type"), TypeString);
-							if (VariableTypeFromString(TypeString) == EStoryFlowVariableType::None)
+							if (ParseVariableType(TypeString) == EStoryFlowVariableType::None)
 							{
 								if (TypeString != TEXT("category"))
 								{
@@ -1254,7 +1213,7 @@ FStoryFlowNodeData UStoryFlowImporter::ParseNodeData(const TSharedPtr<FJsonObjec
 	{
 		// Gated on valueType because scalar nodes share the "value" JSON field. For string
 		// values this stores the exported strings-table key verbatim (resolved at read time)
-		Data.MapInlineValue = ParseVariant(NodeObject->TryGetField(TEXT("value")), VariableTypeFromString(Data.ValueType));
+		Data.MapInlineValue = ParseVariant(NodeObject->TryGetField(TEXT("value")), ParseVariableType(Data.ValueType));
 	}
 
 	return Data;
@@ -1326,7 +1285,7 @@ FStoryFlowVariable UStoryFlowImporter::ParseVariable(const FString& VariableId, 
 	{
 		TypeString = VariableObject->GetStringField(TEXT("type"));
 	}
-	const EStoryFlowVariableType ParsedType = VariableTypeFromString(TypeString);
+	const EStoryFlowVariableType ParsedType = ParseVariableType(TypeString);
 	if (ParsedType != EStoryFlowVariableType::None)
 	{
 		Variable.Type = ParsedType;
@@ -1338,7 +1297,7 @@ FStoryFlowVariable UStoryFlowImporter::ParseVariable(const FString& VariableId, 
 	{
 		if (VariableObject->HasField(TEXT("keyType")))
 		{
-			const EStoryFlowVariableType ParsedKeyType = VariableTypeFromString(VariableObject->GetStringField(TEXT("keyType")));
+			const EStoryFlowVariableType ParsedKeyType = ParseVariableType(VariableObject->GetStringField(TEXT("keyType")));
 			if (ParsedKeyType != EStoryFlowVariableType::None)
 			{
 				Variable.KeyType = ParsedKeyType;
@@ -1346,7 +1305,7 @@ FStoryFlowVariable UStoryFlowImporter::ParseVariable(const FString& VariableId, 
 		}
 		if (VariableObject->HasField(TEXT("valueType")))
 		{
-			const EStoryFlowVariableType ParsedValueType = VariableTypeFromString(VariableObject->GetStringField(TEXT("valueType")));
+			const EStoryFlowVariableType ParsedValueType = ParseVariableType(VariableObject->GetStringField(TEXT("valueType")));
 			if (ParsedValueType != EStoryFlowVariableType::None)
 			{
 				Variable.ValueType = ParsedValueType;
