@@ -823,6 +823,101 @@ bool FStoryFlowDataAssetSaveLoadRulesTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("and the overlay came back too"), LoadedOverlay.Num(), 1);
 	}
 
+	// --- A record naming a type this build cannot parse is DROPPED, the document still loads ---
+	// The save format's names are CAPITALIZED ("Boolean") and matched EXACTLY, the same rule the
+	// exporter's lowercase wire tokens ("boolean") follow — two vocabularies, both exact. Unity
+	// parses these with Enum.TryParse(ignoreCase: false) and Godot with an exact dictionary
+	// match, so a spelling this reader accepted leniently would be a record the siblings drop.
+	// FString's == is case-INSENSITIVE, which is what made that possible here. "None" is in the
+	// same bucket: it is what the writer emits for a type it cannot name, so it names none
+	// coming back. Unusable records are skipped, never stored untyped and never allowed to
+	// shadow the declaration the project already carries.
+	const FString DoctoredTypeNames = TEXT(R"JSON({"version":"1","globalVariables":{
+			"keep":  { "id": "keep",  "name": "Chapter", "type": "Integer", "isArray": false, "value": 4 },
+			"wire":  { "id": "wire",  "name": "Alive",   "type": "boolean", "isArray": false, "value": true },
+			"shout": { "id": "shout", "name": "Loud",    "type": "BOOLEAN", "isArray": false, "value": true },
+			"none":  { "id": "none",  "name": "Untyped", "type": "None",    "isArray": false, "value": true }
+		},"characters":{
+			"hero": { "name": "Hero", "image": "", "variables": {
+				"mood":  { "id": "mood",  "name": "Mood",  "type": "String", "isArray": false, "value": "calm" },
+				"weird": { "id": "weird", "name": "Weird", "type": "sTRING", "isArray": false, "value": "x" }
+			} }
+		},"usedOnceOnlyOptions":[]})JSON");
+
+	TMap<FString, FStoryFlowVariable> TypedGlobals;
+	TMap<FString, FStoryFlowCharacterDef> TypedCharacters;
+	TSet<FString> TypedOnceOnly;
+	StoryFlowDataAssets::FOverlay TypedOverlay;
+	if (TestTrue(TEXT("a save carrying unparseable type names still loads"),
+		StoryFlowSaveHelpers::DeserializeSaveData(DoctoredTypeNames, TypedGlobals, TypedCharacters, TypedOnceOnly, Seed, TypedOverlay)))
+	{
+		TestEqual(TEXT("only the exactly named global survives"), TypedGlobals.Num(), 1);
+		TestTrue(TEXT("and it is the canonical one"), TypedGlobals.Contains(TEXT("keep")));
+		TestFalse(TEXT("the wire vocabulary's lowercase spelling is not a save type name"), TypedGlobals.Contains(TEXT("wire")));
+		TestFalse(TEXT("neither is an upper-cased variant"), TypedGlobals.Contains(TEXT("shout")));
+		TestFalse(TEXT("and None names no type at all"), TypedGlobals.Contains(TEXT("none")));
+		if (const FStoryFlowCharacterDef* Hero = TypedCharacters.Find(TEXT("hero")))
+		{
+			TestEqual(TEXT("a character's unparseable variable is dropped the same way"), Hero->Variables.Num(), 1);
+			TestTrue(TEXT("leaving the exactly named one"), Hero->Variables.Contains(TEXT("mood")));
+		}
+		else
+		{
+			AddError(TEXT("the doctored save lost the character entirely"));
+		}
+	}
+
+	// --- ...and the nine names the writer DOES emit all still parse ---
+	// Round trip rather than direct calls: the name table is file-local to the reader. A name
+	// dropped from it would fail nothing above and silently discard every record of that type.
+	const EStoryFlowVariableType EveryType[] = {
+		EStoryFlowVariableType::Boolean, EStoryFlowVariableType::Integer, EStoryFlowVariableType::Float,
+		EStoryFlowVariableType::String, EStoryFlowVariableType::Enum, EStoryFlowVariableType::Image,
+		EStoryFlowVariableType::Audio, EStoryFlowVariableType::Character, EStoryFlowVariableType::Map,
+	};
+	TMap<FString, FStoryFlowVariable> EveryTypeGlobals;
+	for (const EStoryFlowVariableType Type : EveryType)
+	{
+		FStoryFlowVariable Typed;
+		Typed.Id = FString::Printf(TEXT("v%d"), static_cast<int32>(Type));
+		Typed.Name = Typed.Id;
+		Typed.Type = Type;
+		// A value of the record's own type: a default variant would serialize as JSON null,
+		// which the reader is entitled to complain about and this test is not about.
+		switch (Type)
+		{
+		case EStoryFlowVariableType::Boolean: Typed.Value.SetBool(true); break;
+		case EStoryFlowVariableType::Integer: Typed.Value.SetInt(7); break;
+		case EStoryFlowVariableType::Float:   Typed.Value.SetFloat(1.5f); break;
+		case EStoryFlowVariableType::Enum:    Typed.Value.SetEnum(TEXT("A")); break;
+		case EStoryFlowVariableType::Map:     Typed.Value.SetMap(TArray<FStoryFlowMapEntry>()); break;
+		default:                              Typed.Value.SetString(TEXT("x")); break;
+		}
+		EveryTypeGlobals.Add(Typed.Id, Typed);
+	}
+
+	const StoryFlowDataAssets::FOverlay NoWrites;
+	TMap<FString, FStoryFlowCharacterDef> NoCharacters;
+	const TSet<FString> NoOnceOnly;
+	const FString EveryTypeJson = StoryFlowSaveHelpers::SerializeSaveData(
+		EveryTypeGlobals, NoCharacters, NoOnceOnly, Seed, NoWrites);
+
+	TMap<FString, FStoryFlowVariable> EveryTypeLoaded;
+	TSet<FString> EveryTypeOnceOnly;
+	StoryFlowDataAssets::FOverlay EveryTypeOverlay;
+	if (TestTrue(TEXT("a document naming every type loads"),
+		StoryFlowSaveHelpers::DeserializeSaveData(EveryTypeJson, EveryTypeLoaded, NoCharacters, EveryTypeOnceOnly, Seed, EveryTypeOverlay)))
+	{
+		TestEqual(TEXT("all nine typed records survive the round trip"), EveryTypeLoaded.Num(), 9);
+		for (const EStoryFlowVariableType Type : EveryType)
+		{
+			const FString Id = FString::Printf(TEXT("v%d"), static_cast<int32>(Type));
+			const FStoryFlowVariable* Loaded = EveryTypeLoaded.Find(Id);
+			TestTrue(FString::Printf(TEXT("the save name for type %d round trips"), static_cast<int32>(Type)),
+				Loaded != nullptr && Loaded->Type == Type);
+		}
+	}
+
 	// --- An untouched session serializes an EMPTY key, not a missing one ---
 	const StoryFlowDataAssets::FOverlay Untouched;
 	const TSharedPtr<FJsonObject> EmptyKey = SavedDataAssetKey(SerializeOverlayOnly(Seed, Untouched));

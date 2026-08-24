@@ -39,17 +39,48 @@ FString VariableTypeToString(EStoryFlowVariableType Type)
 	}
 }
 
+/**
+ * VariableTypeToString's inverse, and deliberately its own table rather than a reuse of
+ * ParseVariableType (StoryFlowTypes.h). TWO VOCABULARIES: that one parses the EXPORTER's
+ * lowercase wire tokens ("boolean"), these are the SAVE format's capitalized names ("Boolean").
+ * Folding them together would make each silently accept the other's spelling.
+ *
+ * BOTH ARE EXACT. Matching here is case-sensitive, like the wire table and like the siblings:
+ * Unity parses save type names with Enum.TryParse(ignoreCase: false), Godot with an exact
+ * dictionary match. `==` on FString is case-INSENSITIVE, so this used to accept "BOOLEAN" and
+ * even the wire's own "boolean" — spellings no engine writes and two of the four reject.
+ *
+ * None for anything else, "None" itself included: that is what VariableTypeToString writes for a
+ * type it cannot name, and a record no engine can use is skipped by the reader rather than
+ * guessed at (see VariableFromJson).
+ */
 EStoryFlowVariableType StringToVariableType(const FString& Str)
 {
-	if (Str == TEXT("Boolean"))   return EStoryFlowVariableType::Boolean;
-	if (Str == TEXT("Integer"))   return EStoryFlowVariableType::Integer;
-	if (Str == TEXT("Float"))     return EStoryFlowVariableType::Float;
-	if (Str == TEXT("String"))    return EStoryFlowVariableType::String;
-	if (Str == TEXT("Enum"))      return EStoryFlowVariableType::Enum;
-	if (Str == TEXT("Image"))     return EStoryFlowVariableType::Image;
-	if (Str == TEXT("Audio"))     return EStoryFlowVariableType::Audio;
-	if (Str == TEXT("Character")) return EStoryFlowVariableType::Character;
-	if (Str == TEXT("Map"))       return EStoryFlowVariableType::Map;
+	struct FTypeName
+	{
+		FString Name;
+		EStoryFlowVariableType Type;
+	};
+
+	static const FTypeName TypeNames[] = {
+		{ TEXT("Boolean"),   EStoryFlowVariableType::Boolean },
+		{ TEXT("Integer"),   EStoryFlowVariableType::Integer },
+		{ TEXT("Float"),     EStoryFlowVariableType::Float },
+		{ TEXT("String"),    EStoryFlowVariableType::String },
+		{ TEXT("Enum"),      EStoryFlowVariableType::Enum },
+		{ TEXT("Image"),     EStoryFlowVariableType::Image },
+		{ TEXT("Audio"),     EStoryFlowVariableType::Audio },
+		{ TEXT("Character"), EStoryFlowVariableType::Character },
+		{ TEXT("Map"),       EStoryFlowVariableType::Map },
+	};
+
+	for (const FTypeName& TypeName : TypeNames)
+	{
+		if (Str.Equals(TypeName.Name, ESearchCase::CaseSensitive))
+		{
+			return TypeName.Type;
+		}
+	}
 	return EStoryFlowVariableType::None;
 }
 
@@ -200,6 +231,17 @@ TSharedPtr<FJsonObject> VariableToJson(const FStoryFlowVariable& Variable)
 	return Obj;
 }
 
+/**
+ * One saved variable record. A None Type means the record named a type this build does not know
+ * — a case variant, a future type, the literal "None" — and CALLERS MUST SKIP IT: an unusable
+ * record is dropped on the way in, never guessed at, and never allowed to overwrite the
+ * declaration the project already carries. Unity's TryVariableValueFromJson returns false and
+ * Godot's _variable_from_json returns {} for the same reason; a document carrying one still
+ * loads, minus that record.
+ *
+ * Only the record's own type gates this. A map's key/value types stay tolerant — absent or
+ * unknown keeps the struct default (String), matching both siblings.
+ */
 FStoryFlowVariable VariableFromJson(const TSharedPtr<FJsonObject>& Obj)
 {
 	FStoryFlowVariable Variable;
@@ -352,7 +394,12 @@ FStoryFlowCharacterDef CharacterDefFromJson(const TSharedPtr<FJsonObject>& Obj)
 			const TSharedPtr<FJsonObject>* VarObj;
 			if (VarPair.Value->TryGetObject(VarObj))
 			{
-				CharDef.Variables.Add(FString(*VarPair.Key), VariableFromJson(*VarObj));
+				// A record whose type this build cannot name is dropped, not stored untyped
+				const FStoryFlowVariable Parsed = VariableFromJson(*VarObj);
+				if (Parsed.Type != EStoryFlowVariableType::None)
+				{
+					CharDef.Variables.Add(FString(*VarPair.Key), Parsed);
+				}
 			}
 		}
 	}
@@ -650,7 +697,12 @@ bool DeserializeSaveData(
 			const TSharedPtr<FJsonObject>* VarObj;
 			if (VarPair.Value->TryGetObject(VarObj))
 			{
-				OutGlobalVariables.Add(FString(*VarPair.Key), VariableFromJson(*VarObj));
+				// A record whose type this build cannot name is dropped, not stored untyped
+				const FStoryFlowVariable Parsed = VariableFromJson(*VarObj);
+				if (Parsed.Type != EStoryFlowVariableType::None)
+				{
+					OutGlobalVariables.Add(FString(*VarPair.Key), Parsed);
+				}
 			}
 		}
 	}
