@@ -937,6 +937,21 @@ private:
 	/** Evaluator instance */
 	TUniquePtr<FStoryFlowEvaluator> Evaluator;
 
+	/**
+	 * Has this component contributed to the subsystem's ActiveDialogueCount?
+	 *
+	 * The counter is a REFERENCE COUNT across components and it gates LoadFromSlot, so the
+	 * start/end notify pair has to be idempotent per component: restarting a dialogue starts a
+	 * second one without ending the first (deliberately — no end event fires, existing projects
+	 * depend on that), and an unconditional increment would leave the count stuck above zero
+	 * after the single stop that eventually follows, permanently refusing every load.
+	 *
+	 * Not a substitute for ExecutionContext.bIsExecuting: that flag is cleared by Reset() from
+	 * paths which never touch the counter, so it cannot be trusted to say whether the increment
+	 * happened.
+	 */
+	bool bCountedActiveDialogue = false;
+
 	/** Cached subsystem reference */
 	UPROPERTY()
 	mutable TObjectPtr<UStoryFlowSubsystem> CachedSubsystem;

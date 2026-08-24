@@ -7,6 +7,7 @@
 #include "Data/StoryFlowDataAssetAsset.h"
 #include "Data/StoryFlowDataAssetStore.h"
 #include "Data/StoryFlowProjectAsset.h"
+#include "Data/StoryFlowSaveGame.h"
 #include "Data/StoryFlowScriptAsset.h"
 #include "Import/StoryFlowImporter.h"
 #include "StoryFlowEngineContractFixtures.h"
@@ -625,6 +626,10 @@ namespace StoryFlowDataAssetTestHelpers
 					{ "id": "v_tags", "name": "tags", "type": "string", "isArray": true, "value": [ "mob", "melee" ] },
 					{ "id": "v_loot", "name": "loot", "type": "map", "keyType": "string", "valueType": "integer",
 					  "value": [ { "key": "gold", "value": 1 }, { "key": "gems", "value": 2 } ] },
+					{ "id": "v_ranks", "name": "ranks", "type": "enum", "isArray": true,
+					  "enumValues": [ "Grunt", "Elite", "Champion" ], "value": [ "Grunt", "Elite" ] },
+					{ "id": "v_empty", "name": "empty", "type": "enum", "isArray": true,
+					  "enumValues": [ "Grunt", "Elite" ], "value": [] },
 					{ "id": "v_lore", "name": "lore", "type": "category" }
 				],
 				"overrides": {}
@@ -636,6 +641,7 @@ namespace StoryFlowDataAssetTestHelpers
 				"variables": [],
 				"overrides": {
 					"v_hp": 25,
+					"v_ranks": [ "Champion" ],
 					"v_tags": [ "elite", "boss" ],
 					"v_loot": [ { "key": "gems", "value": 9 }, { "key": "gold", "value": 8 } ]
 				}
@@ -702,7 +708,7 @@ bool FStoryFlowDataAssetImportRoundTripTest::RunTest(const FString& Parameters)
 	{
 		TestEqual(TEXT("the base keeps its display name"), (*BaseAsset)->Name, TEXT("RoundTripBase"));
 		TestTrue(TEXT("a null parent imports as a root"), (*BaseAsset)->Parent.IsEmpty());
-		TestEqual(TEXT("the category row is skipped, the other three survive"), (*BaseAsset)->Variables.Num(), 3);
+		TestEqual(TEXT("the category row is skipped, the other five survive"), (*BaseAsset)->Variables.Num(), 5);
 	}
 
 	UStoryFlowDataAssetAsset* const* ChildAsset = Project->DataAssets.Find(RoundTripChildId);
@@ -735,6 +741,70 @@ bool FStoryFlowDataAssetImportRoundTripTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("the category row never resolves"), StoryFlowDataAssets::Resolve(Seed, Overlay, RoundTripBaseId, TEXT("v_lore")).IsValid());
 
 	// ------------------------------------------------------------------
+	// ENUM ARRAYS: one storage shape, whoever wrote the value
+	// ------------------------------------------------------------------
+	// Three writers can put an enum array into the store — the importer here, the Set node's
+	// value pin, and a save load — and each used to type it differently (Enum, String, Enum).
+	// Nothing observes the difference today, because every reader of the string family answers
+	// GetString, which is exactly why it would go unnoticed until something started switching on
+	// the element type. Asserting the shape here pins the importer's end of it.
+	const FStoryFlowVariant BaseRanks = StoryFlowDataAssets::Resolve(Seed, Overlay, RoundTripBaseId, TEXT("v_ranks"));
+	TestTrue(TEXT("a declared enum array is typed with its ELEMENT type, not left inferred"),
+		BaseRanks.GetType() == EStoryFlowVariableType::Enum);
+	if (TestEqual(TEXT("the declared enum array keeps its elements"), BaseRanks.GetArray().Num(), 2))
+	{
+		TestTrue(TEXT("and every element is typed Enum, not String"),
+			BaseRanks.GetArray()[0].GetType() == EStoryFlowVariableType::Enum);
+		TestEqual(TEXT("with its value intact"), BaseRanks.GetArray()[1].GetString(), TEXT("Elite"));
+	}
+
+	// The empty one is the case inference cannot answer at all: no element [0] to read a type off
+	const FStoryFlowVariant BaseEmpty = StoryFlowDataAssets::Resolve(Seed, Overlay, RoundTripBaseId, TEXT("v_empty"));
+	TestEqual(TEXT("an EMPTY declared array is still empty"), BaseEmpty.GetArray().Num(), 0);
+	TestTrue(TEXT("and still carries its declared element type rather than None"),
+		BaseEmpty.GetType() == EStoryFlowVariableType::Enum);
+
+	// An override travels the same road and must land in the same shape
+	const FStoryFlowVariant ChildRanks = StoryFlowDataAssets::Resolve(Seed, Overlay, RoundTripChildId, TEXT("v_ranks"));
+	TestTrue(TEXT("an enum array OVERRIDE is typed Enum too"), ChildRanks.GetType() == EStoryFlowVariableType::Enum);
+	if (TestEqual(TEXT("the override replaced the whole array"), ChildRanks.GetArray().Num(), 1))
+	{
+		TestTrue(TEXT("and its element is Enum-typed as well"),
+			ChildRanks.GetArray()[0].GetType() == EStoryFlowVariableType::Enum);
+		TestEqual(TEXT("with the override's value"), ChildRanks.GetArray()[0].GetString(), TEXT("Champion"));
+	}
+
+	// ...and the THIRD writer: a save round trip has to hand back the same shape. A session write
+	// of an enum array is typed by the declaration on the way back in, so this is the load end of
+	// the same agreement.
+	{
+		StoryFlowDataAssets::FOverlay WriteOverlay;
+		TestTrue(TEXT("an enum array write lands"),
+			StoryFlowDataAssets::TrySet(Seed, WriteOverlay, RoundTripChildId, TEXT("v_ranks"), ChildRanks));
+
+		const TMap<FString, FStoryFlowVariable> NoGlobals;
+		const TMap<FString, FStoryFlowCharacterDef> NoCharacters;
+		const TSet<FString> NoOnceOnly;
+		const FString SaveJson = StoryFlowSaveHelpers::SerializeSaveData(NoGlobals, NoCharacters, NoOnceOnly, Seed, WriteOverlay);
+
+		TMap<FString, FStoryFlowVariable> LoadedGlobals;
+		TMap<FString, FStoryFlowCharacterDef> LoadedCharacters;
+		TSet<FString> LoadedOnceOnly;
+		StoryFlowDataAssets::FOverlay LoadedOverlay;
+		if (TestTrue(TEXT("the enum array save deserializes"),
+			StoryFlowSaveHelpers::DeserializeSaveData(SaveJson, LoadedGlobals, LoadedCharacters, LoadedOnceOnly, Seed, LoadedOverlay)))
+		{
+			const FStoryFlowVariant Reloaded = StoryFlowDataAssets::Resolve(Seed, LoadedOverlay, RoundTripChildId, TEXT("v_ranks"));
+			TestTrue(TEXT("a loaded enum array is typed Enum"), Reloaded.GetType() == EStoryFlowVariableType::Enum);
+			if (TestEqual(TEXT("a loaded enum array keeps its elements"), Reloaded.GetArray().Num(), 1))
+			{
+				TestTrue(TEXT("and its elements are Enum-typed, the same shape the importer produced"),
+					Reloaded.GetArray()[0].GetType() == EStoryFlowVariableType::Enum);
+			}
+		}
+	}
+
+	// ------------------------------------------------------------------
 	// The packed blobs survive a real save and load
 	// ------------------------------------------------------------------
 	// The import above already SAVED both assets, which ran the real PreSave -> pack. What
@@ -746,7 +816,7 @@ bool FStoryFlowDataAssetImportRoundTripTest::RunTest(const FString& Parameters)
 		UStoryFlowDataAssetAsset* Reloaded = SerializeAndPostLoad(*ChildAsset);
 		FGCObjectScopeGuard ReloadedGuard(Reloaded);
 
-		TestEqual(TEXT("the reloaded child keeps its override keys"), Reloaded->Overrides.Num(), 3);
+		TestEqual(TEXT("the reloaded child keeps its override keys"), Reloaded->Overrides.Num(), 4);
 
 		if (const FStoryFlowVariant* Loot = Reloaded->Overrides.Find(TEXT("v_loot")))
 		{
@@ -788,7 +858,7 @@ bool FStoryFlowDataAssetImportRoundTripTest::RunTest(const FString& Parameters)
 		UStoryFlowDataAssetAsset* Reloaded = SerializeAndPostLoad(*BaseAsset);
 		FGCObjectScopeGuard ReloadedGuard(Reloaded);
 
-		if (TestEqual(TEXT("the reloaded base keeps its declarations in order"), Reloaded->Variables.Num(), 3))
+		if (TestEqual(TEXT("the reloaded base keeps its declarations in order"), Reloaded->Variables.Num(), 5))
 		{
 			TestEqual(TEXT("declaration order survives save and load"), Reloaded->Variables[2].Id, TEXT("v_loot"));
 			if (TestEqual(TEXT("the declared map's entries survive save and load"), Reloaded->Variables[2].Value.GetMap().Num(), 2))

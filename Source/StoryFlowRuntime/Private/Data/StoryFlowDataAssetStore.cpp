@@ -2,6 +2,7 @@
 
 #include "Data/StoryFlowDataAssetStore.h"
 #include "Data/StoryFlowDataAssetAsset.h"
+#include "StoryFlowRuntime.h"
 
 namespace StoryFlowDataAssets
 {
@@ -128,14 +129,29 @@ namespace StoryFlowDataAssets
 
 	const FStoryFlowVariable* FindDeclarationByName(const FSeed& Seed, const FString& AssetId, const FString& VariableName)
 	{
-		// Same walk, same root-most-wins rule as FindDeclaration — only the match differs. A
-		// descendant that re-declares an inherited NAME therefore resolves to the ancestor's
-		// declaration, which is the id its value actually lives under.
+		// Same walk, same root-most-wins rule as FindDeclaration — only the match differs. Two
+		// shapes reach this, and they are not the same problem:
+		//
+		//  - THE RE-DECLARED ID: a descendant repeats an inherited id under the same name. The
+		//    ancestor wins, which is right and invisible — both levels name one variable, and the
+		//    ancestor's id is the one its value actually lives under.
+		//  - THE SAME NAME ON TWO DIFFERENT IDS: two genuinely separate variables share a display
+		//    name across levels. The ancestor still wins (one rule, no special case), which means
+		//    the descendant's own variable is UNREACHABLE BY NAME from Blueprint. That is by
+		//    design — a name lookup with two right answers has no better one — but it is worth
+		//    saying out loud, because from the author's chair it looks like the setter silently
+		//    wrote to the wrong variable. The editor keeps names unique per asset, so this only
+		//    arrives from a hand-edited export or a rename across levels.
 		const FStoryFlowVariable* Declared = nullptr;
 		WalkChain(Seed, AssetId, [&](const FStoryFlowDataAssetDef& Level)
 		{
 			if (const FStoryFlowVariable* Decl = FindDeclaredOnLevelByName(Level, VariableName))
 			{
+				if (Declared && Declared->Id != Decl->Id)
+				{
+					UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Data Asset '%s' has the name '%s' on two different variables ('%s' and '%s') - the root-most one wins and the other cannot be reached by name"),
+						*AssetId, *VariableName, *Decl->Id, *Declared->Id);
+				}
 				Declared = Decl;
 			}
 			return true;

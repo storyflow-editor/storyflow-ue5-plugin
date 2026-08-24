@@ -110,7 +110,7 @@ namespace
 
 	/** Bump when import parsing or asset population changes, so assets written
 	    by older plugin versions re-save once even if their source is unchanged. */
-	constexpr const TCHAR* ImportHashSchemaVersion = TEXT("4");
+	constexpr const TCHAR* ImportHashSchemaVersion = TEXT("5");
 
 	FString SerializeJsonCondensed(const TSharedRef<FJsonObject>& JsonObject)
 	{
@@ -272,7 +272,21 @@ void UStoryFlowImporter::ImportDataAssets(const FString& BuildDirectory, const F
 								}
 								continue;
 							}
-							Def.Variables.Add(ParseVariable(VariableId, VariableObject));
+							FStoryFlowVariable Declaration = ParseVariable(VariableId, VariableObject);
+							// STATE the element type on an array declaration instead of letting
+							// SetArray infer it from element [0]. An EMPTY array has no element
+							// to infer from and would land typed None, while the save path always
+							// restores an array from its declaration — so seed and load would
+							// disagree about the same variable depending only on whether anyone
+							// had emptied it. The elements themselves already agree (ParseVariant
+							// and VariantFromJson type the string family identically); this is
+							// the container's own tag.
+							if (Declaration.bIsArray)
+							{
+								const TArray<FStoryFlowVariant> Elements = Declaration.Value.GetArray();
+								Declaration.Value.SetArray(Elements, Declaration.Type);
+							}
+							Def.Variables.Add(MoveTemp(Declaration));
 						}
 					}
 
@@ -355,6 +369,14 @@ void UStoryFlowImporter::ImportDataAssets(const FString& BuildDirectory, const F
 							else
 							{
 								OverrideValue = ParseVariant(OverridePair.Value, Declaration->Type);
+								// Same element-type stamp the declaration above gets: an override
+								// is read back through the same declaration and must not carry a
+								// different container tag than the value it shadows.
+								if (Declaration->bIsArray)
+								{
+									const TArray<FStoryFlowVariant> Elements = OverrideValue.GetArray();
+									OverrideValue.SetArray(Elements, Declaration->Type);
+								}
 							}
 							Def->Overrides.Add(OverridePair.Key, MoveTemp(OverrideValue));
 						}

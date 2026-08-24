@@ -107,7 +107,21 @@ public:
 	StoryFlowDataAssets::FOverlay& GetDataAssetOverlay() { return DataAssetOverlay; }
 	const StoryFlowDataAssets::FOverlay& GetDataAssetOverlay() const { return DataAssetOverlay; }
 
-	/** Both halves as one non-owning reference, for everything that needs the pair. */
+	/**
+	 * Both halves as one non-owning reference, for everything that needs the pair.
+	 *
+	 * WRITES ARE SUBSYSTEM-WIDE, CACHE INVALIDATION IS COMPONENT-LOCAL. Every component shares
+	 * these two maps, so a write through one is immediately visible to a read through any other.
+	 * The evaluation cache is not shared: the component that made the write clears its own, and
+	 * a different component already mid-dialogue keeps whatever its notBool / andBool memo held
+	 * until its next dialogue rebuild clears it. Data Asset reads are never memoized themselves,
+	 * so this only reaches conditions built ON one.
+	 *
+	 * This is the same asymmetry global variables have always had, not something the .sfd system
+	 * introduced, and it is documented rather than fixed: the subsystem holds no evaluator
+	 * handles, and a cross-component sweep would be new machinery for a case (two components in
+	 * simultaneous dialogues sharing one condition) no shipping project has.
+	 */
 	StoryFlowDataAssets::FStoreRef GetDataAssetStore() { return { &DataAssetSeed, &DataAssetOverlay }; }
 
 	/**
@@ -119,6 +133,11 @@ public:
 	/**
 	 * Drop every session Data Asset write, leaving the seed alone (contract §3 reset).
 	 * This is the game-restart semantic; the seed only changes when the project does.
+	 *
+	 * A BETWEEN-DIALOGUE call. It clears no evaluation cache (the subsystem holds no evaluator)
+	 * and re-arms no warning latch (that is FStoryFlowExecutionContext::Reset, which runs at
+	 * dialogue stop). Called mid-dialogue it still drops the writes, but a condition already
+	 * memoized above a Data Asset accessor keeps its old answer until the next dialogue rebuild.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|DataAssets")
 	void ResetDataAssetOverlay();

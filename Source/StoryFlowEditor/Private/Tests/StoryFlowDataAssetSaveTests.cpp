@@ -7,8 +7,10 @@
 #include "Components/StoryFlowComponent.h"
 #include "Data/StoryFlowDataAssetAsset.h"
 #include "Data/StoryFlowDataAssetStore.h"
+#include "Data/StoryFlowHandles.h"
 #include "Data/StoryFlowProjectAsset.h"
 #include "Data/StoryFlowSaveGame.h"
+#include "Data/StoryFlowScriptAsset.h"
 #include "Data/StoryFlowTypes.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
@@ -20,6 +22,7 @@
 #include "EditorAssetLibrary.h"
 #include "GameFramework/Actor.h"
 #include "HAL/FileManager.h"
+#include "Kismet/GameplayStatics.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
@@ -301,6 +304,50 @@ namespace StoryFlowDataAssetSaveTestHelpers
 	// FScopedWorld — the standalone game instance with a registered component — lives in
 	// StoryFlowScopedWorld.h, shared with the node suite.
 	using StoryFlowTestWorld::FScopedWorld;
+
+	/** The save slot the two real-slot tests write and delete. */
+	const TCHAR* SlotName = TEXT("StoryFlowDataAssetSlotTest");
+
+	/**
+	 * start -> dialogue with one option -> (nothing).
+	 *
+	 * An option means the dialogue WAITS rather than running to an end node, which is what keeps
+	 * it counted as active. Deliberately tiny: the restart test cares about the start/stop pair,
+	 * not about anything the dialogue says.
+	 */
+	UStoryFlowScriptAsset* MakeWaitingScript()
+	{
+		UStoryFlowScriptAsset* Script = NewObject<UStoryFlowScriptAsset>(GetTransientPackage());
+		Script->StartNode = TEXT("0");
+
+		FStoryFlowNode Start;
+		Start.Id = TEXT("0");
+		Start.Type = EStoryFlowNodeType::Start;
+		Start.TypeString = TEXT("start");
+		Script->Nodes.Add(Start.Id, Start);
+
+		FStoryFlowNode Dialogue;
+		Dialogue.Id = TEXT("d");
+		Dialogue.Type = EStoryFlowNodeType::Dialogue;
+		Dialogue.TypeString = TEXT("dialogue");
+		Dialogue.Data.Text = TEXT("waiting");
+		FStoryFlowChoice Choice;
+		Choice.Id = TEXT("opt");
+		Choice.Text = TEXT("stay");
+		Dialogue.Data.Options.Add(Choice);
+		Script->Nodes.Add(Dialogue.Id, Dialogue);
+
+		FStoryFlowConnection Edge;
+		Edge.Id = TEXT("0->d");
+		Edge.Source = TEXT("0");
+		Edge.Target = TEXT("d");
+		Edge.SourceHandle = StoryFlowHandles::Source(TEXT("0"));
+		Edge.TargetHandle = StoryFlowHandles::Target(TEXT("d"));
+		Script->Connections.Add(Edge);
+
+		Script->BuildConnectionIndices();
+		return Script;
+	}
 }
 
 // ============================================================================
@@ -909,6 +956,126 @@ bool FStoryFlowDataAssetBlueprintSurfaceTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("and reports it"), bFound);
 	TestFalse(TEXT("a null asset write is refused"), W.Component->SetDataAssetBoolVariable(nullptr, TEXT("alive"), true));
 
+	CleanUp();
+	return true;
+}
+
+// ============================================================================
+// The REAL slot pair, and the dialogue counter that gates it
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetSlotRoundTripTest,
+	"StoryFlow.DataAssets.Save.SlotRoundTrip",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowDataAssetSlotRoundTripTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowDataAssetSaveTestHelpers;
+
+	// Every other test in this file drives SerializeSaveData / DeserializeSaveData directly.
+	// This one walks the pair a game actually calls — SaveToSlot / LoadFromSlot — because that is
+	// where the overlay meets the subsystem's own state, its active-dialogue gate and the slot.
+	FScopedWorld W;
+	if (!TestTrue(TEXT("the test world came up"), W.Init()))
+	{
+		return false;
+	}
+
+	StoryFlowDataAssets::FSeed ImportedSeed;
+	UStoryFlowProjectAsset* Project = ImportFixtureProject(*this, ImportedSeed);
+	if (!Project)
+	{
+		return false;
+	}
+	W.Subsystem->SetProject(Project);
+
+	UStoryFlowDataAssetAsset* Child = Project->DataAssets.FindRef(ChildId);
+	if (!TestNotNull(TEXT("the child asset imported"), Child))
+	{
+		CleanUp();
+		return false;
+	}
+
+	bool bFound = false;
+	TestTrue(TEXT("a session write lands"), W.Component->SetDataAssetIntVariable(Child, TEXT("hp"), 77));
+	TestEqual(TEXT("and reads back before the save"), W.Component->GetDataAssetIntVariable(Child, TEXT("hp"), bFound), 77);
+
+	TestTrue(TEXT("SaveToSlot succeeds with no dialogue running"), W.Subsystem->SaveToSlot(SlotName, 0));
+
+	// Wipe the session the way a game restart does, then load it back
+	W.Subsystem->ResetDataAssetOverlay();
+	TestEqual(TEXT("the reset dropped the write back to the file value"),
+		W.Component->GetDataAssetIntVariable(Child, TEXT("hp"), bFound), 150);
+
+	TestTrue(TEXT("LoadFromSlot succeeds with no dialogue running"), W.Subsystem->LoadFromSlot(SlotName, 0));
+	TestEqual(TEXT("and the .sfd write came back through the real slot"),
+		W.Component->GetDataAssetIntVariable(Child, TEXT("hp"), bFound), 77);
+	TestTrue(TEXT("as a found value, not a default"), bFound);
+
+	// The cascade survives the trip too: the grandchild does not override hp
+	TestEqual(TEXT("the loaded write still cascades to the grandchild"),
+		StoryFlowDataAssets::Resolve(W.Subsystem->GetDataAssetSeed(), W.Subsystem->GetDataAssetOverlay(), GrandChildId, HpId).GetInt(), 77);
+
+	UGameplayStatics::DeleteGameInSlot(SlotName, 0);
+	CleanUp();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetRestartKeepsLoadingTest,
+	"StoryFlow.DataAssets.Save.RestartKeepsLoadingPossible",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowDataAssetRestartKeepsLoadingTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowDataAssetSaveTestHelpers;
+
+	// ActiveDialogueCount is the ONLY gate on LoadFromSlot, and it is a count across components.
+	// Restarting a dialogue does not stop the old one (no end event fires, by design), so an
+	// unconditional increment on every start leaves the count stuck above zero after the single
+	// stop that follows — and every load for the rest of the session is refused. The notify pair
+	// is idempotent per component precisely so that cannot happen.
+	FScopedWorld W;
+	if (!TestTrue(TEXT("the test world came up"), W.Init()))
+	{
+		return false;
+	}
+
+	StoryFlowDataAssets::FSeed ImportedSeed;
+	UStoryFlowProjectAsset* Project = ImportFixtureProject(*this, ImportedSeed);
+	if (!Project)
+	{
+		return false;
+	}
+	Project->Scripts.Add(TEXT("waiting"), MakeWaitingScript());
+	W.Subsystem->SetProject(Project);
+
+	TestTrue(TEXT("SaveToSlot succeeds before any dialogue"), W.Subsystem->SaveToSlot(SlotName, 0));
+
+	W.Component->StartDialogueWithScript(TEXT("waiting"));
+	TestTrue(TEXT("a running dialogue is reported active"), W.Subsystem->IsDialogueActive());
+	// The refusal logs an Error by design (a game asking to load mid-dialogue has a bug), so the
+	// harness is told to expect exactly one rather than failing on it.
+	AddExpectedError(TEXT("Cannot load while a dialogue is active"), EAutomationExpectedErrorFlags::Contains, 1);
+	TestFalse(TEXT("and it refuses a load, which is the whole point of the counter"),
+		W.Subsystem->LoadFromSlot(SlotName, 0));
+
+	// THE RESTART. Same component, second start, no stop in between.
+	W.Component->StartDialogueWithScript(TEXT("waiting"));
+	TestTrue(TEXT("the restarted dialogue is still just one active dialogue"), W.Subsystem->IsDialogueActive());
+
+	W.Component->StopDialogue();
+	TestFalse(TEXT("one stop ends it, however many times it was started"), W.Subsystem->IsDialogueActive());
+	TestTrue(TEXT("so loading works again after a restart"), W.Subsystem->LoadFromSlot(SlotName, 0));
+
+	// And a second stop must not push the count below zero into a state where a LATER dialogue
+	// cannot gate a load at all.
+	W.Component->StopDialogue();
+	W.Component->StartDialogueWithScript(TEXT("waiting"));
+	TestTrue(TEXT("a fresh dialogue after all that still gates loading"), W.Subsystem->IsDialogueActive());
+	W.Component->StopDialogue();
+	TestFalse(TEXT("and still releases it"), W.Subsystem->IsDialogueActive());
+
+	UGameplayStatics::DeleteGameInSlot(SlotName, 0);
 	CleanUp();
 	return true;
 }

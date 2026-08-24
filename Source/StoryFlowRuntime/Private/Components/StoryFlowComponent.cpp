@@ -110,7 +110,17 @@ void UStoryFlowComponent::StartDialogueWithScript(const FString& ScriptPath)
 	ExecutionContext.InitializeWithSubsystem(Project, ScriptAsset, &Subsystem->GetGlobalVariables(), &Subsystem->GetRuntimeCharacters(), &Subsystem->GetUsedOnceOnlyOptions(), Subsystem->GetDataAssetStore());
 	ExecutionContext.bIsExecuting = true;
 	ExecutionContext.bTraceEnabled = bTraceEnabled;
-	Subsystem->NotifyDialogueStarted();
+	// ONCE PER COMPONENT, not once per start. Restarting a dialogue (StartDialogueWithScript on a
+	// component that is already running one) does NOT stop the old one — no end event fires, by
+	// design, because existing projects restart mid-dialogue and do not expect one. Counting the
+	// second start would leave ActiveDialogueCount permanently above zero after the single stop
+	// that follows, and that counter is the ONLY gate on LoadFromSlot: one restart anywhere would
+	// disable loading for the rest of the session.
+	if (!bCountedActiveDialogue)
+	{
+		Subsystem->NotifyDialogueStarted();
+		bCountedActiveDialogue = true;
+	}
 	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: ExecutionContext initialized, CurrentNodeId='%s'"), *ExecutionContext.CurrentNodeId);
 
 	// Create evaluator
@@ -336,10 +346,18 @@ void UStoryFlowComponent::StopDialogue()
 
 	ExecutionContext.Reset();
 
+	// The other half of the pair: decrement only what this component actually counted. The
+	// bIsExecuting early-out above already makes a second StopDialogue a no-op, but that flag is
+	// also cleared by ExecutionContext.Reset() from other paths, so the count needs a witness of
+	// its own rather than a proxy for one.
 	if (UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem())
 	{
-		Subsystem->NotifyDialogueEnded();
+		if (bCountedActiveDialogue)
+		{
+			Subsystem->NotifyDialogueEnded();
+		}
 	}
+	bCountedActiveDialogue = false;
 	Evaluator.Reset();
 
 	OnScriptEnded.Broadcast(CurrentScriptPath);
@@ -1898,7 +1916,22 @@ bool UStoryFlowComponent::SetDataAssetScalar(UStoryFlowDataAssetAsset* DataAsset
 	// The write lands at THE REFERENCED ASSET'S OWN LEVEL, always (contract §5) — the same store
 	// call the Set node makes, so a Blueprint write cascades to descendants exactly as a scripted
 	// one does and rides the next save the same way.
-	return StoryFlowDataAssets::TrySet(*Store.Seed, *Store.Overlay, DataAsset->AssetId, Declaration->Id, Value);
+	const bool bWritten = StoryFlowDataAssets::TrySet(*Store.Seed, *Store.Overlay, DataAsset->AssetId, Declaration->Id, Value);
+
+	// ...and it invalidates the same caches the Set node's arm does (contract §5). The accessor
+	// nodes are never memoized themselves, but the notBool / andBool / comparison ABOVE one is,
+	// and nothing else drops that memo for a write made from Blueprint: BuildDialogueState via
+	// NotifyVariableChanged rebuilds the dialogue WITHOUT clearing first, so a stale condition
+	// would survive the rebuild and keep an option hidden that the write just opened.
+	//
+	// Component-local, like every other clear here. A write is subsystem-wide, so another
+	// component mid-dialogue re-evaluates on its own next dialogue rebuild rather than instantly
+	// — the same asymmetry global variables have always had. See the note on FStoreRef.
+	if (bWritten && Evaluator)
+	{
+		Evaluator->ClearCache();
+	}
+	return bWritten;
 }
 
 bool UStoryFlowComponent::TryGetDataAssetScalar(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
@@ -4470,7 +4503,23 @@ TArray<FStoryFlowVariant> UStoryFlowComponent::EvaluateTypedArrayInput(FStoryFlo
 	{
 		return Evaluator->EvaluateAudioArrayInput(Node, HandleSuffix);
 	}
-	// String / enum - string-keyed storage (matches the HTML runtime's default branch)
+	if (VariableType == TEXT("enum"))
+	{
+		// An enum travels on a string pin, so it is READ through the string reader — but it is
+		// STORED with its own type tag, the same distinction the scalar enum branch makes. The
+		// importer types an enum array's elements Enum (ParseVariant's Enum arm) and a save
+		// restores them Enum from the declaration, so a write that left them String would be the
+		// only one of the three writers disagreeing. Invisible today (every reader answers
+		// GetString for the whole string family) and exactly the kind of thing that stops being
+		// invisible the moment something switches on the element type.
+		TArray<FStoryFlowVariant> Elements = Evaluator->EvaluateStringArrayInput(Node, HandleSuffix);
+		for (FStoryFlowVariant& Element : Elements)
+		{
+			Element.SetEnum(Element.GetString());
+		}
+		return Elements;
+	}
+	// String / image / character / audio - string-keyed storage (matches the HTML runtime's default branch)
 	return Evaluator->EvaluateStringArrayInput(Node, HandleSuffix);
 }
 

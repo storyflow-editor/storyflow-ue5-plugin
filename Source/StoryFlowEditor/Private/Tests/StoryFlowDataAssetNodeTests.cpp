@@ -111,6 +111,35 @@ namespace StoryFlowDataAssetNodeTestHelpers
 		return Project;
 	}
 
+	/**
+	 * Import an arbitrary data-assets.json body, for the one shape the golden seed cannot carry:
+	 * an ENUM ARRAY declaration. The shared fixtures are checked in verbatim and must not grow a
+	 * row for one engine's test, so this takes the inline route the resolution suite uses.
+	 */
+	UStoryFlowProjectAsset* ImportInlineSeed(FAutomationTestBase& Test, const FString& DataAssetsJson, StoryFlowDataAssets::FSeed& OutSeed)
+	{
+		UEditorAssetLibrary::DeleteDirectory(NodeTestRoot);
+
+		const FString Dir = FixtureBuildDir();
+		IFileManager::Get().MakeDirectory(*Dir, true);
+		const bool bWrote = FFileHelper::SaveStringToFile(TEXT(R"JSON({"version":"1.0.0","apiVersion":"1","startupScript":"main"})JSON"),
+				*FPaths::Combine(Dir, TEXT("project.json")))
+			&& FFileHelper::SaveStringToFile(DataAssetsJson, *FPaths::Combine(Dir, TEXT("data-assets.json")));
+		if (!Test.TestTrue(TEXT("the inline build folder is writable"), bWrote))
+		{
+			return nullptr;
+		}
+
+		UStoryFlowProjectAsset* Project = UStoryFlowImporter::ImportProject(Dir, NodeTestRoot);
+		if (!Test.TestNotNull(TEXT("the inline seed imports"), Project))
+		{
+			CleanUp();
+			return nullptr;
+		}
+		StoryFlowDataAssets::BuildSeed(Project->DataAssets, OutSeed);
+		return Project;
+	}
+
 	FStoryFlowNode MakeNode(const FString& Id, EStoryFlowNodeType Type, const TCHAR* TypeString)
 	{
 		FStoryFlowNode N;
@@ -1283,6 +1312,241 @@ bool FStoryFlowDataAssetArrayOpTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("the second clear left it empty"), Cleared.GetArray().Num(), 0);
 	TestTrue(TEXT("an op over an already-empty .sfd array still writes its declared element type"),
 		Cleared.GetType() == EStoryFlowVariableType::String);
+
+	CleanUp();
+	return true;
+}
+
+// ============================================================================
+// An enum ARRAY written by the Set node lands in the importer's storage shape
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetEnumArrayWriteTest,
+	"StoryFlow.DataAssets.Nodes.EnumArraySetWritesEnumElements",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowDataAssetEnumArrayWriteTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowDataAssetNodeTestHelpers;
+
+	FScopedWorld W;
+	if (!TestTrue(TEXT("fixture world initialized"), W.Init()))
+	{
+		return false;
+	}
+
+	// An enum array has THREE writers into the store (importer, this node, a save load) and they
+	// have to agree on one shape. An enum rides a string pin, so the value arrives through the
+	// string array reader and would land String-typed unless this path re-stamps it — while the
+	// importer and the load path both produce Enum. Invisible to every reader today (the whole
+	// string family answers GetString) and a real divergence the moment one switches on the type.
+	// The importer and load ends are pinned in StoryFlow.DataAssets.Resolution.ImportRoundTrip.
+	const FString SeedJson = TEXT(R"JSON(
+	{ "dataAssets": {
+		"da_cc000000000000000000000000000001": {
+			"id": "da_cc000000000000000000000000000001",
+			"name": "EnumArrayBase",
+			"parent": null,
+			"variables": [
+				{ "id": "v_ranks", "name": "ranks", "type": "enum", "isArray": true,
+				  "enumValues": [ "Grunt", "Elite", "Champion" ], "value": [ "Grunt" ] }
+			],
+			"overrides": {}
+		}
+	} }
+	)JSON");
+
+	const FString EnumBaseId = TEXT("da_cc000000000000000000000000000001");
+	StoryFlowDataAssets::FSeed Seed;
+	UStoryFlowProjectAsset* Project = ImportInlineSeed(*this, SeedJson, Seed);
+	if (!Project)
+	{
+		return false;
+	}
+	FGCObjectScopeGuard ProjectGuard(Project);
+
+	UStoryFlowScriptAsset* Script = NewObject<UStoryFlowScriptAsset>(GetTransientPackage());
+	FGCObjectScopeGuard ScriptGuard(Script);
+	Script->StartNode = TEXT("0");
+	Script->Nodes.Add(TEXT("0"), MakeNode(TEXT("0"), EStoryFlowNodeType::Start, TEXT("start")));
+	Script->Nodes.Add(TEXT("pB"), MakePill(TEXT("pB"), EnumBaseId));
+	{
+		// Enum arrays have no reader of their own — they ride the string array nodes, which is
+		// the whole reason the write path had to be taught to re-stamp.
+		FStoryFlowVariable Source;
+		Source.Id = TEXT("srcRanks");
+		Source.Name = TEXT("srcRanks");
+		Source.Type = EStoryFlowVariableType::Enum;
+		Source.bIsArray = true;
+		TArray<FStoryFlowVariant> Elements;
+		FStoryFlowVariant First;
+		First.SetEnum(TEXT("Elite"));
+		FStoryFlowVariant Second;
+		Second.SetEnum(TEXT("Champion"));
+		Elements.Add(First);
+		Elements.Add(Second);
+		Source.Value.SetArray(Elements, EStoryFlowVariableType::Enum);
+		Script->Variables.Add(Source.Id, Source);
+
+		FStoryFlowNode Reader = MakeNode(TEXT("VArr"), EStoryFlowNodeType::GetStringArray, TEXT("getStringArray"));
+		Reader.Data.Variable = TEXT("srcRanks");
+		Script->Nodes.Add(Reader.Id, Reader);
+	}
+	Script->Nodes.Add(TEXT("sRanks"), MakeSetter(TEXT("sRanks"), TEXT("v_ranks"), TEXT("ranks"), TEXT("enum"), /*bIsArray*/ true));
+	Script->Nodes.Add(TEXT("End"), MakeNode(TEXT("End"), EStoryFlowNodeType::End, TEXT("end")));
+	Script->Connections.Add(MakePillEdge(TEXT("pB"), TEXT("sRanks")));
+	Script->Connections.Add(MakeEdge(TEXT("VArr"), TEXT("sRanks"),
+		StoryFlowHandles::Source(TEXT("VArr"), TEXT("enum-array-")),
+		StoryFlowHandles::Target(TEXT("sRanks"), TEXT("enum-array-2"))));
+	Script->Connections.Add(MakeEdge(TEXT("0"), TEXT("sRanks"),
+		StoryFlowHandles::Source(TEXT("0")), StoryFlowHandles::Target(TEXT("sRanks"), TEXT("0"))));
+	Script->Connections.Add(MakeEdge(TEXT("sRanks"), TEXT("End"),
+		StoryFlowHandles::Source(TEXT("sRanks"), StoryFlowHandles::Out_Flow), StoryFlowHandles::Target(TEXT("End"), TEXT(""))));
+	Script->BuildConnectionIndices();
+
+	Project->Scripts.Add(TEXT("enumarray"), Script);
+	W.Subsystem->SetProject(Project);
+	W.Component->StartDialogueWithScript(TEXT("enumarray"));
+
+	const FStoryFlowVariant Written = StoryFlowDataAssets::Resolve(
+		W.Subsystem->GetDataAssetSeed(), W.Subsystem->GetDataAssetOverlay(), EnumBaseId, TEXT("v_ranks"));
+	TestTrue(TEXT("the enum array Set wrote an Enum-typed array"), Written.GetType() == EStoryFlowVariableType::Enum);
+	if (TestEqual(TEXT("the enum array Set wrote both wired elements"), Written.GetArray().Num(), 2))
+	{
+		TestTrue(TEXT("and every element is Enum-typed, not String"),
+			Written.GetArray()[0].GetType() == EStoryFlowVariableType::Enum);
+		TestTrue(TEXT("the second one too"),
+			Written.GetArray()[1].GetType() == EStoryFlowVariableType::Enum);
+		TestEqual(TEXT("with their values intact"), Written.GetArray()[1].GetString(), TEXT("Champion"));
+	}
+
+	CleanUp();
+	return true;
+}
+
+// ============================================================================
+// A BLUEPRINT write invalidates the conditions built on it (contract §5)
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetBlueprintWriteInvalidatesTest,
+	"StoryFlow.DataAssets.Nodes.BlueprintWriteInvalidatesConditions",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowDataAssetBlueprintWriteInvalidatesTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowDataAssetNodeTestHelpers;
+
+	FScopedWorld W;
+	if (!TestTrue(TEXT("fixture world initialized"), W.Init()))
+	{
+		return false;
+	}
+
+	StoryFlowDataAssets::FSeed ImportedSeed;
+	UStoryFlowProjectAsset* Project = ImportFixtureProject(*this, ImportedSeed);
+	if (!Project)
+	{
+		return false;
+	}
+	FGCObjectScopeGuard ProjectGuard(Project);
+
+	// One dialogue, two options:
+	//   optGated  <- andBool( getDataAssetVariable(alive), inline TRUE )
+	//   optAlways <- no condition at all, so the count is readable rather than boolean
+	//
+	// The andBool is the point. The accessor beneath it is never memoized, so a read of it alone
+	// would follow a write with no help from anybody — but andBool DOES memoize, and
+	// ProcessBooleanChain's andBool arm recurses into its inputs WITHOUT dropping its own cached
+	// output. Only an actual cache clear makes the option follow the write.
+	UStoryFlowScriptAsset* Script = NewObject<UStoryFlowScriptAsset>(GetTransientPackage());
+	FGCObjectScopeGuard ScriptGuard(Script);
+	Script->StartNode = TEXT("0");
+	Script->Nodes.Add(TEXT("0"), MakeNode(TEXT("0"), EStoryFlowNodeType::Start, TEXT("start")));
+	Script->Nodes.Add(TEXT("pB"), MakePill(TEXT("pB"), BaseId));
+
+	{
+		FStoryFlowNode Getter = MakeNode(TEXT("g"), EStoryFlowNodeType::GetDataAssetVariable, TEXT("getDataAssetVariable"));
+		Getter.Data.VariableId = AliveId;
+		Getter.Data.VariableName = TEXT("alive");
+		Getter.Data.Variable = TEXT("alive");
+		Getter.Data.VariableType = TEXT("boolean");
+		Script->Nodes.Add(Getter.Id, Getter);
+	}
+	{
+		FStoryFlowNode And = MakeNode(TEXT("and"), EStoryFlowNodeType::AndBool, TEXT("andBool"));
+		// The constant half rides the inline fallback the andBool arm already reads for an
+		// unwired pin, so this needs no second producer node.
+		And.Data.Value2.SetBool(true);
+		Script->Nodes.Add(And.Id, And);
+	}
+	{
+		FStoryFlowNode Dialogue = MakeNode(TEXT("d"), EStoryFlowNodeType::Dialogue, TEXT("dialogue"));
+		Dialogue.Data.Text = TEXT("gated line");
+		FStoryFlowChoice Gated;
+		Gated.Id = TEXT("optGated");
+		Gated.Text = TEXT("gated");
+		FStoryFlowChoice Always;
+		Always.Id = TEXT("optAlways");
+		Always.Text = TEXT("always");
+		Dialogue.Data.Options.Add(Gated);
+		Dialogue.Data.Options.Add(Always);
+		Script->Nodes.Add(Dialogue.Id, Dialogue);
+	}
+
+	Script->Connections.Add(MakePillEdge(TEXT("pB"), TEXT("g")));
+	Script->Connections.Add(MakeEdge(TEXT("g"), TEXT("and"),
+		StoryFlowHandles::Source(TEXT("g"), TEXT("boolean-")),
+		StoryFlowHandles::Target(TEXT("and"), StoryFlowHandles::In_Boolean1)));
+	Script->Connections.Add(MakeEdge(TEXT("and"), TEXT("d"),
+		StoryFlowHandles::Source(TEXT("and"), TEXT("boolean-")),
+		StoryFlowHandles::Target(TEXT("d"), TEXT("boolean-optGated"))));
+	Script->Connections.Add(MakeEdge(TEXT("0"), TEXT("d"),
+		StoryFlowHandles::Source(TEXT("0")), StoryFlowHandles::Target(TEXT("d"))));
+	Script->BuildConnectionIndices();
+
+	Project->Scripts.Add(TEXT("gated"), Script);
+	W.Subsystem->SetProject(Project);
+
+	// A global to poke, purely to reach the rebuild. Added before the dialogue starts so the
+	// context's name index picks it up.
+	{
+		FStoryFlowVariable Tick;
+		Tick.Id = TEXT("g_tick");
+		Tick.Name = TEXT("tick");
+		Tick.Type = EStoryFlowVariableType::Boolean;
+		Tick.Value.SetBool(false);
+		W.Subsystem->GetGlobalVariables().Add(Tick.Id, Tick);
+	}
+
+	UStoryFlowDataAssetAsset* Base = Project->DataAssets.FindRef(BaseId);
+	if (!TestNotNull(TEXT("the base asset imported"), Base))
+	{
+		CleanUp();
+		return false;
+	}
+
+	W.Component->StartDialogueWithScript(TEXT("gated"));
+	TestEqual(TEXT("both options are visible while the .sfd boolean is true"),
+		W.Component->GetCurrentDialogue().Options.Num(), 2);
+
+	// THE WRITE, from Blueprint rather than from a Set node
+	bool bFound = false;
+	TestTrue(TEXT("a Blueprint write to the base lands"),
+		W.Component->SetDataAssetBoolVariable(Base, TEXT("alive"), false));
+	TestFalse(TEXT("and a fresh read through the store sees it"),
+		W.Component->GetDataAssetBoolVariable(Base, TEXT("alive"), bFound));
+	TestTrue(TEXT("which is a real read, not a miss"), bFound);
+
+	// The rebuild path that does NOT clear the cache on its way in: a variable change re-runs
+	// BuildDialogueState in place (NotifyVariableChanged). If the write above left the andBool's
+	// memo alone, the rebuild re-asks the same stale producer and the gated option survives.
+	W.Component->SetBoolVariable(TEXT("tick"), true, /*bGlobal*/ true);
+
+	const TArray<FStoryFlowDialogueOption>& Rebuilt = W.Component->GetCurrentDialogue().Options;
+	if (TestEqual(TEXT("the gated option is gone after a Blueprint write plus a rebuild"), Rebuilt.Num(), 1))
+	{
+		TestEqual(TEXT("and the surviving option is the unconditioned one"), Rebuilt[0].Id, TEXT("optAlways"));
+	}
 
 	CleanUp();
 	return true;

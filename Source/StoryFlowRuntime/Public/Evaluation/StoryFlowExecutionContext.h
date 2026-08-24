@@ -112,7 +112,18 @@ public:
 	/** Initialize the context with external global variables, characters, and once-only options (from subsystem) */
 	void InitializeWithSubsystem(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript, TMap<FString, FStoryFlowVariable>* InGlobalVariables, TMap<FString, FStoryFlowCharacterDef>* InCharacters = nullptr, TSet<FString>* InUsedOnceOnlyOptions = nullptr, StoryFlowDataAssets::FStoreRef InDataAssetStore = {});
 
-	/** Reset the context to initial state */
+	/**
+	 * Reset the context to initial state.
+	 *
+	 * THIS is the contract §6 warn re-arm point, and the only one: it clears the Data Asset warn
+	 * latches (and the map / unknown-node ones) along with the evaluation cache, so the next
+	 * dialogue reports a still-broken accessor again instead of staying quiet forever. It runs at
+	 * dialogue stop and at the start of a fresh dialogue.
+	 *
+	 * The subsystem's ResetAllState and ResetDataAssetOverlay are BETWEEN-DIALOGUE calls on a
+	 * different object: they drop state (globals, characters, the .sfd overlay) but re-arm no
+	 * latch and clear no cache, because the subsystem holds neither.
+	 */
 	void Reset();
 
 	// === Current State ===
