@@ -219,6 +219,14 @@ enum class EStoryFlowNodeType : uint8
 	GetCharacterVar,
 	SetCharacterVar,
 
+	// Data Assets (.sfd) — the reference pill plus its two bound accessors.
+	// GetDataAsset carries the assetId; the accessors carry NO assetId of their
+	// own, because THE WIRE IS THE BINDING (engine contract §2.2): each reaches
+	// its asset by following its `dataAsset` input pin back to a pill.
+	GetDataAsset,
+	GetDataAssetVariable,
+	SetDataAssetVariable,
+
 	// Map Variables
 	GetMap,
 	SetMap,
@@ -977,6 +985,24 @@ struct STORYFLOWRUNTIME_API FStoryFlowNodeData
 	/** Array flag for character variable nodes */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bIsArray = false;
+
+	// === Data Asset Fields (.sfd — engine contract §2.2) ===
+	// The accessors reuse VariableName / VariableType / bIsArray / KeyType /
+	// ValueType above as their SPAWN-TIME SNAPSHOT (what the node's pins were
+	// built from), which §6.1 compares against the chain's live declaration.
+	// Only these two are new.
+
+	/** The `.sfd` asset a getDataAsset reference pill is bound to. Empty = unbound pill. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	FString AssetId;
+
+	/**
+	 * The variable id a get/setDataAssetVariable accessor reads or writes. The
+	 * STABLE id, not the name — renaming a `.sfd` variable must not break a node,
+	 * so VariableName above is only a display snapshot.
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	FString VariableId;
 
 	// === Map Fields (for map variable nodes) ===
 

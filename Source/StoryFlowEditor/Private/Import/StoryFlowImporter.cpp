@@ -110,7 +110,7 @@ namespace
 
 	/** Bump when import parsing or asset population changes, so assets written
 	    by older plugin versions re-save once even if their source is unchanged. */
-	constexpr const TCHAR* ImportHashSchemaVersion = TEXT("3");
+	constexpr const TCHAR* ImportHashSchemaVersion = TEXT("4");
 
 	FString SerializeJsonCondensed(const TSharedRef<FJsonObject>& JsonObject)
 	{
@@ -1184,6 +1184,31 @@ FStoryFlowNodeData UStoryFlowImporter::ParseNodeData(const TSharedPtr<FJsonObjec
 			Data.CharacterPath = NodeObject->GetStringField(TEXT("characterPath"));
 		}
 
+		Data.VariableName = Data.Variable;
+	}
+
+	// Data Asset fields (.sfd — engine contract §2.2). Field naming mirrors the
+	// character nodes above, which is why variableType / isArray / keyType /
+	// valueType need no arm of their own: they parse unconditionally below.
+	//
+	// The pill carries the assetId; the ACCESSORS carry none — the wire is the
+	// binding, and the runtime follows the `dataAsset` pin to find one. `variable`
+	// is the spawn-time NAME snapshot (display only), `variableId` the stable
+	// binding. Both accessor types are handled together: their payloads are
+	// identical (the Set is a Get with an exec pair and a value pin).
+	if (NodeType == TEXT("getDataAsset"))
+	{
+		if (NodeObject->HasField(TEXT("assetId")))
+		{
+			Data.AssetId = NodeObject->GetStringField(TEXT("assetId"));
+		}
+	}
+	else if (NodeType == TEXT("getDataAssetVariable") || NodeType == TEXT("setDataAssetVariable"))
+	{
+		if (NodeObject->HasField(TEXT("variableId")))
+		{
+			Data.VariableId = NodeObject->GetStringField(TEXT("variableId"));
+		}
 		Data.VariableName = Data.Variable;
 	}
 

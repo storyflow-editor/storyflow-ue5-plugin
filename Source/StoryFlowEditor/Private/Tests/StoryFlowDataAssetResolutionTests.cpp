@@ -56,15 +56,12 @@ namespace StoryFlowDataAssetTestHelpers
 	// The seed fixture's three assets, base -> child -> grandchild (contract §9.1)
 	const TCHAR* BaseId = TEXT("da_0a1b2c3d4e5f60718293a4b5c6d7e8f9");
 	const TCHAR* ChildId = TEXT("da_1b2c3d4e5f60718293a4b5c6d7e8f90a");
-	const TCHAR* GrandChildId = TEXT("da_2c3d4e5f60718293a4b5c6d7e8f90a1b");
 	const TCHAR* AbsentId = TEXT("da_ff00ff00ff00ff00ff00ff00ff00ff00");
 
 	// The seed fixture's variable ids, each annotated with where it lives on the chain —
 	// without this the assertions below are unreadable hex.
 	/** boolean, declared on the base, overridden nowhere */
 	const TCHAR* AliveId = TEXT("7f3a1c9e4b2d40518a6f0c3e7d1b5a29");
-	/** float, declared on the base AND overridden by the base itself (the §9.1 root override) */
-	const TCHAR* SpeedId = TEXT("9c4f7e25a3b84a19bd60e2f7c81a5d03");
 	/** string array, declared on the base, overridden on the child */
 	const TCHAR* TagsId = TEXT("c58e2f13a0d64c9b871e3f05d2a76b48");
 	/** map<string,integer>, declared on the base, overridden on the grandchild */

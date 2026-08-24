@@ -1,0 +1,1068 @@
+// Copyright 2026 StoryFlow. All Rights Reserved.
+
+#include "Misc/AutomationTest.h"
+
+#if WITH_DEV_AUTOMATION_TESTS
+
+#include "Components/StoryFlowComponent.h"
+#include "Data/StoryFlowDataAssetAsset.h"
+#include "Data/StoryFlowDataAssetStore.h"
+#include "Data/StoryFlowHandles.h"
+#include "Data/StoryFlowProjectAsset.h"
+#include "Data/StoryFlowScriptAsset.h"
+#include "Data/StoryFlowTypes.h"
+#include "Engine/GameInstance.h"
+#include "Engine/World.h"
+#include "Evaluation/StoryFlowEvaluator.h"
+#include "Evaluation/StoryFlowExecutionContext.h"
+#include "Import/StoryFlowImporter.h"
+#include "StoryFlowRuntime.h"
+#include "Subsystems/StoryFlowSubsystem.h"
+#include "EditorAssetLibrary.h"
+#include "GameFramework/Actor.h"
+#include "HAL/FileManager.h"
+#include "Interfaces/IPluginManager.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+#include "Serialization/JsonReader.h"
+#include "Serialization/JsonSerializer.h"
+#include "UObject/GCObjectScopeGuard.h"
+#include "UObject/Package.h"
+
+/**
+ * The `.sfd` accessor NODE ARMS: the wire-is-the-binding walk, the typed reads, the Set node's
+ * overlay write, and the whole §6 degraded ladder against the shared golden fixture.
+ *
+ * Companion to StoryFlowDataAssetResolutionTests.cpp, which owns the STORE (§4/§5) and the seed,
+ * resolution and writes fixtures. This file owns the fourth one:
+ *  - data-assets-degraded.json ....... every §6 row, its outcome AND its once-ness
+ *
+ * Two suites live here on purpose:
+ *  - StoryFlow.DataAssets.Degraded ... the fixture-driven ladder (reads + the Set chain)
+ *  - StoryFlow.DataAssets.Nodes ...... the happy paths the fixture cannot express (a real
+ *    imported graph, cascade through a live Set, copy-on-read, option gating)
+ *
+ * WHY OPTION GATING GETS A TEST OF ITS OWN: EvaluateBooleanFromNode's `default:` arm returns
+ * FALSE, so Unreal fails CLOSED — a missing producer arm does not throw, it silently HIDES the
+ * dialogue option the author gated. That failure is invisible in play-testing until someone
+ * notices a line that never appears, which is why the boolean arm and its option-gating
+ * regression land in the same commit as the node types themselves (contract §6.2).
+ *
+ * Run via: Session Frontend > Automation > "StoryFlow.DataAssets", or
+ *   UnrealEditor-Cmd.exe StoryFlow.uproject -ExecCmds="Automation RunTests StoryFlow.DataAssets" -TestExit="Automation Test Queue Empty" -unattended -nullrhi
+ */
+
+namespace StoryFlowDataAssetNodeTestHelpers
+{
+	const TCHAR* NodeTestRoot = TEXT("/Game/StoryFlowDataAssetNodeTests");
+
+	// The seed fixture's assets and the ids the tests below name (see the seed dump in
+	// StoryFlowDataAssetResolutionTests.cpp for the full table).
+	const TCHAR* BaseId = TEXT("da_0a1b2c3d4e5f60718293a4b5c6d7e8f9");
+	const TCHAR* ChildId = TEXT("da_1b2c3d4e5f60718293a4b5c6d7e8f90a");
+	const TCHAR* GrandChildId = TEXT("da_2c3d4e5f60718293a4b5c6d7e8f90a1b");
+
+	/** boolean, declared and valued TRUE on the base — the option-gating condition */
+	const TCHAR* AliveId = TEXT("7f3a1c9e4b2d40518a6f0c3e7d1b5a29");
+	/** integer, base 100, overridden to 150 on the child */
+	const TCHAR* HpId = TEXT("2e8b6d0a1f4c47d3b95e2a70c6f81d34");
+	/** string array, base ["mob","melee"], overridden to ["mob","elite"] on the child */
+	const TCHAR* TagsId = TEXT("c58e2f13a0d64c9b871e3f05d2a76b48");
+	/** map<string,integer>, base 2 entries, overridden to 2 other entries on the grandchild */
+	const TCHAR* LootId = TEXT("6d0f39a8b21e47c5903af8d61c72e504");
+
+	FString FixtureBuildDir()
+	{
+		return FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Temp/StoryFlowDataAssetNodeFixture"));
+	}
+
+	FString GoldenFixturePath(const FString& FileName)
+	{
+		const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("StoryFlowPlugin"));
+		if (!Plugin.IsValid())
+		{
+			return FString();
+		}
+		return FPaths::Combine(Plugin->GetBaseDir(), TEXT("TestContent"), TEXT("engine-contract"), FileName);
+	}
+
+	TSharedPtr<FJsonObject> LoadGoldenFixture(const FString& FileName)
+	{
+		const FString Path = GoldenFixturePath(FileName);
+		FString JsonString;
+		if (Path.IsEmpty() || !FFileHelper::LoadFileToString(JsonString, *Path))
+		{
+			return nullptr;
+		}
+
+		TSharedPtr<FJsonObject> JsonObject;
+		TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(JsonString);
+		if (!FJsonSerializer::Deserialize(Reader, JsonObject))
+		{
+			return nullptr;
+		}
+		return JsonObject;
+	}
+
+	void CleanUp()
+	{
+		UEditorAssetLibrary::DeleteDirectory(NodeTestRoot);
+		IFileManager::Get().DeleteDirectory(*FixtureBuildDir(), false, true);
+	}
+
+	/**
+	 * Import data-assets-seed.json through the REAL importer and hand back both the project (the
+	 * component tests hang their script off it, so the subsystem builds the same seed the game
+	 * would) and the seed the subsystem installs. Deletes any assets a previous run left behind
+	 * first — a stale one carries a matching hash and would be skipped rather than re-parsed.
+	 */
+	UStoryFlowProjectAsset* ImportFixtureProject(FAutomationTestBase& Test, StoryFlowDataAssets::FSeed& OutSeed)
+	{
+		const FString SeedPath = GoldenFixturePath(TEXT("data-assets-seed.json"));
+		FString SeedJson;
+		if (!Test.TestTrue(TEXT("data-assets-seed.json is readable"), !SeedPath.IsEmpty() && FFileHelper::LoadFileToString(SeedJson, *SeedPath)))
+		{
+			return nullptr;
+		}
+
+		UEditorAssetLibrary::DeleteDirectory(NodeTestRoot);
+
+		const FString Dir = FixtureBuildDir();
+		IFileManager::Get().MakeDirectory(*Dir, true);
+		const bool bWrote = FFileHelper::SaveStringToFile(TEXT(R"JSON({"version":"1.0.0","apiVersion":"1","startupScript":"main"})JSON"),
+				*FPaths::Combine(Dir, TEXT("project.json")))
+			&& FFileHelper::SaveStringToFile(SeedJson, *FPaths::Combine(Dir, TEXT("data-assets.json")));
+		if (!Test.TestTrue(TEXT("the fixture build folder is writable"), bWrote))
+		{
+			return nullptr;
+		}
+
+		UStoryFlowProjectAsset* Project = UStoryFlowImporter::ImportProject(Dir, NodeTestRoot);
+		if (!Test.TestNotNull(TEXT("the seed fixture imports"), Project))
+		{
+			CleanUp();
+			return nullptr;
+		}
+		StoryFlowDataAssets::BuildSeed(Project->DataAssets, OutSeed);
+		Test.TestEqual(TEXT("the imported seed still carries 3 assets"), OutSeed.Num(), 3);
+		return Project;
+	}
+
+	FStoryFlowNode MakeNode(const FString& Id, EStoryFlowNodeType Type, const TCHAR* TypeString)
+	{
+		FStoryFlowNode N;
+		N.Id = Id;
+		N.Type = Type;
+		N.TypeString = TypeString;
+		return N;
+	}
+
+	FStoryFlowConnection MakeEdge(const FString& Source, const FString& Target,
+		const FString& SourceHandle, const FString& TargetHandle)
+	{
+		FStoryFlowConnection C;
+		C.Id = Source + TEXT("->") + Target + TEXT("@") + TargetHandle;
+		C.Source = Source;
+		C.Target = Target;
+		C.SourceHandle = SourceHandle;
+		C.TargetHandle = TargetHandle;
+		return C;
+	}
+
+	/** The `.sfd` reference pill, bound to AssetId (empty = an unbound pill, contract §6 row 2). */
+	FStoryFlowNode MakePill(const FString& Id, const FString& AssetId)
+	{
+		FStoryFlowNode N = MakeNode(Id, EStoryFlowNodeType::GetDataAsset, TEXT("getDataAsset"));
+		N.Data.AssetId = AssetId;
+		return N;
+	}
+
+	/** One accessor carrying a §2.2 spawn snapshot. Type picks Get vs Set; the payload is identical. */
+	FStoryFlowNode MakeAccessor(const FString& Id, bool bIsSetter, const TSharedPtr<FJsonObject>& Accessor)
+	{
+		FStoryFlowNode N = bIsSetter
+			? MakeNode(Id, EStoryFlowNodeType::SetDataAssetVariable, TEXT("setDataAssetVariable"))
+			: MakeNode(Id, EStoryFlowNodeType::GetDataAssetVariable, TEXT("getDataAssetVariable"));
+		Accessor->TryGetStringField(TEXT("variableId"), N.Data.VariableId);
+		Accessor->TryGetStringField(TEXT("variable"), N.Data.VariableName);
+		N.Data.Variable = N.Data.VariableName;
+		Accessor->TryGetStringField(TEXT("variableType"), N.Data.VariableType);
+		Accessor->TryGetBoolField(TEXT("isArray"), N.Data.bIsArray);
+		Accessor->TryGetStringField(TEXT("keyType"), N.Data.KeyType);
+		Accessor->TryGetStringField(TEXT("valueType"), N.Data.ValueType);
+		return N;
+	}
+
+	/** The accessor's Data Asset pin, the one edge that IS the binding. */
+	FStoryFlowConnection MakePillEdge(const FString& PillId, const FString& AccessorId)
+	{
+		return MakeEdge(PillId, AccessorId,
+			StoryFlowHandles::Source(PillId, TEXT("dataAsset-")),
+			StoryFlowHandles::Target(AccessorId, StoryFlowHandles::In_DataAssetRef));
+	}
+
+	/** The typed suffix of an accessor's value/output pin for a given optionId (§2.2). */
+	FString ValuePinSuffix(const FStoryFlowNodeData& Data, const FString& OptionId)
+	{
+		if (Data.VariableType == TEXT("map"))
+		{
+			return StoryFlowHandles::In_Map(Data.KeyType, Data.ValueType, OptionId);
+		}
+		if (Data.bIsArray)
+		{
+			return Data.VariableType + TEXT("-array-") + OptionId;
+		}
+		return Data.VariableType + TEXT("-") + OptionId;
+	}
+
+	/** Typed array read off a consumer's wired array input, dispatched on the element type. */
+	TArray<FStoryFlowVariant> ReadArray(FStoryFlowEvaluator& Evaluator, FStoryFlowNode* Consumer, const FString& ElementType, const FString& Suffix)
+	{
+		if (ElementType == TEXT("boolean"))   { return Evaluator.EvaluateBoolArrayInput(Consumer, Suffix); }
+		if (ElementType == TEXT("integer"))   { return Evaluator.EvaluateIntArrayInput(Consumer, Suffix); }
+		if (ElementType == TEXT("float"))     { return Evaluator.EvaluateFloatArrayInput(Consumer, Suffix); }
+		if (ElementType == TEXT("image"))     { return Evaluator.EvaluateImageArrayInput(Consumer, Suffix); }
+		if (ElementType == TEXT("character")) { return Evaluator.EvaluateCharacterArrayInput(Consumer, Suffix); }
+		if (ElementType == TEXT("audio"))     { return Evaluator.EvaluateAudioArrayInput(Consumer, Suffix); }
+		return Evaluator.EvaluateStringArrayInput(Consumer, Suffix);
+	}
+
+	/** How many warn latches this context holds for a node (contract §6 once-ness). */
+	int32 WarnLatchCount(const FStoryFlowExecutionContext& Context, const FString& NodeId)
+	{
+		const FString Prefix = NodeId + TEXT("|");
+		int32 Count = 0;
+		for (const FString& Key : Context.WarnedDataAssetNodes)
+		{
+			if (Key.StartsWith(Prefix))
+			{
+				++Count;
+			}
+		}
+		return Count;
+	}
+
+	/** A standalone game instance with a registered component, the shape the runtime tests share. */
+	struct FScopedWorld
+	{
+		UGameInstance* GameInstance = nullptr;
+		UWorld* World = nullptr;
+		UStoryFlowComponent* Component = nullptr;
+		UStoryFlowSubsystem* Subsystem = nullptr;
+
+		bool Init()
+		{
+			GameInstance = NewObject<UGameInstance>(GEngine);
+			GameInstance->InitializeStandalone();
+			World = GameInstance->GetWorld();
+			if (!World) { return false; }
+			AActor* Owner = World->SpawnActor<AActor>();
+			if (!Owner) { return false; }
+			Component = NewObject<UStoryFlowComponent>(Owner);
+			Component->RegisterComponent();
+			Subsystem = GameInstance->GetSubsystem<UStoryFlowSubsystem>();
+			return Component != nullptr && Subsystem != nullptr;
+		}
+
+		~FScopedWorld()
+		{
+			if (World) { World->DestroyWorld(false); }
+		}
+	};
+}
+
+// ============================================================================
+// §6 degraded ladder — every read outcome and its once-ness, from the fixture
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetDegradedReadsTest,
+	"StoryFlow.DataAssets.Degraded.AccessorReads",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowDataAssetDegradedReadsTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowDataAssetNodeTestHelpers;
+
+	TSharedPtr<FJsonObject> Fixture = LoadGoldenFixture(TEXT("data-assets-degraded.json"));
+	if (!TestTrue(TEXT("data-assets-degraded.json parses"), Fixture.IsValid()))
+	{
+		return false;
+	}
+	const TArray<TSharedPtr<FJsonValue>>* Cases = nullptr;
+	if (!TestTrue(TEXT("the fixture carries a cases array"), Fixture->TryGetArrayField(TEXT("cases"), Cases)))
+	{
+		return false;
+	}
+
+	StoryFlowDataAssets::FSeed Seed;
+	UStoryFlowProjectAsset* Project = ImportFixtureProject(*this, Seed);
+	if (!Project)
+	{
+		return false;
+	}
+	FGCObjectScopeGuard ProjectGuard(Project);
+
+	// ONE script holding every case's read graph (unique node ids per case), so the 20 records
+	// cost one asset rather than 20. Each case still gets a FRESH execution context, which is
+	// what makes the warn-latch count below a per-case assertion rather than a running total.
+	UStoryFlowScriptAsset* Script = NewObject<UStoryFlowScriptAsset>(GetTransientPackage());
+	FGCObjectScopeGuard ScriptGuard(Script);
+	Script->StartNode = TEXT("0");
+	Script->Nodes.Add(TEXT("0"), MakeNode(TEXT("0"), EStoryFlowNodeType::Start, TEXT("start")));
+
+	int32 CaseIndex = 0;
+	for (const TSharedPtr<FJsonValue>& CaseValue : *Cases)
+	{
+		const TSharedPtr<FJsonObject> Case = CaseValue->AsObject();
+		if (!Case.IsValid())
+		{
+			AddError(TEXT("cases: a record is not an object"));
+			continue;
+		}
+		const FString Suffix = FString::FromInt(CaseIndex++);
+		const FString PillId = TEXT("P") + Suffix;
+		const FString AccessorId = TEXT("G") + Suffix;
+		const FString ConsumerId = TEXT("C") + Suffix;
+
+		const TSharedPtr<FJsonObject> AccessorJson = Case->GetObjectField(TEXT("accessor"));
+		FStoryFlowNode Accessor = MakeAccessor(AccessorId, /*bIsSetter*/ false, AccessorJson);
+
+		// A source that is NOT a ref pill must never have its data read as a binding — hence a
+		// decoy node here rather than "no node" for the non-pill row (contract §6 row 1). It is
+		// given the case's own assetId in a place the ladder must refuse to look.
+		FStoryFlowNode Pill = Case->GetBoolField(TEXT("pillIsRefNode"))
+			? MakePill(PillId, Case->GetStringField(TEXT("pillAssetId")))
+			: MakeNode(PillId, EStoryFlowNodeType::GetBool, TEXT("getBool"));
+		if (!Case->GetBoolField(TEXT("pillIsRefNode")))
+		{
+			Pill.Data.AssetId = Case->GetStringField(TEXT("pillAssetId"));
+		}
+
+		// The consumer exists only so array and map reads have a wired input handle to resolve
+		// through; the scalar reads call the typed evaluators on the accessor directly.
+		FStoryFlowNode Consumer = MakeNode(ConsumerId, EStoryFlowNodeType::SetBool, TEXT("setBool"));
+		Consumer.Data.KeyType = Accessor.Data.KeyType;
+		Consumer.Data.ValueType = Accessor.Data.ValueType;
+
+		if (Case->GetBoolField(TEXT("pillWired")))
+		{
+			Script->Connections.Add(MakePillEdge(PillId, AccessorId));
+		}
+		// The Get's output pin is optionId "" for scalars and arrays; a map SOURCE pin carries no
+		// optionId at all, while the consumer's map INPUT is the pure-read optionId "1" — so the
+		// two ends of a map edge are deliberately not the same suffix.
+		const bool bIsMap = Accessor.Data.VariableType == TEXT("map");
+		const FString ReadSourceSuffix = bIsMap
+			? FString::Printf(TEXT("map-%s-%s"), *Accessor.Data.KeyType, *Accessor.Data.ValueType)
+			: ValuePinSuffix(Accessor.Data, TEXT(""));
+		const FString ReadTargetSuffix = bIsMap
+			? StoryFlowHandles::In_Map(Accessor.Data.KeyType, Accessor.Data.ValueType, TEXT("1"))
+			: ValuePinSuffix(Accessor.Data, TEXT(""));
+		Script->Connections.Add(MakeEdge(AccessorId, ConsumerId,
+			StoryFlowHandles::Source(AccessorId, ReadSourceSuffix),
+			StoryFlowHandles::Target(ConsumerId, ReadTargetSuffix)));
+
+		Script->Nodes.Add(PillId, Pill);
+		Script->Nodes.Add(AccessorId, Accessor);
+		Script->Nodes.Add(ConsumerId, Consumer);
+	}
+	Script->BuildConnectionIndices();
+	TestEqual(TEXT("data-assets-degraded.json still carries 20 cases"), CaseIndex, 20);
+	TestEqual(TEXT("every degraded case was built"), CaseIndex, Cases->Num());
+
+	// --- read each case twice, against a store with an EMPTY overlay ---
+	StoryFlowDataAssets::FOverlay Overlay;
+	int32 Asserted = 0;
+	CaseIndex = 0;
+	for (const TSharedPtr<FJsonValue>& CaseValue : *Cases)
+	{
+		const TSharedPtr<FJsonObject> Case = CaseValue->AsObject();
+		if (!Case.IsValid())
+		{
+			continue;
+		}
+		const FString Suffix = FString::FromInt(CaseIndex++);
+		const FString AccessorId = TEXT("G") + Suffix;
+		const FString ConsumerId = TEXT("C") + Suffix;
+		const FString Label = FString::Printf(TEXT("degraded case '%s'"), *Case->GetStringField(TEXT("case")));
+
+		FStoryFlowExecutionContext Context;
+		Context.CurrentScript = Script;
+		Context.DataAssetStore = { &Seed, &Overlay };
+		FStoryFlowEvaluator Evaluator(&Context);
+
+		FStoryFlowNode* Accessor = Context.GetNode(AccessorId);
+		FStoryFlowNode* Consumer = Context.GetNode(ConsumerId);
+		if (!Accessor || !Consumer)
+		{
+			AddError(Label + TEXT(": nodes missing from the built script"));
+			continue;
+		}
+
+		const TSharedPtr<FJsonObject> Get = Case->GetObjectField(TEXT("get"));
+		const TSharedPtr<FJsonValue> Expected = Get->TryGetField(TEXT("value"));
+		if (!Expected.IsValid())
+		{
+			AddError(Label + TEXT(": the fixture record carries no expected get value"));
+			continue;
+		}
+
+		const FString Type = Accessor->Data.VariableType;
+		// TWICE, always: the second read is what proves the warning LATCHED rather than the
+		// first one merely having been the only read.
+		for (int32 Pass = 0; Pass < 2; ++Pass)
+		{
+			const FString PassLabel = FString::Printf(TEXT("%s pass %d"), *Label, Pass);
+			if (Accessor->Data.bIsArray)
+			{
+				const TArray<FStoryFlowVariant> Actual = ReadArray(Evaluator, Consumer, Type, ValuePinSuffix(Accessor->Data, TEXT("")));
+				TestEqual(PassLabel + TEXT(" (array length)"), Actual.Num(), Expected->AsArray().Num());
+			}
+			else if (Type == TEXT("map"))
+			{
+				const TArray<FStoryFlowMapEntry>* Actual = Evaluator.EvaluateMapInput(Consumer, TEXT("1"));
+				TestEqual(PassLabel + TEXT(" (map entry count)"), Actual ? Actual->Num() : 0, Expected->AsArray().Num());
+			}
+			else if (Type == TEXT("boolean"))
+			{
+				TestTrue(PassLabel + TEXT(" (boolean)"),
+					Evaluator.EvaluateBooleanFromNode(Accessor, TEXT(""), TEXT("")) == Expected->AsBool());
+			}
+			else if (Type == TEXT("integer"))
+			{
+				TestEqual(PassLabel + TEXT(" (integer)"),
+					Evaluator.EvaluateIntegerFromNode(Accessor, TEXT(""), TEXT("")), static_cast<int32>(Expected->AsNumber()));
+			}
+			else if (Type == TEXT("float"))
+			{
+				TestNearlyEqual(PassLabel + TEXT(" (float)"),
+					static_cast<double>(Evaluator.EvaluateFloatFromNode(Accessor, TEXT(""), TEXT(""))), Expected->AsNumber(), 1.e-4);
+			}
+			else
+			{
+				// The whole string family (string / enum / image / character / audio) reads
+				// through one evaluator, exactly as the seed stores all five in one field.
+				TestEqual(PassLabel + TEXT(" (string family)"),
+					Evaluator.EvaluateStringFromNode(Accessor, TEXT(""), TEXT("")), Expected->AsString());
+			}
+		}
+
+		// The WRITE side's gate is this same ladder, so assert its verdict per case here rather
+		// than inferring it from the Set chain's end state: a case the fixture refuses for any
+		// reason other than the value pin must fail the ladder outright.
+		const TSharedPtr<FJsonObject> Set = Case->GetObjectField(TEXT("set"));
+		FString Reason;
+		Set->TryGetStringField(TEXT("reason"), Reason);
+		const bool bLadderShouldPass = Set->GetStringField(TEXT("outcome")) == TEXT("written") || Reason == TEXT("novalue");
+		FString ResolvedAssetId;
+		TestTrue(FString::Printf(TEXT("%s binding ladder (expected %s)"), *Label, bLadderShouldPass ? TEXT("bound") : TEXT("degraded")),
+			Context.TryResolveDataAssetBinding(*Accessor, ResolvedAssetId) == bLadderShouldPass);
+
+		// Once-ness across BOTH reads and the ladder call above: one latch, or none for a case
+		// the fixture marks healthy (contract §6, re-armed by a context Reset).
+		TestEqual(Label + TEXT(" warned exactly once per node"),
+			WarnLatchCount(Context, AccessorId), Case->GetBoolField(TEXT("warnOnce")) ? 1 : 0);
+		++Asserted;
+	}
+	TestEqual(TEXT("every degraded case was asserted"), Asserted, Cases->Num());
+
+	CleanUp();
+	return true;
+}
+
+// ============================================================================
+// §6 degraded ladder — the Set node, driven through the real handler
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetDegradedSetsTest,
+	"StoryFlow.DataAssets.Degraded.SetNodeRefusals",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowDataAssetDegradedSetsTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowDataAssetNodeTestHelpers;
+
+	TSharedPtr<FJsonObject> Fixture = LoadGoldenFixture(TEXT("data-assets-degraded.json"));
+	if (!TestTrue(TEXT("data-assets-degraded.json parses"), Fixture.IsValid()))
+	{
+		return false;
+	}
+	const TArray<TSharedPtr<FJsonValue>>* Cases = nullptr;
+	if (!TestTrue(TEXT("the fixture carries a cases array"), Fixture->TryGetArrayField(TEXT("cases"), Cases)))
+	{
+		return false;
+	}
+
+	FScopedWorld W;
+	if (!TestTrue(TEXT("fixture world initialized"), W.Init()))
+	{
+		return false;
+	}
+
+	StoryFlowDataAssets::FSeed ImportedSeed;
+	UStoryFlowProjectAsset* Project = ImportFixtureProject(*this, ImportedSeed);
+	if (!Project)
+	{
+		return false;
+	}
+	FGCObjectScopeGuard ProjectGuard(Project);
+
+	// Every case's SET node on one exec chain, IN FIXTURE ORDER. Order is load-bearing: the
+	// healthy case writes 42 first, and the nineteen refusals that follow all aim at variables
+	// it would be visible through — so a refusal that quietly turned into a write shows up as a
+	// changed value, not merely as an extra overlay entry.
+	UStoryFlowScriptAsset* Script = NewObject<UStoryFlowScriptAsset>(GetTransientPackage());
+	FGCObjectScopeGuard ScriptGuard(Script);
+	Script->StartNode = TEXT("0");
+	Script->Nodes.Add(TEXT("0"), MakeNode(TEXT("0"), EStoryFlowNodeType::Start, TEXT("start")));
+
+	// Two literal sources for the wired value pins: the fixture only ever wires an integer or a
+	// string one. Their VALUES barely matter — what matters is that the EDGE exists, so a
+	// refusal that stopped refusing would have something to write.
+	{
+		FStoryFlowVariable IntVar;
+		IntVar.Id = TEXT("n");
+		IntVar.Name = TEXT("n");
+		IntVar.Type = EStoryFlowVariableType::Integer;
+		IntVar.Value.SetInt(42);
+		Script->Variables.Add(IntVar.Id, IntVar);
+
+		FStoryFlowVariable StrVar;
+		StrVar.Id = TEXT("s");
+		StrVar.Name = TEXT("s");
+		StrVar.Type = EStoryFlowVariableType::String;
+		StrVar.Value.SetString(TEXT("written-by-a-broken-gate"));
+		Script->Variables.Add(StrVar.Id, StrVar);
+	}
+	{
+		FStoryFlowNode IntSource = MakeNode(TEXT("VInt"), EStoryFlowNodeType::GetInt, TEXT("getInt"));
+		IntSource.Data.Variable = TEXT("n");
+		Script->Nodes.Add(IntSource.Id, IntSource);
+
+		FStoryFlowNode StrSource = MakeNode(TEXT("VStr"), EStoryFlowNodeType::GetString, TEXT("getString"));
+		StrSource.Data.Variable = TEXT("s");
+		Script->Nodes.Add(StrSource.Id, StrSource);
+	}
+
+	FString PreviousNodeId = TEXT("0");
+	FString PreviousExecHandle = StoryFlowHandles::Source(TEXT("0"));
+	int32 CaseIndex = 0;
+	for (const TSharedPtr<FJsonValue>& CaseValue : *Cases)
+	{
+		const TSharedPtr<FJsonObject> Case = CaseValue->AsObject();
+		if (!Case.IsValid())
+		{
+			AddError(TEXT("cases: a record is not an object"));
+			continue;
+		}
+		const FString Suffix = FString::FromInt(CaseIndex++);
+		const FString PillId = TEXT("P") + Suffix;
+		const FString SetId = TEXT("S") + Suffix;
+
+		FStoryFlowNode Setter = MakeAccessor(SetId, /*bIsSetter*/ true, Case->GetObjectField(TEXT("accessor")));
+
+		FStoryFlowNode Pill = Case->GetBoolField(TEXT("pillIsRefNode"))
+			? MakePill(PillId, Case->GetStringField(TEXT("pillAssetId")))
+			: MakeNode(PillId, EStoryFlowNodeType::GetBool, TEXT("getBool"));
+		if (!Case->GetBoolField(TEXT("pillIsRefNode")))
+		{
+			Pill.Data.AssetId = Case->GetStringField(TEXT("pillAssetId"));
+		}
+		if (Case->GetBoolField(TEXT("pillWired")))
+		{
+			Script->Connections.Add(MakePillEdge(PillId, SetId));
+		}
+
+		if (Case->GetBoolField(TEXT("setValuePinWired")))
+		{
+			const bool bWantsString = Setter.Data.VariableType != TEXT("boolean")
+				&& Setter.Data.VariableType != TEXT("integer")
+				&& Setter.Data.VariableType != TEXT("float");
+			const FString SourceId = bWantsString ? TEXT("VStr") : TEXT("VInt");
+			const FString ValueSuffix = ValuePinSuffix(Setter.Data, StoryFlowHandles::DataAssetValueOptionId);
+			Script->Connections.Add(MakeEdge(SourceId, SetId,
+				StoryFlowHandles::Source(SourceId, bWantsString ? TEXT("string-") : TEXT("integer-")),
+				StoryFlowHandles::Target(SetId, ValueSuffix)));
+		}
+
+		Script->Connections.Add(MakeEdge(PreviousNodeId, SetId, PreviousExecHandle, StoryFlowHandles::Target(SetId, TEXT("0"))));
+		PreviousNodeId = SetId;
+		PreviousExecHandle = StoryFlowHandles::Source(SetId, StoryFlowHandles::Out_Flow);
+
+		Script->Nodes.Add(PillId, Pill);
+		Script->Nodes.Add(SetId, Setter);
+	}
+	Script->Nodes.Add(TEXT("End"), MakeNode(TEXT("End"), EStoryFlowNodeType::End, TEXT("end")));
+	Script->Connections.Add(MakeEdge(PreviousNodeId, TEXT("End"), PreviousExecHandle, StoryFlowHandles::Target(TEXT("End"), TEXT(""))));
+	Script->BuildConnectionIndices();
+	TestEqual(TEXT("every degraded case joined the Set chain"), CaseIndex, Cases->Num());
+
+	Project->Scripts.Add(TEXT("degradedsets"), Script);
+	W.Subsystem->SetProject(Project);
+	W.Component->StartDialogueWithScript(TEXT("degradedsets"));
+
+	// Exactly ONE of the twenty cases is allowed to write, and it must have written its own
+	// value. Anything else in the overlay is a refusal that stopped refusing.
+	const StoryFlowDataAssets::FOverlay& Overlay = W.Subsystem->GetDataAssetOverlay();
+	if (TestEqual(TEXT("only the healthy case's asset has overlay entries"), Overlay.Num(), 1))
+	{
+		const TMap<FString, FStoryFlowVariant>* ChildEntries = Overlay.Find(ChildId);
+		if (TestNotNull(TEXT("the healthy write landed on the wired child, not the declaring base"), ChildEntries))
+		{
+			TestEqual(TEXT("the healthy case wrote exactly one variable"), ChildEntries->Num(), 1);
+			const FStoryFlowVariant* Written = ChildEntries->Find(HpId);
+			if (TestNotNull(TEXT("the healthy case wrote hp"), Written))
+			{
+				// Integer 42, still: the value-pin refusal running later on the SAME variable
+				// would blank it, and the type-changed refusal would restamp it as a string.
+				TestTrue(TEXT("the write kept its integer type"), Written->GetType() == EStoryFlowVariableType::Integer);
+				TestEqual(TEXT("the write kept the value from its wired pin"), Written->GetInt(), 42);
+			}
+		}
+	}
+
+	CleanUp();
+	return true;
+}
+
+// ============================================================================
+// The wire IS the binding — from a really imported graph
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetWireBindingTest,
+	"StoryFlow.DataAssets.Nodes.WireIsTheBinding",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowDataAssetWireBindingTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowDataAssetNodeTestHelpers;
+
+	StoryFlowDataAssets::FSeed Seed;
+	UStoryFlowProjectAsset* Project = ImportFixtureProject(*this, Seed);
+	if (!Project)
+	{
+		return false;
+	}
+	FGCObjectScopeGuard ProjectGuard(Project);
+
+	// REAL exported JSON, not hand-built nodes: this is the one test that also pins the
+	// IMPORTER's half of §2.2 (assetId on the pill, variableId/variable/variableType/isArray/
+	// keyType/valueType on the accessors) and the exact handle strings the editor writes.
+	//
+	// TWO accessors reading the SAME variable id through DIFFERENT pills is the whole point:
+	// the accessors are byte-identical apart from their node id, so anything but the wire
+	// deciding which asset they read would make them answer the same number.
+	const FString Json = TEXT(R"JSON(
+	{
+		"startNode": "0",
+		"nodes": {
+			"0":   { "type": "start", "id": "0" },
+			"pB":  { "type": "getDataAsset", "id": "pB", "assetId": "da_0a1b2c3d4e5f60718293a4b5c6d7e8f9" },
+			"pC":  { "type": "getDataAsset", "id": "pC", "assetId": "da_1b2c3d4e5f60718293a4b5c6d7e8f90a" },
+			"gB":  { "type": "getDataAssetVariable", "id": "gB", "variableId": "2e8b6d0a1f4c47d3b95e2a70c6f81d34", "variable": "hp", "variableType": "integer" },
+			"gC":  { "type": "getDataAssetVariable", "id": "gC", "variableId": "2e8b6d0a1f4c47d3b95e2a70c6f81d34", "variable": "hp", "variableType": "integer" },
+			"gT":  { "type": "getDataAssetVariable", "id": "gT", "variableId": "c58e2f13a0d64c9b871e3f05d2a76b48", "variable": "tags", "variableType": "string", "isArray": true },
+			"gL":  { "type": "getDataAssetVariable", "id": "gL", "variableId": "6d0f39a8b21e47c5903af8d61c72e504", "variable": "loot", "variableType": "map", "keyType": "string", "valueType": "integer" },
+			"sink": { "type": "setBool", "id": "sink", "keyType": "string", "valueType": "integer" }
+		},
+		"connections": [
+			{ "id": "c1", "source": "pB", "target": "gB", "sourceHandle": "source-pB-dataAsset-", "targetHandle": "target-gB-dataAsset-asset" },
+			{ "id": "c2", "source": "pC", "target": "gC", "sourceHandle": "source-pC-dataAsset-", "targetHandle": "target-gC-dataAsset-asset" },
+			{ "id": "c3", "source": "pC", "target": "gT", "sourceHandle": "source-pC-dataAsset-", "targetHandle": "target-gT-dataAsset-asset" },
+			{ "id": "c4", "source": "pB", "target": "gL", "sourceHandle": "source-pB-dataAsset-", "targetHandle": "target-gL-dataAsset-asset" },
+			{ "id": "c5", "source": "gT", "target": "sink", "sourceHandle": "source-gT-string-array-", "targetHandle": "target-sink-string-array-" },
+			{ "id": "c6", "source": "gL", "target": "sink", "sourceHandle": "source-gL-map-string-integer", "targetHandle": "target-sink-map-string-integer-1" }
+		],
+		"variables": {}
+	}
+	)JSON");
+
+	TSharedPtr<FJsonObject> JsonObject;
+	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Json);
+	if (!TestTrue(TEXT("the fixture script JSON parses"), FJsonSerializer::Deserialize(Reader, JsonObject) && JsonObject.IsValid()))
+	{
+		CleanUp();
+		return false;
+	}
+	UStoryFlowScriptAsset* Script = UStoryFlowImporter::ImportScriptFromJson(JsonObject, TEXT("data_asset_wire_test"), NodeTestRoot);
+	if (!TestNotNull(TEXT("the fixture script imports"), Script))
+	{
+		CleanUp();
+		return false;
+	}
+
+	// The importer's §2.2 payload, asserted before anything reads through it — a silently
+	// dropped variableId would otherwise show up only as a degraded read.
+	if (const FStoryFlowNode* Pill = Script->Nodes.Find(TEXT("pC")))
+	{
+		TestEqual(TEXT("the pill kept its assetId"), Pill->Data.AssetId, FString(ChildId));
+		TestTrue(TEXT("the pill parsed as a getDataAsset node"), Pill->Type == EStoryFlowNodeType::GetDataAsset);
+	}
+	else
+	{
+		AddError(TEXT("the child pill is missing from the imported script"));
+	}
+	if (const FStoryFlowNode* Map = Script->Nodes.Find(TEXT("gL")))
+	{
+		TestTrue(TEXT("the accessor parsed as a getDataAssetVariable node"), Map->Type == EStoryFlowNodeType::GetDataAssetVariable);
+		TestEqual(TEXT("the accessor kept its variableId"), Map->Data.VariableId, FString(LootId));
+		TestEqual(TEXT("the accessor kept its name snapshot"), Map->Data.VariableName, TEXT("loot"));
+		TestEqual(TEXT("the accessor kept its type snapshot"), Map->Data.VariableType, TEXT("map"));
+		TestEqual(TEXT("the accessor kept its map key type"), Map->Data.KeyType, TEXT("string"));
+		TestEqual(TEXT("the accessor kept its map value type"), Map->Data.ValueType, TEXT("integer"));
+		TestTrue(TEXT("an accessor carries no assetId of its own - the wire is the binding"), Map->Data.AssetId.IsEmpty());
+	}
+	else
+	{
+		AddError(TEXT("the map accessor is missing from the imported script"));
+	}
+	if (const FStoryFlowNode* Tags = Script->Nodes.Find(TEXT("gT")))
+	{
+		TestTrue(TEXT("the array accessor kept its isArray snapshot"), Tags->Data.bIsArray);
+	}
+
+	StoryFlowDataAssets::FOverlay Overlay;
+	FStoryFlowExecutionContext Context;
+	Context.CurrentScript = Script;
+	Context.DataAssetStore = { &Seed, &Overlay };
+	FStoryFlowEvaluator Evaluator(&Context);
+
+	// --- the same variable, two pills, two answers ---
+	TestEqual(TEXT("the base-wired accessor reads the base's own hp"),
+		Evaluator.EvaluateIntegerFromNode(Context.GetNode(TEXT("gB")), TEXT(""), TEXT("")), 100);
+	TestEqual(TEXT("the child-wired accessor reads the child's override"),
+		Evaluator.EvaluateIntegerFromNode(Context.GetNode(TEXT("gC")), TEXT(""), TEXT("")), 150);
+
+	// --- typed reads: array and map ---
+	FStoryFlowNode* Sink = Context.GetNode(TEXT("sink"));
+	TArray<FStoryFlowVariant> Tags = Evaluator.EvaluateStringArrayInput(Sink, TEXT("string-array-"));
+	if (TestEqual(TEXT("the array read comes through the child's override"), Tags.Num(), 2))
+	{
+		TestEqual(TEXT("the array read keeps its authored order"), Tags[1].GetString(), TEXT("elite"));
+	}
+	if (const TArray<FStoryFlowMapEntry>* Loot = Evaluator.EvaluateMapInput(Sink, TEXT("1")))
+	{
+		if (TestEqual(TEXT("the map read comes through the base's own entries"), Loot->Num(), 2))
+		{
+			TestEqual(TEXT("the map read keeps its authored key order"), (*Loot)[0].Key.GetString(), TEXT("gold"));
+			TestEqual(TEXT("the map read keeps its values"), (*Loot)[1].Value.GetInt(), 1);
+		}
+	}
+	else
+	{
+		AddError(TEXT("the map accessor resolved to nothing"));
+	}
+
+	// --- copy on read: graph code must not reach the store through a read (contract §3) ---
+	Tags.Empty();
+	TestEqual(TEXT("emptying a read array leaves the seed alone"),
+		Evaluator.EvaluateStringArrayInput(Sink, TEXT("string-array-")).Num(), 2);
+	if (TArray<FStoryFlowMapEntry>* LootAgain = Evaluator.EvaluateMapInput(Sink, TEXT("1")))
+	{
+		// The map resolver hands back a pointer by signature; for a `.sfd` source it must point
+		// at a DETACHED snapshot, never into the store.
+		LootAgain->Empty();
+	}
+	if (const TArray<FStoryFlowMapEntry>* LootThird = Evaluator.EvaluateMapInput(Sink, TEXT("1")))
+	{
+		TestEqual(TEXT("emptying a read map leaves the seed alone"), LootThird->Num(), 2);
+	}
+
+	CleanUp();
+	return true;
+}
+
+// ============================================================================
+// The Set node end to end: overlay write, cascade, and the value refusal
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetSetNodeTest,
+	"StoryFlow.DataAssets.Nodes.SetWritesCascadeAndRefuse",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowDataAssetSetNodeTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowDataAssetNodeTestHelpers;
+
+	FScopedWorld W;
+	if (!TestTrue(TEXT("fixture world initialized"), W.Init()))
+	{
+		return false;
+	}
+
+	StoryFlowDataAssets::FSeed ImportedSeed;
+	UStoryFlowProjectAsset* Project = ImportFixtureProject(*this, ImportedSeed);
+	if (!Project)
+	{
+		return false;
+	}
+	FGCObjectScopeGuard ProjectGuard(Project);
+
+	// start -> setBase(hp = 7) -> setUnwired(hp, value pin unwired) -> end
+	// Both Sets aim at the BASE's hp. The second one must refuse: if it wrote its type zero
+	// instead, the cascade assertion below would read 0 rather than 7.
+	UStoryFlowScriptAsset* Script = NewObject<UStoryFlowScriptAsset>(GetTransientPackage());
+	FGCObjectScopeGuard ScriptGuard(Script);
+	Script->StartNode = TEXT("0");
+	Script->Nodes.Add(TEXT("0"), MakeNode(TEXT("0"), EStoryFlowNodeType::Start, TEXT("start")));
+
+	FStoryFlowVariable IntVar;
+	IntVar.Id = TEXT("n");
+	IntVar.Name = TEXT("n");
+	IntVar.Type = EStoryFlowVariableType::Integer;
+	IntVar.Value.SetInt(7);
+	Script->Variables.Add(IntVar.Id, IntVar);
+
+	FStoryFlowNode Source = MakeNode(TEXT("V"), EStoryFlowNodeType::GetInt, TEXT("getInt"));
+	Source.Data.Variable = TEXT("n");
+	Script->Nodes.Add(Source.Id, Source);
+
+	Script->Nodes.Add(TEXT("pB"), MakePill(TEXT("pB"), BaseId));
+
+	for (const TCHAR* SetId : { TEXT("sWrite"), TEXT("sRefuse") })
+	{
+		FStoryFlowNode Setter = MakeNode(SetId, EStoryFlowNodeType::SetDataAssetVariable, TEXT("setDataAssetVariable"));
+		Setter.Data.VariableId = HpId;
+		Setter.Data.VariableName = TEXT("hp");
+		Setter.Data.Variable = TEXT("hp");
+		Setter.Data.VariableType = TEXT("integer");
+		Script->Nodes.Add(Setter.Id, Setter);
+		Script->Connections.Add(MakePillEdge(TEXT("pB"), Setter.Id));
+	}
+	// Only the first Set gets a value pin.
+	Script->Connections.Add(MakeEdge(TEXT("V"), TEXT("sWrite"),
+		StoryFlowHandles::Source(TEXT("V"), TEXT("integer-")),
+		StoryFlowHandles::Target(TEXT("sWrite"), TEXT("integer-2"))));
+
+	Script->Nodes.Add(TEXT("End"), MakeNode(TEXT("End"), EStoryFlowNodeType::End, TEXT("end")));
+	Script->Connections.Add(MakeEdge(TEXT("0"), TEXT("sWrite"), StoryFlowHandles::Source(TEXT("0")), StoryFlowHandles::Target(TEXT("sWrite"), TEXT("0"))));
+	Script->Connections.Add(MakeEdge(TEXT("sWrite"), TEXT("sRefuse"),
+		StoryFlowHandles::Source(TEXT("sWrite"), StoryFlowHandles::Out_Flow), StoryFlowHandles::Target(TEXT("sRefuse"), TEXT("0"))));
+	Script->Connections.Add(MakeEdge(TEXT("sRefuse"), TEXT("End"),
+		StoryFlowHandles::Source(TEXT("sRefuse"), StoryFlowHandles::Out_Flow), StoryFlowHandles::Target(TEXT("End"), TEXT(""))));
+	Script->BuildConnectionIndices();
+
+	Project->Scripts.Add(TEXT("setnodes"), Script);
+	W.Subsystem->SetProject(Project);
+	W.Component->StartDialogueWithScript(TEXT("setnodes"));
+
+	const StoryFlowDataAssets::FSeed& Seed = W.Subsystem->GetDataAssetSeed();
+	const StoryFlowDataAssets::FOverlay& Overlay = W.Subsystem->GetDataAssetOverlay();
+
+	// The write landed at the level the PILL names — the base — and nowhere else.
+	TestEqual(TEXT("the write touched exactly one asset"), Overlay.Num(), 1);
+	TestEqual(TEXT("the base's hp resolves to the written value"),
+		StoryFlowDataAssets::Resolve(Seed, Overlay, BaseId, HpId).GetInt(), 7);
+
+	// CASCADE: the child overrides hp in the seed, so it keeps 150; the grandchild inherits the
+	// child's override, not the base write. A base write cascading past an override would be the
+	// nearest-wins rule broken, and a base write NOT cascading at all would show up as a base
+	// that changed alone.
+	TestEqual(TEXT("the child's own override still wins over the base write"),
+		StoryFlowDataAssets::Resolve(Seed, Overlay, ChildId, HpId).GetInt(), 150);
+	TestEqual(TEXT("the grandchild still inherits the child's override"),
+		StoryFlowDataAssets::Resolve(Seed, Overlay, GrandChildId, HpId).GetInt(), 150);
+
+	// The refusal: the second Set aimed at the same slot with NO value pin, and the base's value
+	// is still 7 rather than the integer zero an inline-value fallback would have written.
+	if (const TMap<FString, FStoryFlowVariant>* BaseEntries = Overlay.Find(BaseId))
+	{
+		TestEqual(TEXT("the unwired Set added no second overlay entry"), BaseEntries->Num(), 1);
+	}
+
+	// A base write DOES cascade where nothing shadows it: alive is declared and valued on the
+	// base only, so flipping it there must be visible from the grandchild.
+	StoryFlowDataAssets::FOverlay& MutableOverlay = W.Subsystem->GetDataAssetOverlay();
+	TestTrue(TEXT("the grandchild sees the base's alive before the write"),
+		StoryFlowDataAssets::Resolve(Seed, MutableOverlay, GrandChildId, AliveId).GetBool(true));
+	TestTrue(TEXT("a base write to an unshadowed variable lands"),
+		StoryFlowDataAssets::TrySet(Seed, MutableOverlay, BaseId, AliveId, FStoryFlowVariant::FromBool(false)));
+	TestFalse(TEXT("and cascades all the way to the grandchild"),
+		StoryFlowDataAssets::Resolve(Seed, MutableOverlay, GrandChildId, AliveId).GetBool(true));
+
+	CleanUp();
+	return true;
+}
+
+// ============================================================================
+// Boolean producer: a `.sfd` Get gating a live dialogue option (contract §6.2)
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetOptionGatingTest,
+	"StoryFlow.DataAssets.Nodes.BooleanGetGatesAnOption",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowDataAssetOptionGatingTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowDataAssetNodeTestHelpers;
+
+	StoryFlowDataAssets::FSeed Seed;
+	UStoryFlowProjectAsset* Project = ImportFixtureProject(*this, Seed);
+	if (!Project)
+	{
+		return false;
+	}
+	FGCObjectScopeGuard ProjectGuard(Project);
+
+	// Two conditioned options on one dialogue:
+	//   optDirect <- the boolean accessor itself     (ProcessBooleanChain's default arm)
+	//   optNot    <- notBool over the same accessor  (a cached producer ABOVE a live read)
+	// The second is what proves a Set invalidates the chain: notBool DOES memoize.
+	UStoryFlowScriptAsset* Script = NewObject<UStoryFlowScriptAsset>(GetTransientPackage());
+	FGCObjectScopeGuard ScriptGuard(Script);
+	Script->StartNode = TEXT("0");
+	Script->Nodes.Add(TEXT("0"), MakeNode(TEXT("0"), EStoryFlowNodeType::Start, TEXT("start")));
+	Script->Nodes.Add(TEXT("pB"), MakePill(TEXT("pB"), BaseId));
+
+	FStoryFlowNode Getter = MakeNode(TEXT("g"), EStoryFlowNodeType::GetDataAssetVariable, TEXT("getDataAssetVariable"));
+	Getter.Data.VariableId = AliveId;
+	Getter.Data.VariableName = TEXT("alive");
+	Getter.Data.Variable = TEXT("alive");
+	Getter.Data.VariableType = TEXT("boolean");
+	Script->Nodes.Add(Getter.Id, Getter);
+
+	Script->Nodes.Add(TEXT("not"), MakeNode(TEXT("not"), EStoryFlowNodeType::NotBool, TEXT("notBool")));
+
+	FStoryFlowNode Dialogue = MakeNode(TEXT("d"), EStoryFlowNodeType::Dialogue, TEXT("dialogue"));
+	Dialogue.Data.Text = TEXT("gated");
+	Script->Nodes.Add(Dialogue.Id, Dialogue);
+
+	Script->Connections.Add(MakePillEdge(TEXT("pB"), TEXT("g")));
+	Script->Connections.Add(MakeEdge(TEXT("g"), TEXT("d"),
+		StoryFlowHandles::Source(TEXT("g"), TEXT("boolean-")), StoryFlowHandles::Target(TEXT("d"), TEXT("boolean-optDirect"))));
+	Script->Connections.Add(MakeEdge(TEXT("g"), TEXT("not"),
+		StoryFlowHandles::Source(TEXT("g"), TEXT("boolean-")), StoryFlowHandles::Target(TEXT("not"), StoryFlowHandles::In_Boolean)));
+	Script->Connections.Add(MakeEdge(TEXT("not"), TEXT("d"),
+		StoryFlowHandles::Source(TEXT("not"), TEXT("boolean-")), StoryFlowHandles::Target(TEXT("d"), TEXT("boolean-optNot"))));
+	Script->BuildConnectionIndices();
+
+	StoryFlowDataAssets::FOverlay Overlay;
+	FStoryFlowExecutionContext Context;
+	Context.CurrentScript = Script;
+	Context.DataAssetStore = { &Seed, &Overlay };
+	FStoryFlowEvaluator Evaluator(&Context);
+	FStoryFlowNode* DialogueNode = Context.GetNode(TEXT("d"));
+
+	// THE FAIL-CLOSED REGRESSION. EvaluateBooleanFromNode's default arm returns false, so a
+	// missing producer arm does not error — it HIDES this option. Asserting VISIBLE is the only
+	// assertion that catches that.
+	TestTrue(TEXT("a TRUE .sfd boolean keeps its option visible"),
+		Evaluator.EvaluateOptionVisibility(DialogueNode, TEXT("optDirect")));
+	TestFalse(TEXT("and its notBool twin hides the other option"),
+		Evaluator.EvaluateOptionVisibility(DialogueNode, TEXT("optNot")));
+
+	// A DIRECT pull, the shape a Branch condition or any boolean input takes: EvaluateBooleanInput
+	// does NOT run ProcessBooleanChain first, so nothing drops the cache between these two reads.
+	// This pair, and only this pair, is what pins the never-memoize rule (contract §5) — a
+	// memoizing accessor answers TRUE both times and the session write is invisible until
+	// something unrelated happens to clear the cache.
+	TestTrue(TEXT("a direct boolean pull reads the seed value"),
+		Evaluator.EvaluateBooleanFromNode(Context.GetNode(TEXT("g")), TEXT(""), TEXT("")));
+	TestTrue(TEXT("a write through the base lands"),
+		StoryFlowDataAssets::TrySet(Seed, Overlay, BaseId, AliveId, FStoryFlowVariant::FromBool(false)));
+	TestFalse(TEXT("the next direct pull sees the session write with no cache clear in between"),
+		Evaluator.EvaluateBooleanFromNode(Context.GetNode(TEXT("g")), TEXT(""), TEXT("")));
+
+	TestFalse(TEXT("the option follows the session write"),
+		Evaluator.EvaluateOptionVisibility(DialogueNode, TEXT("optDirect")));
+
+	// notBool DOES memoize, which is why the Set handler drops the evaluation cache — the same
+	// clearNotBoolCache the HTML arm performs. ProcessBooleanChain re-primes it from the live
+	// read, so this must flip too.
+	Evaluator.ClearCache();
+	TestTrue(TEXT("the notBool option follows the write once the cache is dropped"),
+		Evaluator.EvaluateOptionVisibility(DialogueNode, TEXT("optNot")));
+
+	CleanUp();
+	return true;
+}
+
+// ============================================================================
+// Array ops route into the overlay instead of clobbering a same-named local
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetArrayOpTest,
+	"StoryFlow.DataAssets.Nodes.ArrayOpWritesTheOverlay",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowDataAssetArrayOpTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowDataAssetNodeTestHelpers;
+
+	FScopedWorld W;
+	if (!TestTrue(TEXT("fixture world initialized"), W.Init()))
+	{
+		return false;
+	}
+
+	StoryFlowDataAssets::FSeed ImportedSeed;
+	UStoryFlowProjectAsset* Project = ImportFixtureProject(*this, ImportedSeed);
+	if (!Project)
+	{
+		return false;
+	}
+	FGCObjectScopeGuard ProjectGuard(Project);
+
+	// start -> addToStringArray(<- the child's `tags` accessor) -> end, with a LOCAL script
+	// variable also named "tags". The accessor carries no isGlobal and its Data.Variable is that
+	// same display name, so an arm that fell through to the name lookup would append to the
+	// local array and leave the `.sfd` untouched — silently, and in the one place an author
+	// would never think to look.
+	UStoryFlowScriptAsset* Script = NewObject<UStoryFlowScriptAsset>(GetTransientPackage());
+	FGCObjectScopeGuard ScriptGuard(Script);
+	Script->StartNode = TEXT("0");
+	Script->Nodes.Add(TEXT("0"), MakeNode(TEXT("0"), EStoryFlowNodeType::Start, TEXT("start")));
+
+	FStoryFlowVariable Decoy;
+	Decoy.Id = TEXT("tags");
+	Decoy.Name = TEXT("tags");
+	Decoy.Type = EStoryFlowVariableType::String;
+	Decoy.bIsArray = true;
+	Decoy.Value.SetArray(TArray<FStoryFlowVariant>());
+	Script->Variables.Add(Decoy.Id, Decoy);
+
+	Script->Nodes.Add(TEXT("pC"), MakePill(TEXT("pC"), ChildId));
+
+	FStoryFlowNode Getter = MakeNode(TEXT("g"), EStoryFlowNodeType::GetDataAssetVariable, TEXT("getDataAssetVariable"));
+	Getter.Data.VariableId = TagsId;
+	Getter.Data.VariableName = TEXT("tags");
+	Getter.Data.Variable = TEXT("tags");
+	Getter.Data.VariableType = TEXT("string");
+	Getter.Data.bIsArray = true;
+	Script->Nodes.Add(Getter.Id, Getter);
+
+	FStoryFlowNode Add = MakeNode(TEXT("add"), EStoryFlowNodeType::AddToStringArray, TEXT("addToStringArray"));
+	Add.Data.Value.SetString(TEXT("boss"));
+	Script->Nodes.Add(Add.Id, Add);
+
+	Script->Nodes.Add(TEXT("End"), MakeNode(TEXT("End"), EStoryFlowNodeType::End, TEXT("end")));
+
+	Script->Connections.Add(MakePillEdge(TEXT("pC"), TEXT("g")));
+	Script->Connections.Add(MakeEdge(TEXT("g"), TEXT("add"),
+		StoryFlowHandles::Source(TEXT("g"), TEXT("string-array-")), StoryFlowHandles::Target(TEXT("add"), StoryFlowHandles::In_StringArray)));
+	Script->Connections.Add(MakeEdge(TEXT("0"), TEXT("add"), StoryFlowHandles::Source(TEXT("0")), StoryFlowHandles::Target(TEXT("add"), TEXT("0"))));
+	Script->Connections.Add(MakeEdge(TEXT("add"), TEXT("End"),
+		StoryFlowHandles::Source(TEXT("add"), StoryFlowHandles::Out_Flow), StoryFlowHandles::Target(TEXT("End"), TEXT(""))));
+	Script->BuildConnectionIndices();
+
+	Project->Scripts.Add(TEXT("arrayop"), Script);
+	W.Subsystem->SetProject(Project);
+	W.Component->StartDialogueWithScript(TEXT("arrayop"));
+
+	const StoryFlowDataAssets::FSeed& Seed = W.Subsystem->GetDataAssetSeed();
+	const StoryFlowDataAssets::FOverlay& Overlay = W.Subsystem->GetDataAssetOverlay();
+
+	const FStoryFlowVariant Tags = StoryFlowDataAssets::Resolve(Seed, Overlay, ChildId, TagsId);
+	if (TestEqual(TEXT("the append landed on the child's tags"), Tags.GetArray().Num(), 3))
+	{
+		TestEqual(TEXT("the appended element is the one the node carried"), Tags.GetArray()[2].GetString(), TEXT("boss"));
+		TestEqual(TEXT("the override's own entries are still in front of it"), Tags.GetArray()[1].GetString(), TEXT("elite"));
+	}
+	TestEqual(TEXT("the base's tags are untouched by a child-level append"),
+		StoryFlowDataAssets::Resolve(Seed, Overlay, BaseId, TagsId).GetArray().Num(), 2);
+
+	CleanUp();
+	return true;
+}
+
+#endif // WITH_DEV_AUTOMATION_TESTS

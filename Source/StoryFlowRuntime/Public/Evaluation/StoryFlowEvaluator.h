@@ -11,11 +11,15 @@ class UStoryFlowScriptAsset;
 
 /**
  * Where a resolved map input chain terminated (see ResolveMapInputVariable).
- * CharacterVariable and RunScriptOutput sources are READ-ONLY per the
+ * CharacterVariable, RunScriptOutput and DataAsset sources are READ-ONLY per the
  * cross-runtime contract: the HTML runtime hands mutators a throwaway/converted
  * Map for both (mutations never persist), and setMap SNAPSHOTS rather than
  * aliases. ScriptVariable vs GlobalVariable carries the terminal node's scope
- * flag for variable-change notifications.
+ * flag for variable-change notifications. DataAsset is read-only for the same
+ * reason: the HTML runtime builds a FRESH Map off a `.sfd` read (never a live
+ * reference into the store), so a map mutator wired to one observably changes
+ * nothing — and the store's copy-on-read contract (§3) forbids handing graph
+ * code a pointer it could write the seed through.
  */
 enum class EMapSourceKind : uint8
 {
@@ -23,7 +27,8 @@ enum class EMapSourceKind : uint8
 	ScriptVariable,
 	GlobalVariable,
 	CharacterVariable,
-	RunScriptOutput
+	RunScriptOutput,
+	DataAsset
 };
 
 /**
@@ -193,6 +198,27 @@ public:
 
 	/** Clear all evaluation caches */
 	void ClearCache();
+
+	// === Data Asset (.sfd) Reads ===
+
+	/** Is this one of the two bound `.sfd` accessors (contract §2.2)? */
+	static bool IsDataAssetAccessor(EStoryFlowNodeType Type)
+	{
+		return Type == EStoryFlowNodeType::GetDataAssetVariable || Type == EStoryFlowNodeType::SetDataAssetVariable;
+	}
+
+	/**
+	 * Read the `.sfd` variable a bound accessor points at (contract §4), or false for EVERY
+	 * degraded case — the ladder on the context warns once per node and this returns false, so
+	 * each typed caller substitutes its OWN type default (§6). OutValue is untouched on false.
+	 *
+	 * The value arrives COPIED (the store copies on read), so graph code that mutates an array
+	 * or entry list it read cannot corrupt the seed for the rest of the session.
+	 *
+	 * The Set accessor reads through here too: its pass-through output is the same value its Get
+	 * twin would answer, which is why both node types share one arm everywhere below.
+	 */
+	bool TryReadDataAssetVariable(FStoryFlowNode* Node, FStoryFlowVariant& OutValue);
 
 private:
 	/** Evaluate an integer comparison (GT, GTE, LT, LTE, EQ) */

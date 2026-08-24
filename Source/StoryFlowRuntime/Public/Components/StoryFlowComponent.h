@@ -699,6 +699,25 @@ protected:
 	void HandleGetCharacterVar(FStoryFlowNode* Node);
 	void HandleSetCharacterVar(FStoryFlowNode* Node);
 
+	// Data Asset (.sfd) Handlers
+	/**
+	 * Execute a Set Data Asset Variable node: record the wired value in the session overlay
+	 * (engine contract §5). Every degraded path is a NO-OP that still continues exec — writing
+	 * anything would be worse than doing nothing, because an overlay entry SHADOWS the declared
+	 * default for the rest of the session, and cascades to every descendant when it lands on a
+	 * base.
+	 */
+	void HandleSetDataAssetVariable(FStoryFlowNode* Node);
+
+	/**
+	 * The value a Set Data Asset Variable node is writing, or false when its value pin is
+	 * unwired (contract §5 REFUSES that — there is no inline literal to fall back to, unlike
+	 * setCharacterVar). The unwired check is an explicit FindInputEdge on every branch,
+	 * deliberately: the typed evaluators substitute their own type zero for an unwired pin, so
+	 * trusting one here would write a 0 / "" / false over the declared default.
+	 */
+	bool TryReadDataAssetSetInput(FStoryFlowNode* Node, FStoryFlowVariant& OutValue);
+
 	// Map Variable Handlers
 	void HandleSetMap(FStoryFlowNode* Node);
 	void HandleMapModify(FStoryFlowNode* Node);

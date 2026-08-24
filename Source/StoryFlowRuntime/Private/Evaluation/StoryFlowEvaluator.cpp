@@ -5,6 +5,7 @@
 #include "Evaluation/StoryFlowExecutionContext.h"
 #include "Data/StoryFlowScriptAsset.h"
 #include "Data/StoryFlowHandles.h"
+#include "Data/StoryFlowDataAssetStore.h"
 
 #define SF_EVAL_TRACE(Format, ...) \
 	do { if (Context && Context->bTraceEnabled) { UE_LOG(LogStoryFlow, Log, TEXT("[SF-TRACE] " Format), ##__VA_ARGS__); } } while(0)
@@ -121,6 +122,26 @@ void FStoryFlowEvaluator::MaybeWarnMissingMapTypes(const FStoryFlowNode* Node)
 // Boolean Evaluation
 // ============================================================================
 
+bool FStoryFlowEvaluator::TryReadDataAssetVariable(FStoryFlowNode* Node, FStoryFlowVariant& OutValue)
+{
+	if (!Context || !Node)
+	{
+		return false;
+	}
+
+	// The ladder owns every degraded reason AND the warn latch (contract §6), so the typed arms
+	// below stay one line each and cannot each grow their own subtly different idea of what a
+	// broken binding is. Note there is no character-style "path from an input pin, else the
+	// inline field" fallback here: the accessors persist NO assetId, so the wire is the only
+	// binding there is.
+	FString AssetId;
+	if (!Context->TryResolveDataAssetBinding(*Node, AssetId))
+	{
+		return false;
+	}
+	return Context->TryResolveDataAsset(AssetId, Node->Data.VariableId, OutValue);
+}
+
 bool FStoryFlowEvaluator::EvaluateBooleanInput(FStoryFlowNode* Node, const FString& HandleSuffix, bool Fallback)
 {
 	if (!Context || !Node)
@@ -166,9 +187,18 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 	// on the next read. The HTML runtime recomputes map reads inline the same way.
 	const bool bIsMapRead = (Node->Type == EStoryFlowNodeType::GetMapValue || Node->Type == EStoryFlowNodeType::HasMapKey);
 
+	// Data Asset reads are LIVE for the same reason map reads are, and follow the same
+	// never-memoize precedent (contract §5): a Set writes the session overlay, and an ancestor's
+	// overlay entry cascades to every descendant, so the value behind one accessor can move
+	// without that accessor's own node ever executing. Never caching satisfies
+	// invalidate-on-write BY CONSTRUCTION — there is no cache left to go stale, which is why
+	// this and not a write-side sweep of every accessor node is the whole story.
+	const bool bIsDataAssetRead = IsDataAssetAccessor(Node->Type);
+	const bool bNeverCache = bIsMapRead || bIsDataAssetRead;
+
 	// Check cache first
 	FNodeRuntimeState& NodeState = Context->GetNodeState(Node->Id);
-	if (!bIsMapRead && NodeState.bHasCachedOutput && NodeState.CachedOutput.GetType() == EStoryFlowVariableType::Boolean)
+	if (!bNeverCache && NodeState.bHasCachedOutput && NodeState.CachedOutput.GetType() == EStoryFlowVariableType::Boolean)
 	{
 		return NodeState.CachedOutput.GetBool();
 	}
@@ -471,6 +501,20 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 		break;
 	}
 
+	// The two `.sfd` accessors (contract §2.2). ONE arm for both: the Set's pass-through output
+	// answers exactly what its Get twin would. Every degraded case leaves Result at the type
+	// default (§6) — TryReadDataAssetVariable warned once on the way out.
+	case EStoryFlowNodeType::GetDataAssetVariable:
+	case EStoryFlowNodeType::SetDataAssetVariable:
+	{
+		FStoryFlowVariant DataAssetValue;
+		if (TryReadDataAssetVariable(Node, DataAssetValue))
+		{
+			Result = DataAssetValue.GetBool();
+		}
+		break;
+	}
+
 	default:
 		Result = false;
 		break;
@@ -478,8 +522,8 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 
 	SF_EVAL_TRACE("EVAL %s %s result=%s", *Node->Id, *Node->TypeString, Result ? TEXT("true") : TEXT("false"));
 
-	// Cache result (map reads excluded — see bIsMapRead above)
-	if (!bIsMapRead)
+	// Cache result (map and data-asset reads excluded — see bNeverCache above)
+	if (!bNeverCache)
 	{
 		NodeState.CachedOutput.SetBool(Result);
 		NodeState.bHasCachedOutput = true;
@@ -907,6 +951,20 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 		break;
 	}
 
+	// The two `.sfd` accessors (contract §2.2). ONE arm for both: the Set's pass-through output
+	// answers exactly what its Get twin would. Every degraded case leaves Result at the type
+	// default (§6) — TryReadDataAssetVariable warned once on the way out.
+	case EStoryFlowNodeType::GetDataAssetVariable:
+	case EStoryFlowNodeType::SetDataAssetVariable:
+	{
+		FStoryFlowVariant DataAssetValue;
+		if (TryReadDataAssetVariable(Node, DataAssetValue))
+		{
+			Result = DataAssetValue.GetInt();
+		}
+		break;
+	}
+
 	default:
 		Result = 0;
 		break;
@@ -1162,6 +1220,20 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 		}
 		FStoryFlowVariant CharVal = Context->GetCharacterVariableValue(CharPath, Node->Data.VariableName);
 		Result = CharVal.GetFloat();
+		break;
+	}
+
+	// The two `.sfd` accessors (contract §2.2). ONE arm for both: the Set's pass-through output
+	// answers exactly what its Get twin would. Every degraded case leaves Result at the type
+	// default (§6) — TryReadDataAssetVariable warned once on the way out.
+	case EStoryFlowNodeType::GetDataAssetVariable:
+	case EStoryFlowNodeType::SetDataAssetVariable:
+	{
+		FStoryFlowVariant DataAssetValue;
+		if (TryReadDataAssetVariable(Node, DataAssetValue))
+		{
+			Result = DataAssetValue.GetFloat();
+		}
 		break;
 	}
 
@@ -1549,6 +1621,20 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 		break;
 	}
 
+	// The two `.sfd` accessors (contract §2.2). ONE arm for both: the Set's pass-through output
+	// answers exactly what its Get twin would. Every degraded case leaves Result at the type
+	// default (§6) — TryReadDataAssetVariable warned once on the way out.
+	case EStoryFlowNodeType::GetDataAssetVariable:
+	case EStoryFlowNodeType::SetDataAssetVariable:
+	{
+		FStoryFlowVariant DataAssetValue;
+		if (TryReadDataAssetVariable(Node, DataAssetValue))
+		{
+			Result = DataAssetValue.GetString();
+		}
+		break;
+	}
+
 	default:
 		Result = TEXT("");
 		break;
@@ -1718,6 +1804,22 @@ TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateArrayInputGeneric(FStoryF
 		}
 		FStoryFlowVariant CharVal = Context->GetCharacterVariableValue(CharPath, SourceNode->Data.VariableName);
 		return CharVal.GetArray();
+	}
+
+	// A `.sfd` accessor bound to an ARRAY variable. Placed BEFORE the ExpectedGetArrayType gate
+	// and the name lookup at the tail: an accessor carries no isGlobal and its Data.Variable is
+	// the `.sfd` variable's display NAME, so falling through would read a same-named LOCAL script
+	// array instead. The value is already a copy (the store copies on read), so nothing
+	// downstream can reach the seed through it. Degraded bindings answer the empty-array default
+	// after warning once (contract §6).
+	if (IsDataAssetAccessor(SourceNode->Type))
+	{
+		FStoryFlowVariant DataAssetValue;
+		if (SourceNode->Data.bIsArray && TryReadDataAssetVariable(SourceNode, DataAssetValue))
+		{
+			return DataAssetValue.GetArray();
+		}
+		return TArray<FStoryFlowVariant>();
 	}
 
 	// mapKeys / mapValues: pure ops that project a map into an array. Recomputed
@@ -1968,6 +2070,38 @@ FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariableByHandle(FStoryF
 			return Var;
 		}
 		return nullptr;
+	}
+
+	case EStoryFlowNodeType::GetDataAssetVariable:
+	case EStoryFlowNodeType::SetDataAssetVariable:
+	{
+		// A map-typed `.sfd` accessor resolves to a DETACHED SNAPSHOT parked on the node's
+		// runtime state, never to live store storage: the store copies on read by contract §3,
+		// and handing a mutator a pointer into the seed is exactly what that rule forbids. HTML
+		// parity is exact — evaluateMapFromNode builds a fresh Map from the `.sfd` entry list, so
+		// map mutators wired to one observably change nothing in either runtime (the DataAsset
+		// kind below is what makes HandleMapModify skip instead of writing the snapshot).
+		//
+		// The snapshot is refreshed on EVERY resolution, which is the map twin of the boolean
+		// arm's never-memoize rule: overlay writes and ancestor cascades must be visible on the
+		// next read.
+		FNodeRuntimeState& DataAssetState = Context->GetNodeState(SourceNode->Id);
+		FStoryFlowVariant DataAssetValue;
+		if (SourceNode->Data.VariableType != TEXT("map") || !TryReadDataAssetVariable(SourceNode, DataAssetValue))
+		{
+			return nullptr;
+		}
+		DataAssetState.DataAssetMapSnapshot.Id = SourceNode->Data.VariableId;
+		DataAssetState.DataAssetMapSnapshot.Name = SourceNode->Data.VariableName;
+		DataAssetState.DataAssetMapSnapshot.Type = EStoryFlowVariableType::Map;
+		// SetMap, not assignment of the variant: an unresolved-but-declared read could be
+		// non-map-typed, and every reader below expects established map storage.
+		DataAssetState.DataAssetMapSnapshot.Value.SetMap(DataAssetValue.GetMap());
+		if (OutSourceKind)
+		{
+			*OutSourceKind = EMapSourceKind::DataAsset;
+		}
+		return &DataAssetState.DataAssetMapSnapshot;
 	}
 
 	case EStoryFlowNodeType::RunScript:

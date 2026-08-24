@@ -85,6 +85,16 @@ struct FNodeRuntimeState
 	 * EMapSourceKind::RunScriptOutput).
 	 */
 	TMap<FString, FStoryFlowVariable> MapOutputVariables;
+
+	/**
+	 * Scratch storage for a map-typed `.sfd` accessor's read (contract §4). The store resolves
+	 * COPIES, and the map resolver's signature hands back FStoryFlowVariable* — so the copy has
+	 * to live somewhere with a stable address, and this is it. DETACHED from the store by
+	 * construction, exactly like MapOutputVariables is from its dead invocation: the HTML
+	 * runtime builds a fresh Map off a `.sfd` read too, so mutating through this pointer is an
+	 * observable no-op in BOTH runtimes (EMapSourceKind::DataAsset flags it read-only).
+	 */
+	FStoryFlowVariable DataAssetMapSnapshot;
 };
 
 /**
@@ -247,6 +257,14 @@ public:
 	 */
 	TSet<FString> WarnedMapNodes;
 
+	/**
+	 * Degraded Data Asset accessors already warned about, keyed "{NodeId}|{reason}" —
+	 * per node AND per reason, which is what contract §6 asks for (a node that is both
+	 * unwired and stale says so once each, not once ever). Same dedup family as
+	 * WarnedUnknownNodes; cleared by Reset(), which is the §6 re-arm on game restart.
+	 */
+	TSet<FString> WarnedDataAssetNodes;
+
 public:
 	// === Node Accessors ===
 
@@ -288,6 +306,45 @@ public:
 	 * declares the id — the caller owns the warning.
 	 */
 	bool TrySetDataAsset(const FString& AssetId, const FString& VariableId, const FStoryFlowVariant& Value);
+
+	/**
+	 * THE DEGRADATION LADDER an accessor node's binding walks (contract §6), mirroring
+	 * runtime-data-assets.js `resolveBinding` reason for reason. False — with a warning latched
+	 * once per node per reason — when any part of the binding is broken:
+	 *
+	 *   nodata  the node carries no variableId at all
+	 *   unwired nothing usable on the `dataAsset` pin (unwired / not a pill / an unbound pill)
+	 *   deadref the pill names an asset this seed does not carry
+	 *   missing no chain level declares the id
+	 *   changed the declaration moved under a live node (§6.1 DeclMatches)
+	 *
+	 * ONE ladder for the read arms and the write handler, ON PURPOSE. Letting Get and Set drift
+	 * gives you an accessor that reads the declared default while its twin writes an overlay
+	 * entry that SHADOWS that default for the rest of the session — and cascades to every
+	 * descendant, if it landed on a base.
+	 *
+	 * The wire IS the binding (contract §2.2): the asset comes from a SINGLE HOP off the
+	 * `dataAsset` pin to a getDataAsset pill. One hop is sufficient, not a limitation — the
+	 * editor collapses reroute elbows before export, so a wire that ran through elbows on the
+	 * canvas arrives here as a direct pill -> accessor edge.
+	 */
+	bool TryResolveDataAssetBinding(const FStoryFlowNode& Accessor, FString& OutAssetId);
+
+	/**
+	 * The assetId on the pill wired into `Accessor`'s Data Asset pin, or empty for every
+	 * "nothing usable upstream" case. Split out of the ladder because it is the only half that
+	 * reads the GRAPH rather than the store.
+	 */
+	FString ResolveDataAssetId(const FStoryFlowNode& Accessor) const;
+
+	/**
+	 * Log a degraded Data Asset warning ONCE per node per reason (contract §6). These nodes are
+	 * read from render paths — a dialogue's option conditions re-evaluate on every render — so an
+	 * unlatched warning would be a line per frame. Re-armed by Reset(), i.e. by a game restart.
+	 * The Set's value-pin refusal deliberately does NOT come through here: it names a wiring
+	 * mistake on an exec node the author just ran, and exec fires far less often than a condition.
+	 */
+	void MaybeWarnDataAsset(const FString& NodeId, const TCHAR* Reason, const FString& Message);
 
 	/** Build name-to-ID index for local variables */
 	void RebuildLocalNameIndex();

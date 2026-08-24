@@ -204,6 +204,30 @@ namespace StoryFlowDataAssets
 		return true;
 	}
 
+	EStoryFlowVariableType WireTypeToVariableType(const FString& WireType)
+	{
+		if (WireType == TEXT("boolean"))   { return EStoryFlowVariableType::Boolean; }
+		if (WireType == TEXT("integer"))   { return EStoryFlowVariableType::Integer; }
+		if (WireType == TEXT("float"))     { return EStoryFlowVariableType::Float; }
+		if (WireType == TEXT("string"))    { return EStoryFlowVariableType::String; }
+		if (WireType == TEXT("enum"))      { return EStoryFlowVariableType::Enum; }
+		if (WireType == TEXT("image"))     { return EStoryFlowVariableType::Image; }
+		if (WireType == TEXT("audio"))     { return EStoryFlowVariableType::Audio; }
+		if (WireType == TEXT("character")) { return EStoryFlowVariableType::Character; }
+		if (WireType == TEXT("map"))       { return EStoryFlowVariableType::Map; }
+		return EStoryFlowVariableType::None;
+	}
+
+	bool DeclMatchesNodeData(const FStoryFlowVariable& Declaration, const FStoryFlowNodeData& Data)
+	{
+		return DeclMatches(
+			Declaration,
+			WireTypeToVariableType(Data.VariableType),
+			Data.bIsArray,
+			WireTypeToVariableType(Data.KeyType),
+			WireTypeToVariableType(Data.ValueType));
+	}
+
 	void ResetOverlay(FOverlay& Overlay)
 	{
 		Overlay.Empty();

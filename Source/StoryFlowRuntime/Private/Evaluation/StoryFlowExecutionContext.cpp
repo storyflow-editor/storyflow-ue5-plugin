@@ -5,6 +5,7 @@
 #include "Data/StoryFlowScriptAsset.h"
 #include "Data/StoryFlowProjectAsset.h"
 #include "Data/StoryFlowCharacterAsset.h"
+#include "Data/StoryFlowHandles.h"
 
 void FStoryFlowExecutionContext::Initialize(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript)
 {
@@ -77,6 +78,7 @@ void FStoryFlowExecutionContext::Reset()
 	NodeRuntimeStates.Empty();
 	WarnedUnknownNodes.Empty();
 	WarnedMapNodes.Empty();
+	WarnedDataAssetNodes.Empty();
 	ExternalGlobalVariables = nullptr;
 	ExternalCharacters = nullptr;
 	DataAssetStore = StoryFlowDataAssets::FStoreRef();
@@ -155,6 +157,101 @@ bool FStoryFlowExecutionContext::TrySetDataAsset(const FString& AssetId, const F
 		return false;
 	}
 	return StoryFlowDataAssets::TrySet(*DataAssetStore.Seed, *DataAssetStore.Overlay, AssetId, VariableId, Value);
+}
+
+void FStoryFlowExecutionContext::MaybeWarnDataAsset(const FString& NodeId, const TCHAR* Reason, const FString& Message)
+{
+	// The key is node AND reason, so a node with two problems reports both once,
+	// and a fixed-then-broken-again node stays quiet until the next game restart.
+	const FString Key = NodeId + TEXT("|") + Reason;
+	if (WarnedDataAssetNodes.Contains(Key))
+	{
+		return;
+	}
+	WarnedDataAssetNodes.Add(Key);
+	UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: %s"), *Message);
+}
+
+FString FStoryFlowExecutionContext::ResolveDataAssetId(const FStoryFlowNode& Accessor) const
+{
+	const FStoryFlowConnection* Edge = FindInputEdge(Accessor.Id, StoryFlowHandles::In_DataAssetRef);
+	if (!Edge)
+	{
+		return FString();
+	}
+
+	// const_cast only because GetNode is non-const; nothing here writes through it.
+	const FStoryFlowNode* Source = const_cast<FStoryFlowExecutionContext*>(this)->GetNode(Edge->Source);
+
+	// The type check keeps a non-pill source honest instead of speculatively reading an
+	// AssetId field off whatever is on the far end (contract §6 row 1). An unbound pill
+	// answers with its own empty AssetId, which is row 2 — both degrade identically here,
+	// and the reference ladder folds them into one 'unwired' reason too.
+	if (!Source || Source->Type != EStoryFlowNodeType::GetDataAsset)
+	{
+		return FString();
+	}
+	return Source->Data.AssetId;
+}
+
+bool FStoryFlowExecutionContext::TryResolveDataAssetBinding(const FStoryFlowNode& Accessor, FString& OutAssetId)
+{
+	if (Accessor.Data.VariableId.IsEmpty())
+	{
+		MaybeWarnDataAsset(Accessor.Id, TEXT("nodata"),
+			FString::Printf(TEXT("Data Asset accessor has no variable binding: node %s"), *Accessor.Id));
+		return false;
+	}
+
+	const FString AssetId = ResolveDataAssetId(Accessor);
+	if (AssetId.IsEmpty())
+	{
+		MaybeWarnDataAsset(Accessor.Id, TEXT("unwired"),
+			FString::Printf(TEXT("Data Asset accessor has no Data Asset connected: node %s"), *Accessor.Id));
+		return false;
+	}
+
+	if (!DataAssetStore.IsValid())
+	{
+		// No store at all (a context that never met a subsystem). Latched under the dead-reference
+		// reason: from the node's point of view its asset is not there, and the alternative is a
+		// silent false that reads exactly like a healthy miss.
+		MaybeWarnDataAsset(Accessor.Id, TEXT("deadref"),
+			FString::Printf(TEXT("Data Asset store unavailable: %s (node %s)"), *AssetId, *Accessor.Id));
+		return false;
+	}
+
+	// Dead REFERENCE vs stale BINDING: FindDeclaration answers null for both, so ask the seed
+	// which one this is and name it — the two have different fixes (rebind the pill vs rebind
+	// the accessor).
+	if (!StoryFlowDataAssets::HasAsset(*DataAssetStore.Seed, AssetId))
+	{
+		MaybeWarnDataAsset(Accessor.Id, TEXT("deadref"),
+			FString::Printf(TEXT("Data Asset not found: %s (node %s)"), *AssetId, *Accessor.Id));
+		return false;
+	}
+
+	const FStoryFlowVariable* Declaration = StoryFlowDataAssets::FindDeclaration(*DataAssetStore.Seed, AssetId, Accessor.Data.VariableId);
+	if (!Declaration)
+	{
+		MaybeWarnDataAsset(Accessor.Id, TEXT("missing"),
+			FString::Printf(TEXT("Data Asset variable not found: %s.%s (node %s)"), *AssetId, *Accessor.Data.VariableId, *Accessor.Id));
+		return false;
+	}
+
+	// §6.1: the declaration moved under a live node. Treated as MISSING, never coerced — within
+	// the string family a value carries no evidence of its declared type, which is exactly why
+	// the check is on the DECLARATION. The character-variable arms have no equivalent gate; that
+	// is their bug, not a pattern to copy.
+	if (!StoryFlowDataAssets::DeclMatchesNodeData(*Declaration, Accessor.Data))
+	{
+		MaybeWarnDataAsset(Accessor.Id, TEXT("changed"),
+			FString::Printf(TEXT("Data Asset variable type changed since this node was made: %s.%s (node %s)"), *AssetId, *Accessor.Data.VariableId, *Accessor.Id));
+		return false;
+	}
+
+	OutAssetId = AssetId;
+	return true;
 }
 
 FStoryFlowCharacterDef* FStoryFlowExecutionContext::FindCharacter(const FString& CharacterPath)
