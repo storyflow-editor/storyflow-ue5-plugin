@@ -469,33 +469,45 @@ void UStoryFlowImporter::ImportCharacterIndex(const FString& BuildDirectory, USt
 	// either way).
 	InOutProjectHashParts.Add(SerializeJsonCondensed(CharacterIndexJson.ToSharedRef()));
 
-	// Unknown schemaVersion: warn and skip the whole file — the degraded posture.
-	// The bridge stays empty and paths keep working; never a crash, never a guess
-	// at a format this plugin does not know.
+	// Unknown or missing schemaVersion: warn and skip the whole file — the degraded
+	// posture. The bridge stays empty and paths keep working; never a crash, never a
+	// guess at a format this plugin does not know. The two messages differ because the
+	// repairs differ: a missing version is a malformed artifact, a wrong one is a
+	// version skew.
 	FString SchemaVersion;
-	CharacterIndexJson->TryGetStringField(TEXT("schemaVersion"), SchemaVersion);
+	if (!CharacterIndexJson->TryGetStringField(TEXT("schemaVersion"), SchemaVersion))
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: character-index.json declares no schemaVersion - ignoring the index (characters keep resolving by path)"));
+		return;
+	}
 	if (SchemaVersion != TEXT("1"))
 	{
 		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: character-index.json declares schemaVersion '%s', which this plugin does not support - ignoring the index (characters keep resolving by path)"), *SchemaVersion);
 		return;
 	}
 
+	// The last rung of the exists-but-unusable ladder: a version this plugin supports
+	// must carry a characters OBJECT, so anything else (absent, or an array/string) is
+	// the same corruption posture as the parse failure above, one level down.
 	const TSharedPtr<FJsonObject>* CharactersObject = nullptr;
-	if (CharacterIndexJson->TryGetObjectField(TEXT("characters"), CharactersObject))
+	if (!CharacterIndexJson->TryGetObjectField(TEXT("characters"), CharactersObject))
 	{
-		for (const auto& IndexPair : (*CharactersObject)->Values)
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: character-index.json has no readable characters object - ignoring the index (characters keep resolving by path)"));
+		return;
+	}
+
+	for (const auto& IndexPair : (*CharactersObject)->Values)
+	{
+		FString RecordKey;
+		if (!IndexPair.Value.IsValid() || !IndexPair.Value->TryGetString(RecordKey))
 		{
-			FString RecordKey;
-			if (!IndexPair.Value.IsValid() || !IndexPair.Value->TryGetString(RecordKey))
-			{
-				continue;
-			}
-			// Stored VERBATIM: the export contract guarantees the value is already
-			// the exact NormalizeCharacterPath shape (lowercase, backslashes), so a
-			// re-normalization here could only mask an exporter that broke that
-			// guarantee — better that such a key visibly misses.
-			ProjectAsset->CharacterIdToPath.Add(IndexPair.Key, RecordKey);
+			continue;
 		}
+		// Stored VERBATIM: the export contract guarantees the value is already
+		// the exact NormalizeCharacterPath shape (lowercase, backslashes), so a
+		// re-normalization here could only mask an exporter that broke that
+		// guarantee — better that such a key visibly misses.
+		ProjectAsset->CharacterIdToPath.Add(IndexPair.Key, RecordKey);
 	}
 }
 

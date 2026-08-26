@@ -7,6 +7,7 @@
 #include "Data/StoryFlowProjectAsset.h"
 #include "Data/StoryFlowScriptAsset.h"
 #include "Import/StoryFlowImporter.h"
+#include "StoryFlowCharacterIndexFixture.h"
 #include "StoryFlowRuntime.h"
 #include "StoryFlowScopedWorld.h"
 #include "EditorAssetLibrary.h"
@@ -18,81 +19,24 @@
  * character-index.json import — the character id bridge (P4 contract §1.4) — plus the additive
  * characterRefId / characterId node fields it exists to serve.
  *
- * The index is imported through the REAL importer against a build-folder fixture, house
- * pattern: import is where the artifact's absence semantics live (absent file = pre-P4
- * export = empty bridge, silently), and a test that parsed the file itself would happily
- * pass while ImportProjectFromJson never called the parser at all.
+ * The fixture-writing helpers live in StoryFlowCharacterIndexFixture.h, shared with the
+ * id-resolution suites that build on the same bridge. The index is imported through the REAL
+ * importer against a build-folder fixture, house pattern: import is where the artifact's
+ * absence semantics live (absent file = pre-P4 export = empty bridge, silently), and a test
+ * that parsed the file itself would happily pass while ImportProjectFromJson never called the
+ * parser at all.
+ *
+ * The exists-but-unusable ladder gets one pinned rung per way an index can degrade: corrupt
+ * file, missing schemaVersion, unknown schemaVersion, no characters object. Every rung warns
+ * exactly once with the same named consequence, leaves the bridge empty, and never touches the
+ * rest of the import.
  *
  * Run via: Session Frontend > Automation > "StoryFlow.CharacterIndex", or
  *   UnrealEditor-Cmd.exe StoryFlow.uproject -ExecCmds="Automation RunTests StoryFlow.CharacterIndex" -TestExit="Automation Test Queue Empty" -unattended -nullrhi
  */
 
-namespace StoryFlowCharacterIndexTestHelpers
-{
-	const TCHAR* TestRoot = TEXT("/Game/StoryFlowCharacterIndexTests");
-
-	FString FixtureBuildDir()
-	{
-		return FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Temp/StoryFlowCharacterIndexFixture"));
-	}
-
-	void CleanUp()
-	{
-		UEditorAssetLibrary::DeleteDirectory(TestRoot);
-		IFileManager::Get().DeleteDirectory(*FixtureBuildDir(), false, true);
-	}
-
-	/**
-	 * Write the fixture build folder: minimal project, two characters, and — when a body is
-	 * given — a character-index.json. IndexJson == nullptr writes NO index file, the pre-P4
-	 * export shape. Returns false if any write failed, so callers can fail fast.
-	 */
-	bool WriteFixture(const TCHAR* IndexJson)
-	{
-		const FString Dir = FixtureBuildDir();
-		// Delete any leftover index first: an absent-file test after a present-file test
-		// would otherwise read the previous test's artifact.
-		IFileManager::Get().DeleteDirectory(*Dir, false, true);
-		IFileManager::Get().MakeDirectory(*Dir, /*Tree*/ true);
-		bool bWritten = FFileHelper::SaveStringToFile(TEXT(R"JSON({"version":"1.0.0","apiVersion":"1","startupScript":"main"})JSON"),
-			*FPaths::Combine(Dir, TEXT("project.json")));
-		bWritten = bWritten && FFileHelper::SaveStringToFile(
-			TEXT(R"JSON({"characters":{"chars\\hero.sfc":{"name":"Hero"},"chars\\villain.sfc":{"name":"Villain"}}})JSON"),
-			*FPaths::Combine(Dir, TEXT("characters.json")));
-		bWritten = bWritten && FFileHelper::SaveStringToFile(
-			TEXT(R"JSON({"startNode":"0","nodes":{"0":{"type":"start","id":"0"}}})JSON"),
-			*FPaths::Combine(Dir, TEXT("main.json")));
-		if (IndexJson)
-		{
-			bWritten = bWritten && FFileHelper::SaveStringToFile(IndexJson, *FPaths::Combine(Dir, TEXT("character-index.json")));
-		}
-		return bWritten;
-	}
-
-	/** Import the fixture folder, deleting whatever a previous run left behind first — a
-	    stale asset carries a matching hash and would be skipped rather than re-parsed. */
-	UStoryFlowProjectAsset* ImportFixture(FAutomationTestBase& Test, const TCHAR* IndexJson)
-	{
-		UEditorAssetLibrary::DeleteDirectory(TestRoot);
-		if (!Test.TestTrue(TEXT("the fixture build folder is writable"), WriteFixture(IndexJson)))
-		{
-			return nullptr;
-		}
-		UStoryFlowProjectAsset* Project = UStoryFlowImporter::ImportProject(FixtureBuildDir(), TestRoot);
-		if (!Test.TestNotNull(TEXT("the fixture imports"), Project))
-		{
-			CleanUp();
-		}
-		return Project;
-	}
-
-	/** The contract-shaped index for the two fixture characters: values VERBATIM in the
-	    normalized record-key shape (lowercase, backslashes). */
-	const TCHAR* TwoCharacterIndex = TEXT(R"JSON({"schemaVersion":"1","characters":{"da_hero0001":"chars\\hero.sfc","da_villain1":"chars\\villain.sfc"}})JSON");
-}
-
 // ============================================================================
-// The bridge itself: present, absent, empty, unreadable
+// The bridge itself: present, absent, empty
 // ============================================================================
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowCharacterIndexImportTest,
@@ -165,9 +109,8 @@ bool FStoryFlowCharacterIndexEmptyMapTest::RunTest(const FString& Parameters)
 {
 	using namespace StoryFlowCharacterIndexTestHelpers;
 
-	// A P4 export from a project with no migrated characters: the file exists, the map is
-	// empty. Same observable bridge as absence — the distinction lives in the project hash,
-	// where the file's serialized JSON is a part only when the file exists.
+	// First the ABSENT baseline, whose recorded hash the empty-map import below must
+	// differ from.
 	UStoryFlowProjectAsset* Project = ImportFixture(*this, nullptr);
 	if (!Project)
 	{
@@ -175,9 +118,12 @@ bool FStoryFlowCharacterIndexEmptyMapTest::RunTest(const FString& Parameters)
 	}
 	const FString AbsentHash = Project->ImportedSourceHash;
 
-	// Same fixture with the empty-map index added. WriteFixture (not ImportFixture) so the
-	// existing assets survive: the point is the RE-import's skip decision, and deleting the
-	// content root would erase the recorded hash the decision compares against.
+	// Now the subject: a P4 export from a project with no migrated characters — the file
+	// exists, the map is empty. Same observable bridge as absence; the distinction lives
+	// in the project hash, where the file's serialized JSON is a part only when the file
+	// exists. WriteFixture (not ImportFixture) so the existing assets survive: the point
+	// is the RE-import's skip decision, and deleting the content root would erase the
+	// recorded hash the decision compares against.
 	if (!TestTrue(TEXT("the empty-map fixture is writable"), WriteFixture(TEXT(R"JSON({"schemaVersion":"1","characters":{}})JSON"))))
 	{
 		CleanUp();
@@ -195,6 +141,62 @@ bool FStoryFlowCharacterIndexEmptyMapTest::RunTest(const FString& Parameters)
 	// The file's presence IS a hash input, even when it maps nothing: an exporter starting
 	// to ship the artifact must dirty the project asset, not be skipped as unchanged.
 	TestNotEqual(TEXT("an empty-map index is distinguishable from an absent one in the hash"), Project->ImportedSourceHash, AbsentHash);
+
+	CleanUp();
+	return true;
+}
+
+// ============================================================================
+// The exists-but-unusable ladder, one rung per test
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowCharacterIndexMalformedTest,
+	"StoryFlow.CharacterIndex.MalformedFile",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowCharacterIndexMalformedTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowCharacterIndexTestHelpers;
+
+	// A truncated index (interrupted export, disk trouble): corruption is NOT absence —
+	// the contract defines only a missing file as pre-P4 — so unlike the absent case this
+	// one warns, with the same named consequence as the other rungs. Bridge stays empty,
+	// the rest of the import is untouched.
+	AddExpectedError(TEXT("character-index.json exists but could not be read"), EAutomationExpectedErrorFlags::Contains, 1);
+
+	UStoryFlowProjectAsset* Project = ImportFixture(*this, TEXT(R"JSON({"schemaVersion":"1","characters":{"da_hero0001":"chars\\he)JSON"));
+	if (!Project)
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("the corrupt index leaves the bridge empty"), Project->CharacterIdToPath.Num(), 0);
+	TestEqual(TEXT("the characters themselves still import"), Project->Characters.Num(), 2);
+
+	CleanUp();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowCharacterIndexMissingVersionTest,
+	"StoryFlow.CharacterIndex.MissingSchemaVersion",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowCharacterIndexMissingVersionTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowCharacterIndexTestHelpers;
+
+	// Well-formed JSON with NO schemaVersion at all: a malformed artifact, not a version
+	// skew, so it gets its own message rather than reporting an empty-string version.
+	AddExpectedError(TEXT("character-index.json declares no schemaVersion"), EAutomationExpectedErrorFlags::Contains, 1);
+
+	UStoryFlowProjectAsset* Project = ImportFixture(*this, TEXT(R"JSON({"characters":{"da_hero0001":"chars\\hero.sfc"}})JSON"));
+	if (!Project)
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("the versionless index leaves the bridge empty"), Project->CharacterIdToPath.Num(), 0);
+	TestEqual(TEXT("the characters themselves still import"), Project->Characters.Num(), 2);
 
 	CleanUp();
 	return true;
@@ -225,27 +227,26 @@ bool FStoryFlowCharacterIndexUnknownVersionTest::RunTest(const FString& Paramete
 	return true;
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowCharacterIndexMalformedTest,
-	"StoryFlow.CharacterIndex.MalformedFile",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowCharacterIndexNoCharactersObjectTest,
+	"StoryFlow.CharacterIndex.NoCharactersObject",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-bool FStoryFlowCharacterIndexMalformedTest::RunTest(const FString& Parameters)
+bool FStoryFlowCharacterIndexNoCharactersObjectTest::RunTest(const FString& Parameters)
 {
 	using namespace StoryFlowCharacterIndexTestHelpers;
 
-	// A truncated index (interrupted export, disk trouble): corruption is NOT absence —
-	// the contract defines only a missing file as pre-P4 — so unlike the absent case this
-	// one warns, with the same named consequence as the unknown-version gate. Bridge stays
-	// empty, the rest of the import is untouched.
-	AddExpectedError(TEXT("character-index.json exists but could not be read"), EAutomationExpectedErrorFlags::Contains, 1);
+	// A supported version whose characters member is the wrong shape (an array here): the
+	// last rung of the ladder — same corruption posture as the parse failure, one level
+	// down, and the same named consequence.
+	AddExpectedError(TEXT("character-index.json has no readable characters object"), EAutomationExpectedErrorFlags::Contains, 1);
 
-	UStoryFlowProjectAsset* Project = ImportFixture(*this, TEXT(R"JSON({"schemaVersion":"1","characters":{"da_hero0001":"chars\\he)JSON"));
+	UStoryFlowProjectAsset* Project = ImportFixture(*this, TEXT(R"JSON({"schemaVersion":"1","characters":["da_hero0001"]})JSON"));
 	if (!Project)
 	{
 		return false;
 	}
 
-	TestEqual(TEXT("the corrupt index leaves the bridge empty"), Project->CharacterIdToPath.Num(), 0);
+	TestEqual(TEXT("the objectless index leaves the bridge empty"), Project->CharacterIdToPath.Num(), 0);
 	TestEqual(TEXT("the characters themselves still import"), Project->Characters.Num(), 2);
 
 	CleanUp();
@@ -284,6 +285,7 @@ bool FStoryFlowCharacterIndexNodeFieldsTest::RunTest(const FString& Parameters)
 	)JSON"), *ScriptJsonPath);
 	if (!TestTrue(TEXT("the node fixture is writable"), bWritten))
 	{
+		CleanUp();
 		return false;
 	}
 

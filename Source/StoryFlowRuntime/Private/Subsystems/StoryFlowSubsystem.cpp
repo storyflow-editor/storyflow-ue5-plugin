@@ -122,7 +122,10 @@ void UStoryFlowSubsystem::ResetRuntimeCharacters()
 	{
 		RuntimeCharacters.Empty();
 		// The id bridge travels with the characters it indexes: same source asset, same
-		// lifetime, so a reset refreshes both together (P4 contract §1.4).
+		// lifetime, so a reset refreshes both together (P4 contract §1.4). One qualifier:
+		// save loading repopulates RuntimeCharacters WITHOUT touching the bridge — also
+		// correct, because the bridge is project-derived, not runtime state, and a save
+		// round-trips the same record keys the bridge points at.
 		CharacterIdToPath = ProjectAsset->CharacterIdToPath;
 		for (const auto& CharPair : ProjectAsset->Characters)
 		{
