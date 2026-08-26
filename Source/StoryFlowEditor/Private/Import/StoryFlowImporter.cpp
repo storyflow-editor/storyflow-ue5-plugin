@@ -446,44 +446,55 @@ void UStoryFlowImporter::ImportCharacterIndex(const FString& BuildDirectory, USt
 	// An ABSENT file is a pre-P4 export, not an error: the bridge stays empty and every
 	// character keeps resolving by path, so no log line either.
 	FString CharacterIndexPath = FPaths::Combine(BuildDirectory, TEXT("character-index.json"));
-	if (FPaths::FileExists(CharacterIndexPath))
+	if (!FPaths::FileExists(CharacterIndexPath))
 	{
-		TSharedPtr<FJsonObject> CharacterIndexJson = LoadJsonFile(CharacterIndexPath);
-		if (CharacterIndexJson.IsValid())
+		return;
+	}
+
+	TSharedPtr<FJsonObject> CharacterIndexJson = LoadJsonFile(CharacterIndexPath);
+	if (!CharacterIndexJson.IsValid())
+	{
+		// A file that EXISTS but does not parse is corruption, not a pre-P4 export — the
+		// contract defines only absence as absence. Same degraded posture as the version
+		// gate below, and the same named consequence, so the two ways an existing index
+		// can be unusable read identically in the log.
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: character-index.json exists but could not be read as JSON - ignoring the index (characters keep resolving by path)"));
+		return;
+	}
+
+	// Fold the file in BEFORE the version gate: once the file parses the fold is
+	// unconditional, so a gate added below it later can never sit above the fold and make
+	// an input invisible to the skip hash. Folding a file the gate then rejects is merely
+	// conservative (an unknown-to-unknown change re-imports a bridge that stays empty
+	// either way).
+	InOutProjectHashParts.Add(SerializeJsonCondensed(CharacterIndexJson.ToSharedRef()));
+
+	// Unknown schemaVersion: warn and skip the whole file — the degraded posture.
+	// The bridge stays empty and paths keep working; never a crash, never a guess
+	// at a format this plugin does not know.
+	FString SchemaVersion;
+	CharacterIndexJson->TryGetStringField(TEXT("schemaVersion"), SchemaVersion);
+	if (SchemaVersion != TEXT("1"))
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: character-index.json declares schemaVersion '%s', which this plugin does not support - ignoring the index (characters keep resolving by path)"), *SchemaVersion);
+		return;
+	}
+
+	const TSharedPtr<FJsonObject>* CharactersObject = nullptr;
+	if (CharacterIndexJson->TryGetObjectField(TEXT("characters"), CharactersObject))
+	{
+		for (const auto& IndexPair : (*CharactersObject)->Values)
 		{
-			// Fold the file in BEFORE the version gate: a file whose version this plugin
-			// cannot read still shapes the import (the bridge it would have filled stays
-			// empty), so replacing it with a readable one must dirty the project asset.
-			InOutProjectHashParts.Add(SerializeJsonCondensed(CharacterIndexJson.ToSharedRef()));
-
-			// Unknown schemaVersion: warn and skip the whole file — the degraded posture.
-			// The bridge stays empty and paths keep working; never a crash, never a guess
-			// at a format this plugin does not know.
-			FString SchemaVersion;
-			CharacterIndexJson->TryGetStringField(TEXT("schemaVersion"), SchemaVersion);
-			if (SchemaVersion != TEXT("1"))
+			FString RecordKey;
+			if (!IndexPair.Value.IsValid() || !IndexPair.Value->TryGetString(RecordKey))
 			{
-				UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: character-index.json declares schemaVersion '%s', which this plugin does not support - ignoring the index (characters keep resolving by path)"), *SchemaVersion);
-				return;
+				continue;
 			}
-
-			const TSharedPtr<FJsonObject>* CharactersObject = nullptr;
-			if (CharacterIndexJson->TryGetObjectField(TEXT("characters"), CharactersObject))
-			{
-				for (const auto& IndexPair : (*CharactersObject)->Values)
-				{
-					FString RecordKey;
-					if (!IndexPair.Value.IsValid() || !IndexPair.Value->TryGetString(RecordKey))
-					{
-						continue;
-					}
-					// Stored VERBATIM: the export contract guarantees the value is already
-					// the exact NormalizeCharacterPath shape (lowercase, backslashes), so a
-					// re-normalization here could only mask an exporter that broke that
-					// guarantee — better that such a key visibly misses.
-					ProjectAsset->CharacterIdToPath.Add(IndexPair.Key, RecordKey);
-				}
-			}
+			// Stored VERBATIM: the export contract guarantees the value is already
+			// the exact NormalizeCharacterPath shape (lowercase, backslashes), so a
+			// re-normalization here could only mask an exporter that broke that
+			// guarantee — better that such a key visibly misses.
+			ProjectAsset->CharacterIdToPath.Add(IndexPair.Key, RecordKey);
 		}
 	}
 }

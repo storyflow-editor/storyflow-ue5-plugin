@@ -225,6 +225,33 @@ bool FStoryFlowCharacterIndexUnknownVersionTest::RunTest(const FString& Paramete
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowCharacterIndexMalformedTest,
+	"StoryFlow.CharacterIndex.MalformedFile",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowCharacterIndexMalformedTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowCharacterIndexTestHelpers;
+
+	// A truncated index (interrupted export, disk trouble): corruption is NOT absence —
+	// the contract defines only a missing file as pre-P4 — so unlike the absent case this
+	// one warns, with the same named consequence as the unknown-version gate. Bridge stays
+	// empty, the rest of the import is untouched.
+	AddExpectedError(TEXT("character-index.json exists but could not be read"), EAutomationExpectedErrorFlags::Contains, 1);
+
+	UStoryFlowProjectAsset* Project = ImportFixture(*this, TEXT(R"JSON({"schemaVersion":"1","characters":{"da_hero0001":"chars\\he)JSON"));
+	if (!Project)
+	{
+		return false;
+	}
+
+	TestEqual(TEXT("the corrupt index leaves the bridge empty"), Project->CharacterIdToPath.Num(), 0);
+	TestEqual(TEXT("the characters themselves still import"), Project->Characters.Num(), 2);
+
+	CleanUp();
+	return true;
+}
+
 // ============================================================================
 // The additive node fields
 // ============================================================================
