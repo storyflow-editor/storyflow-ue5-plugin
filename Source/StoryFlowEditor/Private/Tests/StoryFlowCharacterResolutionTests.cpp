@@ -640,6 +640,125 @@ bool FStoryFlowCharacterPreP4PathLaneTest::RunTest(const FString& Parameters)
 }
 
 // ============================================================================
+// Pre-P4 FULL-RUN sweep: a complete dialogue run over a pre-P4 export, pinned to V2
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowCharacterPreP4FullRunSweepTest,
+	"StoryFlow.Characters.IdResolution.PreP4FullRunSweep",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowCharacterPreP4FullRunSweepTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowCharacterResolutionTestHelpers;
+
+	// PreP4PathLane pins the lanes one by one; this is the same world driven as a GAME drives
+	// it — one component-owned run through speakers, an inline char-var write, a wired
+	// read-into-write, an option selection and a post-option write — with the component's warn
+	// seam pinned at zero. Any unexpected warning fails the test on its own, so a P4 code path
+	// leaking into the pure path world surfaces twice over.
+	FScopedWorld W;
+	if (!TestTrue(TEXT("world initializes"), W.Init()))
+	{
+		return false;
+	}
+	// NO character-index.json, no id fields anywhere: the pre-P4 export shape.
+	UStoryFlowProjectAsset* Project = ImportFixture(*this, nullptr, TwoCharacterVariablesJson);
+	if (!Project)
+	{
+		return false;
+	}
+	FGCObjectScopeGuard ProjectGuard(Project);
+
+	// start -> D1 (hero speaker, un-normalized spelling) -> S1 (hero Coins = 21 inline,
+	// un-normalized path) -> S2 (villain Coins WIRED from a getter on the hero — the read
+	// lane, exercised mid-run against the value S1 just wrote) -> D2 (villain speaker, one
+	// option) -> S3 (villain Title inline) -> end
+	UStoryFlowScriptAsset* Script = NewObject<UStoryFlowScriptAsset>(GetTransientPackage());
+	FGCObjectScopeGuard ScriptGuard(Script);
+	Script->StartNode = TEXT("0");
+	Script->Nodes.Add(TEXT("0"), MakeNode(TEXT("0"), EStoryFlowNodeType::Start, TEXT("start")));
+	{
+		FStoryFlowNode D1 = MakeNode(TEXT("D1"), EStoryFlowNodeType::Dialogue, TEXT("dialogue"));
+		D1.Data.Text = TEXT("line one");
+		D1.Data.Character = HeroPathUnnormalized;
+		Script->Nodes.Add(D1.Id, D1);
+	}
+	{
+		FStoryFlowNode S1 = MakeCharSetter(TEXT("S1"), TEXT(""), HeroPathUnnormalized, TEXT("Coins"), TEXT("integer"));
+		S1.Data.Value.SetInt(21);
+		Script->Nodes.Add(S1.Id, S1);
+	}
+	Script->Nodes.Add(TEXT("GB"), MakeCharGetter(TEXT("GB"), TEXT(""), HeroKey, TEXT("Coins"), TEXT("integer")));
+	{
+		FStoryFlowNode S2 = MakeCharSetter(TEXT("S2"), TEXT(""), VillainKey, TEXT("Coins"), TEXT("integer"));
+		Script->Nodes.Add(S2.Id, S2);
+		Script->Connections.Add(MakeEdge(TEXT("GB"), TEXT("S2"),
+			StoryFlowHandles::Source(TEXT("GB"), TEXT("integer-")),
+			StoryFlowHandles::Target(TEXT("S2"), TEXT("integer-input"))));
+	}
+	{
+		FStoryFlowNode D2 = MakeNode(TEXT("D2"), EStoryFlowNodeType::Dialogue, TEXT("dialogue"));
+		D2.Data.Text = TEXT("line two");
+		D2.Data.Character = VillainKey;
+		FStoryFlowChoice Choice;
+		Choice.Id = TEXT("opt1");
+		Choice.Text = TEXT("stay");
+		D2.Data.Options.Add(Choice);
+		Script->Nodes.Add(D2.Id, D2);
+	}
+	{
+		FStoryFlowNode S3 = MakeCharSetter(TEXT("S3"), TEXT(""), VillainKey, TEXT("Title"), TEXT("string"));
+		S3.Data.Value.SetString(TEXT("swept"));
+		Script->Nodes.Add(S3.Id, S3);
+	}
+	Script->Nodes.Add(TEXT("End"), MakeNode(TEXT("End"), EStoryFlowNodeType::End, TEXT("end")));
+
+	Script->Connections.Add(MakeEdge(TEXT("0"), TEXT("D1"), StoryFlowHandles::Source(TEXT("0")), StoryFlowHandles::Target(TEXT("D1"))));
+	Script->Connections.Add(MakeEdge(TEXT("D1"), TEXT("S1"), StoryFlowHandles::Source(TEXT("D1")), StoryFlowHandles::Target(TEXT("S1"), TEXT("0"))));
+	Script->Connections.Add(MakeEdge(TEXT("S1"), TEXT("S2"), StoryFlowHandles::Source(TEXT("S1"), StoryFlowHandles::Out_Flow), StoryFlowHandles::Target(TEXT("S2"), TEXT("0"))));
+	Script->Connections.Add(MakeEdge(TEXT("S2"), TEXT("D2"), StoryFlowHandles::Source(TEXT("S2"), StoryFlowHandles::Out_Flow), StoryFlowHandles::Target(TEXT("D2"))));
+	Script->Connections.Add(MakeEdge(TEXT("D2"), TEXT("S3"), StoryFlowHandles::Source(TEXT("D2"), TEXT("opt1")), StoryFlowHandles::Target(TEXT("S3"), TEXT("0"))));
+	Script->Connections.Add(MakeEdge(TEXT("S3"), TEXT("End"), StoryFlowHandles::Source(TEXT("S3"), StoryFlowHandles::Out_Flow), StoryFlowHandles::Target(TEXT("End"), TEXT(""))));
+	Script->BuildConnectionIndices();
+
+	Project->Scripts.Add(TEXT("sweep"), Script);
+	W.Subsystem->SetProject(Project);
+	W.Component->StartDialogueWithScript(TEXT("sweep"));
+
+	TestEqual(TEXT("the first speaker resolves by (un-normalized) path"),
+		W.Component->GetCurrentDialogue().Character.Name, FString(TEXT("Hero")));
+	W.Component->AdvanceDialogue();
+	TestEqual(TEXT("the second speaker resolves after the write chain"),
+		W.Component->GetCurrentDialogue().Character.Name, FString(TEXT("Villain")));
+	TestTrue(TEXT("the option dialogue waits for input"), W.Component->IsWaitingForInput());
+	W.Component->SelectOption(TEXT("opt1"));
+	TestFalse(TEXT("the run completed"), W.Component->IsDialogueActive());
+
+	const FStoryFlowCharacterDef* Hero = W.Subsystem->GetRuntimeCharacters().Find(HeroKey);
+	const FStoryFlowCharacterDef* Villain = W.Subsystem->GetRuntimeCharacters().Find(VillainKey);
+	if (!TestNotNull(TEXT("hero record exists"), Hero) || !TestNotNull(TEXT("villain record exists"), Villain))
+	{
+		CleanUp();
+		return false;
+	}
+
+	TestEqual(TEXT("the inline write landed through the un-normalized path"), Hero->Variables[TEXT("Coins")].Value.GetInt(), 21);
+	// 21, not the villain's authored 1 and not the hero's authored 7: the wired read saw the
+	// value S1 wrote moments earlier — read-after-write through the path lane, exactly V2.
+	TestEqual(TEXT("the wired read-into-write carried the freshly written value"), Villain->Variables[TEXT("Coins")].Value.GetInt(), 21);
+	TestEqual(TEXT("the post-option write landed"), Villain->Variables[TEXT("Title")].Value.GetString(), FString(TEXT("swept")));
+	TestEqual(TEXT("the hero's decoy-adjacent values are untouched"), Hero->Variables[TEXT("Title")].Value.GetString(), FString(TEXT("the bold")));
+
+	// The pin the P4 arc promised: a pre-P4 project drives the whole run through the id-aware
+	// code and the component's context emits not one character id warning.
+	TestEqual(TEXT("the full pre-P4 run emitted zero character id warnings"),
+		W.Component->GetCharacterIdWarningsEmitted(), 0);
+
+	CleanUp();
+	return true;
+}
+
+// ============================================================================
 // Dangling id: ONE warn across repeated lines, path fall-back, Reset re-arms
 // ============================================================================
 
