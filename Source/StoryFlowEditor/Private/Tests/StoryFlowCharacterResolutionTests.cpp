@@ -42,53 +42,16 @@ namespace StoryFlowCharacterResolutionTestHelpers
 	using namespace StoryFlowCharacterIndexTestHelpers;
 	using StoryFlowTestWorld::FScopedWorld;
 
-	// The fixture's two characters: ids, record keys, and one deliberately un-normalized
-	// spelling of the hero path (proves the path lane still normalizes).
-	const TCHAR* HeroId = TEXT("da_hero0001");
-	const TCHAR* VillainId = TEXT("da_villain1");
-	const TCHAR* HeroKey = TEXT("chars\\hero.sfc");
-	const TCHAR* VillainKey = TEXT("chars\\villain.sfc");
+	// The fixture's ids, record keys and the script builders live in the shared fixture header;
+	// this suite adds one deliberately un-normalized spelling of the hero path (proves the path
+	// lane still normalizes).
 	const TCHAR* HeroPathUnnormalized = TEXT("Chars/Hero.sfc");
-
-	FStoryFlowNode MakeNode(const FString& Id, EStoryFlowNodeType Type, const TCHAR* TypeString)
-	{
-		FStoryFlowNode N;
-		N.Id = Id;
-		N.Type = Type;
-		N.TypeString = TypeString;
-		return N;
-	}
-
-	FStoryFlowConnection MakeEdge(const FString& Source, const FString& Target,
-		const FString& SourceHandle, const FString& TargetHandle)
-	{
-		FStoryFlowConnection C;
-		C.Id = Source + TEXT("->") + Target + TEXT("@") + TargetHandle;
-		C.Source = Source;
-		C.Target = Target;
-		C.SourceHandle = SourceHandle;
-		C.TargetHandle = TargetHandle;
-		return C;
-	}
 
 	/** A getCharacterVar node bound by (id, path) — pass empty strings for the unbound halves. */
 	FStoryFlowNode MakeCharGetter(const FString& Id, const TCHAR* CharacterId, const TCHAR* CharacterPath,
 		const TCHAR* VariableName, const TCHAR* VariableType, bool bIsArray = false)
 	{
 		FStoryFlowNode N = MakeNode(Id, EStoryFlowNodeType::GetCharacterVar, TEXT("getCharacterVar"));
-		N.Data.CharacterId = CharacterId;
-		N.Data.CharacterPath = CharacterPath;
-		N.Data.VariableName = VariableName;
-		N.Data.VariableType = VariableType;
-		N.Data.bIsArray = bIsArray;
-		return N;
-	}
-
-	/** Setter twin of MakeCharGetter. */
-	FStoryFlowNode MakeCharSetter(const FString& Id, const TCHAR* CharacterId, const TCHAR* CharacterPath,
-		const TCHAR* VariableName, const TCHAR* VariableType, bool bIsArray = false)
-	{
-		FStoryFlowNode N = MakeNode(Id, EStoryFlowNodeType::SetCharacterVar, TEXT("setCharacterVar"));
 		N.Data.CharacterId = CharacterId;
 		N.Data.CharacterPath = CharacterPath;
 		N.Data.VariableName = VariableName;

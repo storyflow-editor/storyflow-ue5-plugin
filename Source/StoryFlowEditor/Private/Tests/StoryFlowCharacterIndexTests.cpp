@@ -56,17 +56,17 @@ bool FStoryFlowCharacterIndexImportTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("the bridge carries both characters"), Project->CharacterIdToPath.Num(), 2);
 
 	// VERBATIM storage: the value is byte-identical to the file's, no re-normalization pass
-	const FString* HeroKey = Project->CharacterIdToPath.Find(TEXT("da_hero0001"));
-	if (TestNotNull(TEXT("the hero id is bridged"), HeroKey))
+	const FString* BridgedHeroKey = Project->CharacterIdToPath.Find(TEXT("da_hero0001"));
+	if (TestNotNull(TEXT("the hero id is bridged"), BridgedHeroKey))
 	{
-		TestEqual(TEXT("the hero record key is stored verbatim"), *HeroKey, TEXT("chars\\hero.sfc"));
+		TestEqual(TEXT("the hero record key is stored verbatim"), *BridgedHeroKey, TEXT("chars\\hero.sfc"));
 		// The contract's whole point: the value is a DIRECT key into the characters map
-		TestTrue(TEXT("the bridged key hits the Characters map directly"), Project->Characters.Contains(*HeroKey));
+		TestTrue(TEXT("the bridged key hits the Characters map directly"), Project->Characters.Contains(*BridgedHeroKey));
 	}
-	const FString* VillainKey = Project->CharacterIdToPath.Find(TEXT("da_villain1"));
-	if (TestNotNull(TEXT("the villain id is bridged"), VillainKey))
+	const FString* BridgedVillainKey = Project->CharacterIdToPath.Find(TEXT("da_villain1"));
+	if (TestNotNull(TEXT("the villain id is bridged"), BridgedVillainKey))
 	{
-		TestEqual(TEXT("the villain record key is stored verbatim"), *VillainKey, TEXT("chars\\villain.sfc"));
+		TestEqual(TEXT("the villain record key is stored verbatim"), *BridgedVillainKey, TEXT("chars\\villain.sfc"));
 	}
 
 	// The skip-list regression: character-index.json must never be swept up as a script
@@ -359,12 +359,12 @@ bool FStoryFlowCharacterIndexSubsystemBridgeTest::RunTest(const FString& Paramet
 
 	W.Subsystem->SetProject(Project);
 	TestEqual(TEXT("SetProject copies the bridge beside RuntimeCharacters"), W.Subsystem->GetCharacterIdToPath().Num(), 2);
-	const FString* HeroKey = W.Subsystem->GetCharacterIdToPath().Find(TEXT("da_hero0001"));
-	if (TestNotNull(TEXT("the subsystem's copy carries the hero id"), HeroKey))
+	const FString* BridgedHeroKey = W.Subsystem->GetCharacterIdToPath().Find(TEXT("da_hero0001"));
+	if (TestNotNull(TEXT("the subsystem's copy carries the hero id"), BridgedHeroKey))
 	{
 		// The bridge's target map is RuntimeCharacters, which keys exactly as the project's
 		// Characters map does — the verbatim value must hit it directly.
-		TestTrue(TEXT("the bridged key hits RuntimeCharacters directly"), W.Subsystem->GetRuntimeCharacters().Contains(*HeroKey));
+		TestTrue(TEXT("the bridged key hits RuntimeCharacters directly"), W.Subsystem->GetRuntimeCharacters().Contains(*BridgedHeroKey));
 	}
 
 	W.Subsystem->SetProject(nullptr);

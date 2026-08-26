@@ -6,6 +6,7 @@
 
 #include "CoreMinimal.h"
 #include "Data/StoryFlowProjectAsset.h"
+#include "Data/StoryFlowTypes.h"
 #include "Import/StoryFlowImporter.h"
 #include "EditorAssetLibrary.h"
 #include "HAL/FileManager.h"
@@ -54,6 +55,83 @@ namespace StoryFlowCharacterIndexTestHelpers
 			"var_i1":{"name":"Coins","type":"integer","value":1},
 			"var_a1":{"name":"Inventory","type":"string","isArray":true,"value":["dagger"]},
 			"var_m1":{"name":"Reputation","type":"map","keyType":"string","valueType":"integer","value":[{"key":"guards","value":-2}]}}}}})JSON");
+
+	// The two fixture characters' ids and record keys, shared by every suite that asserts on them.
+	inline const TCHAR* HeroId = TEXT("da_hero0001");
+	inline const TCHAR* VillainId = TEXT("da_villain1");
+	inline const TCHAR* HeroKey = TEXT("chars\\hero.sfc");
+	inline const TCHAR* VillainKey = TEXT("chars\\villain.sfc");
+
+	// The divergence suites grow the fixture by ONE character — a save taken before it existed
+	// cannot carry it. The newcomer is defined as FRAGMENTS spliced into the two-character
+	// literals above (GrowFixtureJson), so the hero and villain halves can never drift from the
+	// shared fixture.
+	inline const TCHAR* NewcomerId = TEXT("da_newcomer1");
+	inline const TCHAR* NewcomerKey = TEXT("chars\\newcomer.sfc");
+	inline const TCHAR* NewcomerIndexEntry = TEXT(R"JSON("da_newcomer1":"chars\\newcomer.sfc")JSON");
+	inline const TCHAR* NewcomerVariablesRecord = TEXT(R"JSON("chars\\newcomer.sfc":{"name":"Newcomer","variables":{"var_s1":{"name":"Title","type":"string","value":"the new"}}})JSON");
+
+	/**
+	 * Append one more record inside a fixture literal's outermost object: both literals above
+	 * end with exactly two closing braces (the keyed collection, then the root), so stripping
+	 * those, appending, and re-closing grows the collection without forking the literal.
+	 */
+	inline FString GrowFixtureJson(const TCHAR* TwoCharacterJson, const TCHAR* AppendedRecord)
+	{
+		FString Json = TwoCharacterJson;
+		verify(Json.RemoveFromEnd(TEXT("}}")));
+		return Json + TEXT(",") + AppendedRecord + TEXT("}}");
+	}
+
+	/** TwoCharacterIndex grown by the newcomer's entry. */
+	inline FString ThreeCharacterIndexJson()
+	{
+		return GrowFixtureJson(TwoCharacterIndex, NewcomerIndexEntry);
+	}
+
+	/** TwoCharacterVariablesJson grown by the newcomer's record. */
+	inline FString ThreeCharacterVariablesJsonString()
+	{
+		return GrowFixtureJson(TwoCharacterVariablesJson, NewcomerVariablesRecord);
+	}
+
+	// ========================================================================
+	// Script builders shared by the resolution and save suites
+	// ========================================================================
+
+	inline FStoryFlowNode MakeNode(const FString& Id, EStoryFlowNodeType Type, const TCHAR* TypeString)
+	{
+		FStoryFlowNode N;
+		N.Id = Id;
+		N.Type = Type;
+		N.TypeString = TypeString;
+		return N;
+	}
+
+	inline FStoryFlowConnection MakeEdge(const FString& Source, const FString& Target,
+		const FString& SourceHandle, const FString& TargetHandle)
+	{
+		FStoryFlowConnection C;
+		C.Id = Source + TEXT("->") + Target + TEXT("@") + TargetHandle;
+		C.Source = Source;
+		C.Target = Target;
+		C.SourceHandle = SourceHandle;
+		C.TargetHandle = TargetHandle;
+		return C;
+	}
+
+	/** A setCharacterVar node bound by (id, path) — pass empty strings for the unbound halves. */
+	inline FStoryFlowNode MakeCharSetter(const FString& Id, const TCHAR* CharacterId, const TCHAR* CharacterPath,
+		const TCHAR* VariableName, const TCHAR* VariableType, bool bIsArray = false)
+	{
+		FStoryFlowNode N = MakeNode(Id, EStoryFlowNodeType::SetCharacterVar, TEXT("setCharacterVar"));
+		N.Data.CharacterId = CharacterId;
+		N.Data.CharacterPath = CharacterPath;
+		N.Data.VariableName = VariableName;
+		N.Data.VariableType = VariableType;
+		N.Data.bIsArray = bIsArray;
+		return N;
+	}
 
 	inline FString FixtureBuildDir()
 	{

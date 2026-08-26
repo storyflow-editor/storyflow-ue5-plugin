@@ -29,7 +29,8 @@
  * the §3 promise is about what a shipped game's slot actually holds.
  *
  * Third caller of the shared two-character fixture (StoryFlowCharacterIndexFixture.h); the
- * divergence test parameterizes it with a third character rather than forking it.
+ * divergence test grows it by one character through the header's shared splice helpers rather
+ * than forking it.
  *
  * Run via: Session Frontend > Automation > "StoryFlow.Characters.Save", or
  *   UnrealEditor-Cmd.exe StoryFlow.uproject -ExecCmds="Automation RunTests StoryFlow.Characters.Save" -TestExit="Automation Test Queue Empty" -unattended -nullrhi
@@ -41,35 +42,9 @@ namespace StoryFlowCharacterSaveTestHelpers
 	using StoryFlowEngineContract::JsonEquals;
 	using StoryFlowTestWorld::FScopedWorld;
 
-	// The shared fixture's two characters (see StoryFlowCharacterIndexFixture.h).
-	const TCHAR* HeroId = TEXT("da_hero0001");
-	const TCHAR* VillainId = TEXT("da_villain1");
-	const TCHAR* HeroKey = TEXT("chars\\hero.sfc");
-	const TCHAR* VillainKey = TEXT("chars\\villain.sfc");
-
-	// A third character for the post-load divergence test: the same fixture, one project
-	// version later. The newcomer exists in the import (and therefore in the bridge) but a
-	// save taken before it existed cannot carry it.
-	const TCHAR* NewcomerId = TEXT("da_newcomer1");
-	const TCHAR* NewcomerKey = TEXT("chars\\newcomer.sfc");
-
-	const TCHAR* ThreeCharacterIndex = TEXT(R"JSON({"schemaVersion":"1","characters":{"da_hero0001":"chars\\hero.sfc","da_villain1":"chars\\villain.sfc","da_newcomer1":"chars\\newcomer.sfc"}})JSON");
-
-	const TCHAR* ThreeCharacterVariablesJson = TEXT(R"JSON({"characters":{
-		"chars\\hero.sfc":{"name":"Hero","variables":{
-			"var_b1":{"name":"IsBrave","type":"boolean","value":true},
-			"var_s1":{"name":"Title","type":"string","value":"the bold"},
-			"var_i1":{"name":"Coins","type":"integer","value":7},
-			"var_a1":{"name":"Inventory","type":"string","isArray":true,"value":["sword","shield"]},
-			"var_m1":{"name":"Reputation","type":"map","keyType":"string","valueType":"integer","value":[{"key":"guards","value":3},{"key":"thieves","value":5}]}}},
-		"chars\\villain.sfc":{"name":"Villain","variables":{
-			"var_b1":{"name":"IsBrave","type":"boolean","value":false},
-			"var_s1":{"name":"Title","type":"string","value":"the cruel"},
-			"var_i1":{"name":"Coins","type":"integer","value":1},
-			"var_a1":{"name":"Inventory","type":"string","isArray":true,"value":["dagger"]},
-			"var_m1":{"name":"Reputation","type":"map","keyType":"string","valueType":"integer","value":[{"key":"guards","value":-2}]}}},
-		"chars\\newcomer.sfc":{"name":"Newcomer","variables":{
-			"var_s1":{"name":"Title","type":"string","value":"the new"}}}}})JSON");
+	// The fixture's ids, record keys, the newcomer growth (ThreeCharacterIndexJson /
+	// ThreeCharacterVariablesJsonString) and the script builders all come from the shared
+	// fixture header.
 
 	/**
 	 * The EXPECTED `characters` save section after the id-bound writes in the shape test: the
@@ -95,39 +70,6 @@ namespace StoryFlowCharacterSaveTestHelpers
 
 	/** The save slot every test here writes and deletes. */
 	const TCHAR* SlotName = TEXT("StoryFlowCharacterSlotTest");
-
-	FStoryFlowNode MakeNode(const FString& Id, EStoryFlowNodeType Type, const TCHAR* TypeString)
-	{
-		FStoryFlowNode N;
-		N.Id = Id;
-		N.Type = Type;
-		N.TypeString = TypeString;
-		return N;
-	}
-
-	FStoryFlowConnection MakeEdge(const FString& Source, const FString& Target,
-		const FString& SourceHandle, const FString& TargetHandle)
-	{
-		FStoryFlowConnection C;
-		C.Id = Source + TEXT("->") + Target + TEXT("@") + TargetHandle;
-		C.Source = Source;
-		C.Target = Target;
-		C.SourceHandle = SourceHandle;
-		C.TargetHandle = TargetHandle;
-		return C;
-	}
-
-	/** A setCharacterVar node bound by (id, path) — pass empty strings for the unbound halves. */
-	FStoryFlowNode MakeCharSetter(const FString& Id, const TCHAR* CharacterId, const TCHAR* CharacterPath,
-		const TCHAR* VariableName, const TCHAR* VariableType)
-	{
-		FStoryFlowNode N = MakeNode(Id, EStoryFlowNodeType::SetCharacterVar, TEXT("setCharacterVar"));
-		N.Data.CharacterId = CharacterId;
-		N.Data.CharacterPath = CharacterPath;
-		N.Data.VariableName = VariableName;
-		N.Data.VariableType = VariableType;
-		return N;
-	}
 
 	TSharedPtr<FJsonObject> ParseJsonObject(const FString& Json)
 	{
@@ -457,7 +399,7 @@ bool FStoryFlowCharacterPostLoadDivergenceTest::RunTest(const FString& Parameter
 	}
 
 	// --- Phase B: the project grew a character; the save predates it. ---
-	UStoryFlowProjectAsset* ProjectB = ImportFixture(*this, ThreeCharacterIndex, ThreeCharacterVariablesJson);
+	UStoryFlowProjectAsset* ProjectB = ImportFixture(*this, *ThreeCharacterIndexJson(), *ThreeCharacterVariablesJsonString());
 	if (!ProjectB)
 	{
 		CleanUpWithSlot();
@@ -525,6 +467,7 @@ bool FStoryFlowCharacterPostLoadDivergenceTest::RunTest(const FString& Parameter
 	W.Component->AdvanceDialogue();
 	TestEqual(TEXT("and again on line 2"),
 		W.Component->GetCurrentDialogue().Character.Name, FString(TEXT("Villain")));
+	TestTrue(TEXT("the run is still live when the warn seam is read"), W.Component->IsDialogueActive());
 	TestEqual(TEXT("the run emitted exactly one warn for the unloaded id"),
 		W.Component->GetCharacterIdWarningsEmitted(), 1);
 	W.Component->StopDialogue();

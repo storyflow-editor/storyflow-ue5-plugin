@@ -632,9 +632,12 @@ public:
 	 * an implementation mapping, not an enumeration surface. After a save load this reflects
 	 * the LOADED set — which the asset registry cannot tell you, because the project's
 	 * character assets outlive what a save carried.
+	 *
+	 * The block's one NON-wrapper (a direct read of the loaded set, no resolution involved),
+	 * and pure: a list query mutates nothing and warrants no exec pins.
 	 */
-	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character (By Id)")
-	TArray<FString> GetCharacterPaths();
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Variables|Character (By Id)")
+	TArray<FString> GetCharacterPaths() const;
 
 	/** Id twin of GetCharacterVariable. cf_name / cf_image alias the Name / Image builtins here too (amendment A2a). */
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character (By Id)")

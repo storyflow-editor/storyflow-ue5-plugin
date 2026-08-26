@@ -1635,7 +1635,7 @@ void UStoryFlowComponent::GetCharacterPathById(const FString& CharacterId, FStri
 	OutPath = RecordKey ? *RecordKey : FString();
 }
 
-TArray<FString> UStoryFlowComponent::GetCharacterPaths()
+TArray<FString> UStoryFlowComponent::GetCharacterPaths() const
 {
 	// The LOADED set (amendment A4): RuntimeCharacters' keys in map order — after a save load
 	// that is the save's set, not the project's.
