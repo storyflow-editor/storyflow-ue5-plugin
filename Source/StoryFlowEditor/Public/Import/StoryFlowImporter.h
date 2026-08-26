@@ -83,6 +83,15 @@ private:
 	 */
 	static void ImportDataAssets(const FString& BuildDirectory, const FString& ContentPath, UStoryFlowProjectAsset* ProjectAsset, TArray<FString>& InOutProjectHashParts);
 
+	/**
+	 * Import character-index.json (the character id bridge, P4 contract §1.4) onto the
+	 * project's CharacterIdToPath map. Absent file = pre-P4 export, empty bridge, no
+	 * warning; unknown schemaVersion = warn and skip the file, empty bridge. Appends the
+	 * index JSON to InOutProjectHashParts so the project's skip hash covers it, exactly
+	 * as the characters and data-asset sections do.
+	 */
+	static void ImportCharacterIndex(const FString& BuildDirectory, UStoryFlowProjectAsset* ProjectAsset, TArray<FString>& InOutProjectHashParts);
+
 	// === Parsing Helpers ===
 
 	/** Parse nodes from JSON object */

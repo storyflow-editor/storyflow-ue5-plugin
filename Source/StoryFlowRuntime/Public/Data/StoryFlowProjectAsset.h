@@ -50,6 +50,16 @@ public:
 	TMap<FString, UStoryFlowCharacterAsset*> Characters;
 
 	/**
+	 * Character FILE id (`da_`) -> the Characters map's key, from character-index.json
+	 * (P4 contract §1.4). Values are stored VERBATIM: the export guarantees they are the
+	 * exact NormalizeCharacterPath shape (lowercase, backslashes), so lookups need no
+	 * re-normalization. Empty on pre-P4 exports — ids then resolve nothing and the path
+	 * fields stay authoritative.
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	TMap<FString, FString> CharacterIdToPath;
+
+	/**
 	 * Data Assets (.sfd) the project's scripts reference, PLUS their full ancestor chains,
 	 * keyed by assetId (engine contract §2.1). Keyed by id and not by path because that is
 	 * what the whole contract is keyed by — pills bind ids, the resolver walks ids, saves

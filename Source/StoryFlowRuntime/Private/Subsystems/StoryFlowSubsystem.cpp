@@ -27,6 +27,7 @@ void UStoryFlowSubsystem::Deinitialize()
 	ProjectAsset = nullptr;
 	GlobalVariables.Empty();
 	RuntimeCharacters.Empty();
+	CharacterIdToPath.Empty();
 	DataAssetSeed.Empty();
 	StoryFlowDataAssets::ResetOverlay(DataAssetOverlay);
 	UsedOnceOnlyOptions.Empty();
@@ -74,6 +75,7 @@ void UStoryFlowSubsystem::SetProject(UStoryFlowProjectAsset* NewProject)
 	{
 		GlobalVariables.Empty();
 		RuntimeCharacters.Empty();
+		CharacterIdToPath.Empty();
 		DataAssetSeed.Empty();
 		StoryFlowDataAssets::ResetOverlay(DataAssetOverlay);
 		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Project cleared"));
@@ -119,6 +121,9 @@ void UStoryFlowSubsystem::ResetRuntimeCharacters()
 	if (ProjectAsset)
 	{
 		RuntimeCharacters.Empty();
+		// The id bridge travels with the characters it indexes: same source asset, same
+		// lifetime, so a reset refreshes both together (P4 contract §1.4).
+		CharacterIdToPath = ProjectAsset->CharacterIdToPath;
 		for (const auto& CharPair : ProjectAsset->Characters)
 		{
 			if (CharPair.Value)

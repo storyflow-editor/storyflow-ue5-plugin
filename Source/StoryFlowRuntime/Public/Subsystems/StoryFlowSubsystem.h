@@ -87,6 +87,14 @@ public:
 	const TMap<FString, FStoryFlowCharacterDef>& GetRuntimeCharacters() const { return RuntimeCharacters; }
 
 	/**
+	 * The character id bridge: character FILE id (`da_`) -> RuntimeCharacters key, copied
+	 * from the project's character-index.json (P4 contract §1.4). Empty on pre-P4 imports —
+	 * ids then resolve nothing and the path fields stay authoritative. Const-only: the
+	 * bridge is import data, never runtime state.
+	 */
+	const TMap<FString, FString>& GetCharacterIdToPath() const { return CharacterIdToPath; }
+
+	/**
 	 * Reset runtime characters to their default values from the project
 	 */
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Characters")
@@ -233,6 +241,10 @@ private:
 	/** Runtime copy of characters (mutable, for character variable modifications) */
 	UPROPERTY()
 	TMap<FString, FStoryFlowCharacterDef> RuntimeCharacters;
+
+	/** Character id -> RuntimeCharacters key bridge (read-only copy of the project's index) */
+	UPROPERTY()
+	TMap<FString, FString> CharacterIdToPath;
 
 	/** Read-only Data Asset seed, keyed by assetId (contract §2.1 / §3) */
 	UPROPERTY()

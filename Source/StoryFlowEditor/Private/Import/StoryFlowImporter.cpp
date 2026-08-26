@@ -109,8 +109,11 @@ namespace
 	}
 
 	/** Bump when import parsing or asset population changes, so assets written
-	    by older plugin versions re-save once even if their source is unchanged. */
-	constexpr const TCHAR* ImportHashSchemaVersion = TEXT("5");
+	    by older plugin versions re-save once even if their source is unchanged.
+	    6: character-index.json joins the import and dialogue / character-variable
+	    nodes gain the characterRefId / characterId fields (P4), so assets imported
+	    under 5 must re-parse to pick them up. */
+	constexpr const TCHAR* ImportHashSchemaVersion = TEXT("6");
 
 	FString SerializeJsonCondensed(const TSharedRef<FJsonObject>& JsonObject)
 	{
@@ -431,6 +434,60 @@ void UStoryFlowImporter::ImportDataAssets(const FString& BuildDirectory, const F
 	}
 }
 
+/**
+ * Its own function rather than another inline block in ImportProjectFromJson: the index is a
+ * whole-file artifact with its own validity gate (the schemaVersion check below), and inlining
+ * it would bury that gate's degraded posture inside an already long procedure.
+ */
+void UStoryFlowImporter::ImportCharacterIndex(const FString& BuildDirectory, UStoryFlowProjectAsset* ProjectAsset, TArray<FString>& InOutProjectHashParts)
+{
+	// Load the character id bridge (P4 contract §1.4): character FILE id -> the exact key
+	// characters.json records (and therefore ProjectAsset->Characters) are stored under.
+	// An ABSENT file is a pre-P4 export, not an error: the bridge stays empty and every
+	// character keeps resolving by path, so no log line either.
+	FString CharacterIndexPath = FPaths::Combine(BuildDirectory, TEXT("character-index.json"));
+	if (FPaths::FileExists(CharacterIndexPath))
+	{
+		TSharedPtr<FJsonObject> CharacterIndexJson = LoadJsonFile(CharacterIndexPath);
+		if (CharacterIndexJson.IsValid())
+		{
+			// Fold the file in BEFORE the version gate: a file whose version this plugin
+			// cannot read still shapes the import (the bridge it would have filled stays
+			// empty), so replacing it with a readable one must dirty the project asset.
+			InOutProjectHashParts.Add(SerializeJsonCondensed(CharacterIndexJson.ToSharedRef()));
+
+			// Unknown schemaVersion: warn and skip the whole file — the degraded posture.
+			// The bridge stays empty and paths keep working; never a crash, never a guess
+			// at a format this plugin does not know.
+			FString SchemaVersion;
+			CharacterIndexJson->TryGetStringField(TEXT("schemaVersion"), SchemaVersion);
+			if (SchemaVersion != TEXT("1"))
+			{
+				UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: character-index.json declares schemaVersion '%s', which this plugin does not support - ignoring the index (characters keep resolving by path)"), *SchemaVersion);
+				return;
+			}
+
+			const TSharedPtr<FJsonObject>* CharactersObject = nullptr;
+			if (CharacterIndexJson->TryGetObjectField(TEXT("characters"), CharactersObject))
+			{
+				for (const auto& IndexPair : (*CharactersObject)->Values)
+				{
+					FString RecordKey;
+					if (!IndexPair.Value.IsValid() || !IndexPair.Value->TryGetString(RecordKey))
+					{
+						continue;
+					}
+					// Stored VERBATIM: the export contract guarantees the value is already
+					// the exact NormalizeCharacterPath shape (lowercase, backslashes), so a
+					// re-normalization here could only mask an exporter that broke that
+					// guarantee — better that such a key visibly misses.
+					ProjectAsset->CharacterIdToPath.Add(IndexPair.Key, RecordKey);
+				}
+			}
+		}
+	}
+}
+
 UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedPtr<FJsonObject>& JsonObject, const FString& BuildDirectory, const FString& ContentPath)
 {
 	// Create or reuse project asset
@@ -450,6 +507,7 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 	// Clear all containers for in-place update (keeps the same UObject pointer)
 	ProjectAsset->Scripts.Empty();
 	ProjectAsset->Characters.Empty();
+	ProjectAsset->CharacterIdToPath.Empty();
 	ProjectAsset->DataAssets.Empty();
 	ProjectAsset->GlobalVariables.Empty();
 	ProjectAsset->GlobalStrings.Empty();
@@ -638,6 +696,9 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 	// Load Data Assets (.sfd seed) — engine contract §2.1
 	ImportDataAssets(BuildDirectory, ContentPath, ProjectAsset, ProjectHashParts);
 
+	// Load the character id bridge — P4 contract §1.4
+	ImportCharacterIndex(BuildDirectory, ProjectAsset, ProjectHashParts);
+
 	// Find and import all script files
 	TArray<FString> ScriptFiles;
 	IFileManager::Get().FindFilesRecursive(ScriptFiles, *BuildDirectory, TEXT("*.json"), true, false);
@@ -650,6 +711,7 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 		if (Filename == TEXT("project.json") ||
 			Filename == TEXT("global-variables.json") ||
 			Filename == TEXT("characters.json") ||
+			Filename == TEXT("character-index.json") ||
 			Filename == TEXT("data-assets.json"))
 		{
 			continue;
@@ -1003,6 +1065,12 @@ FStoryFlowNodeData UStoryFlowImporter::ParseNodeData(const TSharedPtr<FJsonObjec
 	{
 		Data.Character = NodeObject->GetStringField(TEXT("character"));
 	}
+	// The speaker's character FILE id (editor 1.8+, additive — P4 contract §1.3). Absent on
+	// pre-migration content, leaving the field empty; `character` above stays authoritative.
+	if (NodeObject->HasField(TEXT("characterRefId")))
+	{
+		Data.CharacterRefId = NodeObject->GetStringField(TEXT("characterRefId"));
+	}
 
 	// Text blocks (non-interactive text displayed in dialogue)
 	if (NodeObject->HasField(TEXT("textBlocks")))
@@ -1163,6 +1231,13 @@ FStoryFlowNodeData UStoryFlowImporter::ParseNodeData(const TSharedPtr<FJsonObjec
 		if (NodeObject->HasField(TEXT("characterPath")))
 		{
 			Data.CharacterPath = NodeObject->GetStringField(TEXT("characterPath"));
+		}
+		// The bound character's FILE id (editor 1.8+, additive — P4 contract §1.3). Absent
+		// on pre-migration content, leaving the field empty; characterPath above stays
+		// authoritative.
+		if (NodeObject->HasField(TEXT("characterId")))
+		{
+			Data.CharacterId = NodeObject->GetStringField(TEXT("characterId"));
 		}
 
 		Data.VariableName = Data.Variable;

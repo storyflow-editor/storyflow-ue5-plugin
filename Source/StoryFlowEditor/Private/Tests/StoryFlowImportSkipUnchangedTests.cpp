@@ -16,8 +16,11 @@
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
 #include "Misc/Paths.h"
+#include "Misc/SecureHash.h"
+#include "Policies/CondensedJsonPrintPolicy.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include "Serialization/JsonWriter.h"
 #include "UObject/Package.h"
 
 /**
@@ -326,6 +329,96 @@ bool FStoryFlowImportSkipUnchangedProjectTest::RunTest(const FString& Parameters
 	SetTestContentReadOnly(ProjectTestRoot, false);
 	UEditorAssetLibrary::DeleteDirectory(ProjectTestRoot);
 	IFileManager::Get().DeleteDirectory(*ProjectFixtureDir(), false, true);
+	return true;
+}
+
+namespace StoryFlowSkipUnchangedTestHelpers
+{
+	/**
+	 * The importer's hash, re-implemented with the SALT AS A PARAMETER: UTF-8 MD5 over the
+	 * salt and each part, a NUL after every one. A deliberate mirror of the file-local
+	 * HashImportSource — the duplication is the test: if either the algorithm or the salt
+	 * changes without the other being considered, the equality below breaks and forces
+	 * whoever changed it to look here.
+	 */
+	FString HashWithSalt(const TCHAR* Salt, const TArray<FString>& Parts)
+	{
+		FMD5 Md5;
+		auto Feed = [&Md5](const FString& Value)
+		{
+			FTCHARToUTF8 Utf8(*Value);
+			Md5.Update(reinterpret_cast<const uint8*>(Utf8.Get()), Utf8.Length());
+			const uint8 Separator = 0;
+			Md5.Update(&Separator, 1);
+		};
+		Feed(Salt);
+		for (const FString& Part : Parts)
+		{
+			Feed(Part);
+		}
+		uint8 Digest[16];
+		Md5.Final(Digest);
+		return BytesToHex(Digest, 16);
+	}
+
+	/** The importer's condensed serialization, for rebuilding a script's hash parts. */
+	FString CondenseJson(const TSharedPtr<FJsonObject>& JsonObject)
+	{
+		FString Out;
+		TSharedRef<TJsonWriter<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>> Writer =
+			TJsonWriterFactory<TCHAR, TCondensedJsonPrintPolicy<TCHAR>>::Create(&Out);
+		FJsonSerializer::Serialize(JsonObject.ToSharedRef(), Writer);
+		Writer->Close();
+		return Out;
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowImportHashSchemaSaltTest,
+	"StoryFlow.Import.SkipUnchanged.HashSchemaSalt",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowImportHashSchemaSaltTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowSkipUnchangedTestHelpers;
+
+	// The schema-version salt is what forces every asset to re-import ONCE after an import
+	// format change (P4 bumped it 5 -> 6 for the character index and id fields): a hash
+	// recorded under the old salt can never match one computed under the new, so the skip
+	// comparison fails and the asset re-parses. This test pins both halves — the salt is
+	// exactly "6", and a stale old-salt hash really does re-import instead of skipping.
+	UEditorAssetLibrary::DeleteDirectory(TestRoot);
+
+	TSharedPtr<FJsonObject> V1 = ScriptV1();
+	if (!TestTrue(TEXT("Fixture JSON parses"), V1.IsValid()))
+	{
+		return false;
+	}
+
+	UStoryFlowScriptAsset* Imported = UStoryFlowImporter::ImportScriptFromJson(V1, TEXT("salt/subject"), TestRoot);
+	if (!TestNotNull(TEXT("initial import succeeds"), Imported))
+	{
+		return false;
+	}
+
+	// A script's hash parts are exactly {condensed source JSON, script path}.
+	const TArray<FString> HashParts = { CondenseJson(V1), TEXT("salt/subject") };
+	const FString CurrentSaltHash = HashWithSalt(TEXT("6"), HashParts);
+	const FString OldSaltHash = HashWithSalt(TEXT("5"), HashParts);
+
+	TestEqual(TEXT("the recorded hash is salted with schema version 6"), Imported->ImportedSourceHash, CurrentSaltHash);
+	TestNotEqual(TEXT("a hash recorded under the old salt can never match"), CurrentSaltHash, OldSaltHash);
+
+	// Simulate an asset last written by the version-5 plugin: same source, old-salt hash.
+	// The re-import must NOT skip — it must re-parse and re-record the current hash.
+	Imported->ImportedSourceHash = OldSaltHash;
+	UStoryFlowScriptAsset* Reimported = UStoryFlowImporter::ImportScriptFromJson(V1, TEXT("salt/subject"), TestRoot);
+	if (TestNotNull(TEXT("re-import over an old-salt hash returns the asset"), Reimported))
+	{
+		TestEqual(TEXT("the old-salt asset was re-imported, not skipped"), Reimported->ImportedSourceHash, CurrentSaltHash);
+	}
+
+	// Cleanup
+	UEditorAssetLibrary::DeleteDirectory(TestRoot);
 	return true;
 }
 

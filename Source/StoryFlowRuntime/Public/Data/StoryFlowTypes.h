@@ -941,6 +941,14 @@ struct STORYFLOWRUNTIME_API FStoryFlowNodeData
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Character;
 
+	/**
+	 * Character FILE id (`da_`) of this dialogue's speaker (editor 1.8+, additive — P4
+	 * contract §1.3). Empty on pre-migration content; Character above remains the
+	 * authoritative fallback whenever the id is empty or resolves nothing.
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	FString CharacterRefId;
+
 	/** Text blocks (non-interactive text displayed in dialogue) */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TArray<FStoryFlowTextBlock> TextBlocks;
@@ -988,6 +996,16 @@ struct STORYFLOWRUNTIME_API FStoryFlowNodeData
 	/** Character path for character variable nodes */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString CharacterPath;
+
+	/**
+	 * Character FILE id (`da_`) bound to a character variable node (editor 1.8+, additive —
+	 * P4 contract §1.3). NOT AssetId below: that vocabulary is scoped to data-asset nodes,
+	 * and a character id never names a `.sfd` seed entry. Empty on pre-migration content;
+	 * CharacterPath above remains the authoritative fallback whenever the id is empty or
+	 * resolves nothing.
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	FString CharacterId;
 
 	/** Variable name for character variable nodes */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
