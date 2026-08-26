@@ -92,6 +92,16 @@ private:
 	 */
 	static void ImportCharacterIndex(const FString& BuildDirectory, UStoryFlowProjectAsset* ProjectAsset, TArray<FString>& InOutProjectHashParts);
 
+	/**
+	 * Import localization.json (the translations sidecar, localization spec §9) onto the
+	 * project's language tables. THE FILE-PRESENCE MARKER: an absent file is a
+	 * pre-localization export and leaves the project source-only with zero behavior change
+	 * and no warning; an unusable one warns and degrades the same way, exactly as the
+	 * character index does. Appends the sidecar JSON to InOutProjectHashParts so the
+	 * project's skip hash covers it, like every other project-level input.
+	 */
+	static void ImportLocalization(const FString& BuildDirectory, UStoryFlowProjectAsset* ProjectAsset, TArray<FString>& InOutProjectHashParts);
+
 	// === Parsing Helpers ===
 
 	/** Parse nodes from JSON object */

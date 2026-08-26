@@ -563,11 +563,43 @@ bool FStoryFlowExecutionContext::PopScript()
 
 FString FStoryFlowExecutionContext::GetString(const FString& Key, const FString& LanguageCode) const
 {
-	// Try current script first (check map directly to avoid key-echo fragility)
+	UStoryFlowProjectAsset* Proj = Project.Get();
+
+	// TIER 1, the localization overlay (spec §9). PROJECT-WIDE and ahead of the script table
+	// because the sidecar's id namespace is project-wide: the export keys one row per shipped id
+	// across every artifact it wrote, and nothing can key an id another artifact already claimed
+	// for different text. The tables are FULL and PRE-RESOLVED, so this plugin computes no status
+	// and no hash; a miss here simply means the source tiers answer.
+	//
+	// THE LOOKUP RUNS ON THE AUTHORED TEMPLATE. Every caller that interpolates `{Variable}` tokens
+	// calls InterpolateVariables on the RESULT of this function, never the other way round — a
+	// translated line is authored with the same tokens as the source line, so interpolating first
+	// would hand this lookup a string no table was ever keyed by. That failure is invisible: the
+	// text still renders, in the source language, only for lines that happen to carry a token.
+	if (Proj)
+	{
+		if (const FString* Localized = Proj->FindLocalizedString(Key, LanguageCode))
+		{
+			return *Localized;
+		}
+	}
+
+	// TIER 2, the keying artifact's own source table — current script first (check map directly
+	// to avoid key-echo fragility), then the project globals characters.json merges into. The
+	// language-prefixed probe is the pre-localization behavior, unchanged; the source-language
+	// probe beside it is what makes the fall-through work once the language being read is a
+	// target language, since every artifact this editor exports keys its strings by the source
+	// language alone. The two probes are the same key whenever the codes agree.
+	const FString FullKey = FString::Printf(TEXT("%s.%s"), *LanguageCode, *Key);
+	const FString SourceKey = Proj ? FString::Printf(TEXT("%s.%s"), *Proj->SourceLanguage, *Key) : FullKey;
+
 	if (UStoryFlowScriptAsset* Script = CurrentScript.Get())
 	{
-		const FString FullKey = FString::Printf(TEXT("%s.%s"), *LanguageCode, *Key);
 		if (const FString* Value = Script->Strings.Find(FullKey))
+		{
+			return *Value;
+		}
+		if (const FString* Value = Script->Strings.Find(SourceKey))
 		{
 			return *Value;
 		}
@@ -578,10 +610,13 @@ FString FStoryFlowExecutionContext::GetString(const FString& Key, const FString&
 	}
 
 	// Try project global strings
-	if (UStoryFlowProjectAsset* Proj = Project.Get())
+	if (Proj)
 	{
-		const FString FullKey = FString::Printf(TEXT("%s.%s"), *LanguageCode, *Key);
 		if (const FString* Value = Proj->GlobalStrings.Find(FullKey))
+		{
+			return *Value;
+		}
+		if (const FString* Value = Proj->GlobalStrings.Find(SourceKey))
 		{
 			return *Value;
 		}
@@ -591,6 +626,7 @@ FString FStoryFlowExecutionContext::GetString(const FString& Key, const FString&
 		}
 	}
 
+	// TIER 3: the raw stored value, never an accidental empty string (see GetGlobalString).
 	return Key;
 }
 
@@ -759,7 +795,7 @@ void FStoryFlowExecutionContext::ResolveStringVariableValues(TMap<FString, FStor
 					FString Key = Element.GetString();
 					if (!Key.IsEmpty())
 					{
-						Element.SetString(GetString(Key));
+						Element.SetString(GetString(Key, SeedLanguageCode));
 					}
 				}
 			}
@@ -768,7 +804,7 @@ void FStoryFlowExecutionContext::ResolveStringVariableValues(TMap<FString, FStor
 				FString Key = VarPair.Value.Value.GetString();
 				if (!Key.IsEmpty())
 				{
-					VarPair.Value.Value.SetString(GetString(Key));
+					VarPair.Value.Value.SetString(GetString(Key, SeedLanguageCode));
 				}
 			}
 		}
@@ -788,7 +824,7 @@ void FStoryFlowExecutionContext::ResolveStringVariableValues(TMap<FString, FStor
 					FString Key = Entry.Value.GetString();
 					if (!Key.IsEmpty())
 					{
-						Entry.Value.SetString(GetString(Key));
+						Entry.Value.SetString(GetString(Key, SeedLanguageCode));
 					}
 				}
 			}

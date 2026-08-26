@@ -132,6 +132,18 @@ public:
 	UPROPERTY()
 	TWeakObjectPtr<UStoryFlowScriptAsset> CurrentScript;
 
+	/**
+	 * The language ResolveStringVariableValues seeds a script's local string variables in
+	 * (localization spec §9). Set by the owning component from its active language BEFORE
+	 * Initialize, because the seed runs inside Initialize.
+	 *
+	 * DELIBERATELY NOT cleared by Reset: a player's language is not per-script state, and the
+	 * seed of the next script pushed by a runScript node must run in the same language as the
+	 * one that pushed it. Read-time lookups do not use this — they take the component's live
+	 * language, so a SetLanguage lands on the very next line rendered rather than the next script.
+	 */
+	FString SeedLanguageCode = TEXT("en");
+
 	/** Current node ID */
 	UPROPERTY()
 	FString CurrentNodeId;

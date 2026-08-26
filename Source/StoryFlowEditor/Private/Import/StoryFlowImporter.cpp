@@ -112,8 +112,10 @@ namespace
 	    by older plugin versions re-save once even if their source is unchanged.
 	    6: character-index.json joins the import and dialogue / character-variable
 	    nodes gain the characterRefId / characterId fields (P4), so assets imported
-	    under 5 must re-parse to pick them up. */
-	constexpr const TCHAR* ImportHashSchemaVersion = TEXT("6");
+	    under 5 must re-parse to pick them up.
+	    7: localization.json joins the import (spec §9), so a project asset written
+	    under 6 must re-parse to pick up its language tables. */
+	constexpr const TCHAR* ImportHashSchemaVersion = TEXT("7");
 
 	FString SerializeJsonCondensed(const TSharedRef<FJsonObject>& JsonObject)
 	{
@@ -511,6 +513,126 @@ void UStoryFlowImporter::ImportCharacterIndex(const FString& BuildDirectory, USt
 	}
 }
 
+/**
+ * THE TRANSLATIONS SIDECAR (localization spec §9), on the same degraded ladder as the character
+ * index above and for the same reason: absence is a FORMAT VERSION, not a fault.
+ *
+ * THE FILE-PRESENCE MARKER is the only branch this contract has. No localization.json beside the
+ * artifacts means a pre-localization export — source-only, byte-for-byte the behavior of every
+ * release before this one — and never a count of anything: a project whose author registered a
+ * language and translated nothing still exports FULL tables of source text, and that is a
+ * localized project. bHasLocalization records which of the two a project is, because an absent
+ * sidecar and a sidecar with no rows are the same empty TMap once they are in C++.
+ *
+ * THE TABLES ARE FULL AND PRE-RESOLVED. Every §7 fallback was applied at export: an outdated row
+ * carries the OLD translation (user ruling 2), an untranslated or cleared one carries the source
+ * text, an orphan has no row at all. So nothing here computes a status or compares a hash, and
+ * the lookup that reads these tables holds no rule beyond the three tiers in GetGlobalString.
+ *
+ * THE ID SET IS THE SHIPPED SET — the ids that KEYED an artifact this export wrote. `.sfui`
+ * widget and dropdown strings have no rows here: `.sfui` documents never reach a plugin, and
+ * their text localizes in the HTML lane. Their absence is the contract, not a missing feature,
+ * and nothing downstream should infer a bug from it.
+ */
+void UStoryFlowImporter::ImportLocalization(const FString& BuildDirectory, UStoryFlowProjectAsset* ProjectAsset, TArray<FString>& InOutProjectHashParts)
+{
+	const FString LocalizationPath = FPaths::Combine(BuildDirectory, TEXT("localization.json"));
+	if (!FPaths::FileExists(LocalizationPath))
+	{
+		return;
+	}
+
+	TSharedPtr<FJsonObject> LocalizationJson = LoadJsonFile(LocalizationPath);
+	if (!LocalizationJson.IsValid())
+	{
+		// Exists but does not parse: corruption, not a pre-localization export. Same posture
+		// and the same named consequence as the character index's parse failure.
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: localization.json exists but could not be read as JSON - ignoring it (strings keep resolving to their source text)"));
+		return;
+	}
+
+	// Folded in BEFORE the version gate, for the reason ImportCharacterIndex spells out: a gate
+	// added below the fold could otherwise make an input invisible to the skip hash.
+	InOutProjectHashParts.Add(SerializeJsonCondensed(LocalizationJson.ToSharedRef()));
+
+	FString SchemaVersion;
+	if (!LocalizationJson->TryGetStringField(TEXT("schemaVersion"), SchemaVersion))
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: localization.json declares no schemaVersion - ignoring it (strings keep resolving to their source text)"));
+		return;
+	}
+	if (SchemaVersion != TEXT("1"))
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: localization.json declares schemaVersion '%s', which this plugin does not support - ignoring it (strings keep resolving to their source text)"), *SchemaVersion);
+		return;
+	}
+
+	const TSharedPtr<FJsonObject>* StringsObject = nullptr;
+	if (!LocalizationJson->TryGetObjectField(TEXT("strings"), StringsObject))
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: localization.json has no readable strings object - ignoring it (strings keep resolving to their source text)"));
+		return;
+	}
+
+	// Past every rung of the ladder: this project IS localized. Set before the rows are counted,
+	// so an empty-but-present sidecar is still a localized project.
+	ProjectAsset->bHasLocalization = true;
+
+	FString SourceLanguage;
+	if (LocalizationJson->TryGetStringField(TEXT("sourceLanguage"), SourceLanguage) && !SourceLanguage.IsEmpty())
+	{
+		ProjectAsset->SourceLanguage = SourceLanguage;
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* LanguagesArray = nullptr;
+	if (LocalizationJson->TryGetArrayField(TEXT("languages"), LanguagesArray))
+	{
+		// Registry ORDER is the author's and is preserved: it is the order a picker draws.
+		for (const TSharedPtr<FJsonValue>& LanguageValue : *LanguagesArray)
+		{
+			const TSharedPtr<FJsonObject> LanguageObject = LanguageValue.IsValid() ? LanguageValue->AsObject() : nullptr;
+			if (!LanguageObject.IsValid())
+			{
+				continue;
+			}
+			FStoryFlowLanguage Language;
+			if (!LanguageObject->TryGetStringField(TEXT("code"), Language.Code) || Language.Code.IsEmpty())
+			{
+				continue;
+			}
+			if (!LanguageObject->TryGetStringField(TEXT("name"), Language.Name) || Language.Name.IsEmpty())
+			{
+				Language.Name = Language.Code;
+			}
+			ProjectAsset->Languages.Add(Language);
+		}
+	}
+
+	for (const auto& TablePair : (*StringsObject)->Values)
+	{
+		const TSharedPtr<FJsonObject> TableObject = TablePair.Value.IsValid() ? TablePair.Value->AsObject() : nullptr;
+		if (!TableObject.IsValid())
+		{
+			continue;
+		}
+		FStoryFlowStringTable Table;
+		for (const auto& RowPair : TableObject->Values)
+		{
+			FString Text;
+			if (RowPair.Value.IsValid() && RowPair.Value->TryGetString(Text))
+			{
+				// Ids are stored VERBATIM and are opaque: the plugin never parses one, and the
+				// only thing it ever does with one is look it up.
+				Table.Entries.Add(RowPair.Key, Text);
+			}
+		}
+		ProjectAsset->LanguageStrings.Add(TablePair.Key, MoveTemp(Table));
+	}
+
+	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Localization loaded (source '%s', %d target languages, %d tables)"),
+		*ProjectAsset->SourceLanguage, ProjectAsset->Languages.Num(), ProjectAsset->LanguageStrings.Num());
+}
+
 UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedPtr<FJsonObject>& JsonObject, const FString& BuildDirectory, const FString& ContentPath)
 {
 	// Create or reuse project asset
@@ -535,6 +657,12 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 	ProjectAsset->GlobalVariables.Empty();
 	ProjectAsset->GlobalStrings.Empty();
 	ProjectAsset->ResolvedAssets.Empty();
+	// Reset the localization marker WITH the tables it describes: a re-import of a build that
+	// dropped its sidecar must leave a source-only project, not a stale claim to be localized.
+	ProjectAsset->bHasLocalization = false;
+	ProjectAsset->SourceLanguage = TEXT("en");
+	ProjectAsset->Languages.Empty();
+	ProjectAsset->LanguageStrings.Empty();
 
 	// Parse basic fields
 	if (JsonObject->HasField(TEXT("version")))
@@ -722,6 +850,9 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 	// Load the character id bridge — P4 contract §1.4
 	ImportCharacterIndex(BuildDirectory, ProjectAsset, ProjectHashParts);
 
+	// Load the translations sidecar — localization spec §9
+	ImportLocalization(BuildDirectory, ProjectAsset, ProjectHashParts);
+
 	// Find and import all script files
 	TArray<FString> ScriptFiles;
 	IFileManager::Get().FindFilesRecursive(ScriptFiles, *BuildDirectory, TEXT("*.json"), true, false);
@@ -735,6 +866,7 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 			Filename == TEXT("global-variables.json") ||
 			Filename == TEXT("characters.json") ||
 			Filename == TEXT("character-index.json") ||
+			Filename == TEXT("localization.json") ||
 			Filename == TEXT("data-assets.json"))
 		{
 			continue;

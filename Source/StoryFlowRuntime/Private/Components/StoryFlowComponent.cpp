@@ -105,6 +105,10 @@ void UStoryFlowComponent::StartDialogueWithScript(const FString& ScriptPath)
 	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Script loaded: %s (Nodes: %d, StartNode: %s)"),
 		*ScriptAsset->GetName(), ScriptAsset->Nodes.Num(), *ScriptAsset->StartNode);
 
+	// BEFORE Initialize, not after: the local-variable string seeding runs inside it, and Reset
+	// deliberately leaves this field alone so a runScript push keeps the same language.
+	ExecutionContext.SeedLanguageCode = ActiveLanguageCode();
+
 	// Initialize execution context with project and script
 	// Pass the subsystem's global variables, runtime characters, and once-only options so they're shared across all components
 	ExecutionContext.InitializeWithSubsystem(Project, ScriptAsset, &Subsystem->GetGlobalVariables(), &Subsystem->GetRuntimeCharacters(), &Subsystem->GetUsedOnceOnlyOptions(), Subsystem->GetDataAssetStore(), &Subsystem->GetCharacterIdToPath());
@@ -1767,12 +1771,27 @@ void UStoryFlowComponent::SetCharacterFloatVariable(UStoryFlowCharacterAsset* Ch
 	}
 }
 
+FString UStoryFlowComponent::ActiveLanguageCode() const
+{
+	if (UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem())
+	{
+		UStoryFlowProjectAsset* Project = Subsystem->GetProject();
+		if (Project && Project->bHasLocalization)
+		{
+			return Subsystem->GetLanguage();
+		}
+	}
+	return LanguageCode;
+}
+
 FString UStoryFlowComponent::ResolveString(const FString& Key) const
 {
+	const FString Language = ActiveLanguageCode();
+
 	// During dialogue, execution context handles script + global string lookup
 	if (ExecutionContext.bIsExecuting)
 	{
-		return ExecutionContext.GetString(Key, LanguageCode);
+		return ExecutionContext.GetString(Key, Language);
 	}
 
 	// Outside dialogue, resolve through the project's global strings
@@ -1780,7 +1799,7 @@ FString UStoryFlowComponent::ResolveString(const FString& Key) const
 	{
 		if (UStoryFlowProjectAsset* Project = Subsystem->GetProject())
 		{
-			return Project->GetGlobalString(Key, LanguageCode);
+			return Project->GetGlobalString(Key, Language);
 		}
 	}
 
@@ -3201,7 +3220,7 @@ void UStoryFlowComponent::HandleSetString(FStoryFlowNode* Node)
 	FString NewValue;
 	if (Evaluator)
 	{
-		FString ResolvedFallback = ExecutionContext.GetString(Node->Data.Value.GetString(), LanguageCode);
+		FString ResolvedFallback = ExecutionContext.GetString(Node->Data.Value.GetString(), ActiveLanguageCode());
 		NewValue = Evaluator->EvaluateStringInput(Node, TEXT("string"), ResolvedFallback);
 	}
 
@@ -3326,7 +3345,7 @@ void UStoryFlowComponent::HandleArraySetElement(FStoryFlowNode* Node)
 		break;
 	case EStoryFlowNodeType::SetStringArrayElement:
 	{
-		const FString ResolvedFallback = ExecutionContext.GetString(Node->Data.Value2.GetString(), LanguageCode);
+		const FString ResolvedFallback = ExecutionContext.GetString(Node->Data.Value2.GetString(), ActiveLanguageCode());
 		NewValue.SetString(Evaluator->EvaluateStringInput(Node, TEXT("string-4"), ResolvedFallback));
 		break;
 	}
@@ -3625,7 +3644,7 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 	case EStoryFlowNodeType::AddToStringArray:
 	{
 		FStoryFlowVariant Elem;
-		FString ResolvedFallback = ExecutionContext.GetString(Node->Data.Value.GetString(), LanguageCode);
+		FString ResolvedFallback = ExecutionContext.GetString(Node->Data.Value.GetString(), ActiveLanguageCode());
 		FString EvalResult = Evaluator ? Evaluator->EvaluateStringInput(Node, TEXT("string-3"), ResolvedFallback) : ResolvedFallback;
 		// If evaluator returned empty but we have a resolved default, use the default
 		// (the input edge may evaluate a localization key that the string evaluator can't resolve)
@@ -4570,7 +4589,7 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 		if (VariableType == TEXT("string"))
 		{
 			FString StringKey = Node->Data.Value.GetString();
-			FString ResolvedString = ExecutionContext.GetString(StringKey, LanguageCode);
+			FString ResolvedString = ExecutionContext.GetString(StringKey, ActiveLanguageCode());
 			NewValue.SetString(ResolvedString);
 			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: HandleSetCharacterVar - Using inline string: key='%s' resolved='%s'"), *StringKey, *ResolvedString);
 		}
@@ -4896,7 +4915,7 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 		if (FStoryFlowCharacterDef* CharDef = ExecutionContext.FindCharacter(SpeakerRef))
 		{
 			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: BuildDialogueState - Found character, raw Name='%s'"), *CharDef->Name);
-			State.Character.Name = ExecutionContext.GetString(CharDef->Name, LanguageCode);
+			State.Character.Name = ExecutionContext.GetString(CharDef->Name, ActiveLanguageCode());
 			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: BuildDialogueState - Resolved Name='%s'"), *State.Character.Name);
 
 			// Load character image from the runtime character data (CharDef->Image).
@@ -4926,8 +4945,8 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 	FString TitleKey = DialogueNode->Data.Title;
 	FString TextKey = DialogueNode->Data.Text;
 
-	State.Title = ExecutionContext.GetString(TitleKey, LanguageCode);
-	State.Text = ExecutionContext.InterpolateVariables(ExecutionContext.GetString(TextKey, LanguageCode));
+	State.Title = ExecutionContext.GetString(TitleKey, ActiveLanguageCode());
+	State.Text = ExecutionContext.InterpolateVariables(ExecutionContext.GetString(TextKey, ActiveLanguageCode()));
 
 	// Presentation tags pass through untouched (raw authored strings, in array order)
 	State.Tags = DialogueNode->Data.Tags;
@@ -4985,7 +5004,7 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 
 		FStoryFlowDialogueOption TextBlock;
 		TextBlock.Id = Block.Id;
-		TextBlock.Text = ExecutionContext.InterpolateVariables(ExecutionContext.GetString(Block.Text, LanguageCode));
+		TextBlock.Text = ExecutionContext.InterpolateVariables(ExecutionContext.GetString(Block.Text, ActiveLanguageCode()));
 
 		State.TextBlocks.Add(TextBlock);
 	}
@@ -5008,7 +5027,7 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 
 		FStoryFlowDialogueOption Option;
 		Option.Id = Choice.Id;
-		Option.Text = ExecutionContext.InterpolateVariables(ExecutionContext.GetString(Choice.Text, LanguageCode));
+		Option.Text = ExecutionContext.InterpolateVariables(ExecutionContext.GetString(Choice.Text, ActiveLanguageCode()));
 
 		State.Options.Add(Option);
 	}

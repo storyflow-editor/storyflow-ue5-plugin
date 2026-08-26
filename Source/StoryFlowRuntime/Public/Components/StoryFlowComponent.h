@@ -71,7 +71,15 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow", meta=(GetOptions="GetAvailableScripts"))
 	FString Script;
 
-	/** Language code for string lookup (empty = use default "en") */
+	/**
+	 * Language code for string lookup (empty = use default "en").
+	 *
+	 * PRE-LOCALIZATION ONLY. It is the prefix into an artifact `strings` block that carries more
+	 * than one language, and it is still honored for a project exported before localization
+	 * existed. Once a project ships a `localization.json`, the language is the PLAYER'S and is
+	 * game-wide: UStoryFlowSubsystem::SetLanguage owns it and this field is ignored. See
+	 * ActiveLanguageCode.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow")
 	FString LanguageCode = TEXT("en");
 
@@ -1009,7 +1017,18 @@ protected:
 	bool TryGetCharacterVariantByName(const FStoryFlowCharacterDef& CharDef, const FString& VariableName,
 		FStoryFlowVariant& OutValue) const;
 
-	/** Resolve a string table key to localized text using LanguageCode */
+	/**
+	 * THE LANGUAGE every lookup on this component runs in (localization spec §9).
+	 *
+	 * The SUBSYSTEM owns it whenever the loaded project carries a localization sidecar, because a
+	 * language is the player's and game-wide, not a per-actor setting. Without a sidecar there is
+	 * nothing to switch to and the per-component LanguageCode keeps its pre-localization meaning,
+	 * so a project exported before localization existed behaves EXACTLY as it did — the presence
+	 * of the file is the only branch, never a key count.
+	 */
+	FString ActiveLanguageCode() const;
+
+	/** Resolve a string table key to localized text using ActiveLanguageCode */
 	FString ResolveString(const FString& Key) const;
 
 	/** Build dialogue state from current node */

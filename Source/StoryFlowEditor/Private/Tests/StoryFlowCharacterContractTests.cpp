@@ -37,7 +37,11 @@
  * implements: iterate caseFiles -> cases in order, dispatch on kind, honor excluded[unreal]
  * as skip-as-data, invert expect_fail, and assert exactly case_count cases were consumed.
  *
- * The four inputs are written as a REAL build folder and imported through the REAL importer.
+ * The FIVE inputs are written as a REAL build folder and imported through the REAL importer —
+ * and, for the localization arm's source-only case, a SECOND build folder that leaves
+ * localization.json out entirely, because the marker is the file existing and no emptied table
+ * can stand in for a file that is not there.
+ *
  * Surfaces per the §9 entry 6 (A5) seats for this engine:
  *  - resolved `value` expectations run against the RESOLVING doors — the component's
  *    character variable doors (Name resolves through the string table there) and, for the
@@ -48,6 +52,12 @@
  *  - the builtin Image `value` is the assets-table path the stored id maps to, asserted
  *    through the vendored assets table itself (this engine resolves the id to a texture,
  *    not a path string — the table is the path authority the import consumed).
+ *
+ * The LOCALIZATION arm (spec §9) rides the same run. Its three kinds resolve through the
+ * engine's own chokepoint — FStoryFlowExecutionContext::GetString, the call every dialogue line
+ * makes — never through a copy of the rule, and it computes no status and no hash because the
+ * sidecar's tables arrive full and pre-resolved. FStoryFlowLocalizationApiTest below then
+ * watches the same flip where a player would see it, in the rendered dialogue state.
  *
  * Run via: Session Frontend > Automation > "StoryFlow.CharacterContract", or
  *   UnrealEditor-Cmd.exe StoryFlow.uproject -ExecCmds="Automation RunTests StoryFlow.CharacterContract" -TestExit="Automation Test Queue Empty" -unattended -nullrhi
@@ -61,6 +71,7 @@ namespace StoryFlowCharacterContractTestHelpers
 	using StoryFlowTestWorld::FScopedWorld;
 
 	const TCHAR* ContractTestRoot = TEXT("/Game/StoryFlowCharacterContractTests");
+	const TCHAR* SourceOnlyTestRoot = TEXT("/Game/StoryFlowCharacterContractSourceOnlyTests");
 	const TCHAR* ContractSlotName = TEXT("StoryFlowCharacterContractSlot");
 
 	FString PackageFixturePath(const FString& FileName)
@@ -94,15 +105,31 @@ namespace StoryFlowCharacterContractTestHelpers
 		return FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Temp/StoryFlowCharacterContract"));
 	}
 
-	/** The vendored inputs, VERBATIM, as a build folder (script.json becomes the one script). */
-	bool WriteContractBuildDir()
+	/** The same vendored inputs MINUS localization.json — the source-only (pre-localization) export. */
+	FString SourceOnlyBuildDir()
 	{
-		const FString Dir = ContractBuildDir();
+		return FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Temp/StoryFlowCharacterContractSourceOnly"));
+	}
+
+	/**
+	 * The vendored inputs, VERBATIM, as a build folder (script.json becomes the one script).
+	 *
+	 * bWithLocalization writes the FIFTH input or leaves it out entirely. Leaving it out is the
+	 * whole absent-sidecar case: the marker is the file EXISTING, so the only honest way to test
+	 * the absence branch is to import a build that genuinely does not carry the file — never by
+	 * emptying a table, which in C++ is indistinguishable from a sidecar with no rows.
+	 */
+	bool WriteContractBuildDir(const FString& Dir, bool bWithLocalization)
+	{
 		IFileManager::Get().DeleteDirectory(*Dir, false, true);
 		IFileManager::Get().MakeDirectory(*Dir, /*Tree*/ true);
 		bool bOk = FFileHelper::SaveStringToFile(TEXT(R"JSON({"version":"1.0.0","apiVersion":"1","startupScript":"main"})JSON"),
 			*FPaths::Combine(Dir, TEXT("project.json")));
-		const TCHAR* Verbatim[] = { TEXT("characters.json"), TEXT("character-index.json"), TEXT("data-assets.json") };
+		TArray<const TCHAR*> Verbatim = { TEXT("characters.json"), TEXT("character-index.json"), TEXT("data-assets.json") };
+		if (bWithLocalization)
+		{
+			Verbatim.Add(TEXT("localization.json"));
+		}
 		for (const TCHAR* FileName : Verbatim)
 		{
 			FString Body;
@@ -119,7 +146,9 @@ namespace StoryFlowCharacterContractTestHelpers
 	{
 		UGameplayStatics::DeleteGameInSlot(ContractSlotName, 0);
 		UEditorAssetLibrary::DeleteDirectory(ContractTestRoot);
+		UEditorAssetLibrary::DeleteDirectory(SourceOnlyTestRoot);
 		IFileManager::Get().DeleteDirectory(*ContractBuildDir(), false, true);
+		IFileManager::Get().DeleteDirectory(*SourceOnlyBuildDir(), false, true);
 	}
 
 	FString JsonStr(const TSharedPtr<FJsonObject>& Object, const TCHAR* Field)
@@ -141,8 +170,12 @@ namespace StoryFlowCharacterContractTestHelpers
 		FAutomationTestBase& Test;
 		FScopedWorld& W;
 		UStoryFlowProjectAsset* Project = nullptr;
+		/** The SAME inputs imported from a build folder with no localization.json (the absence branch). */
+		UStoryFlowProjectAsset* SourceOnlyProject = nullptr;
 		/** The vendored assets table: asset id -> exported path ("images/hero.png"). */
 		TMap<FString, FString> AssetPaths;
+		/** localization.json as vendored: `<code>` -> `<stringId>` -> text. The sidecar's own word. */
+		TMap<FString, TMap<FString, FString>> SidecarTables;
 		int32 ScriptCounter = 0;
 		int32 RunCases = 0;
 		int32 SkippedExcluded = 0;
@@ -157,6 +190,14 @@ namespace StoryFlowCharacterContractTestHelpers
 		FString NextScriptName()
 		{
 			return FString::Printf(TEXT("cc_script_%d"), ++ScriptCounter);
+		}
+
+		/** The sidecar's own row for (language, id), or empty when it carries none. */
+		FString SidecarRow(const FString& Language, const FString& StringId) const
+		{
+			const TMap<FString, FString>* Table = SidecarTables.Find(Language);
+			const FString* Text = Table ? Table->Find(StringId) : nullptr;
+			return Text ? *Text : FString();
 		}
 
 		/** assets-table path for a stored asset id; identity for anything the table does not carry
@@ -860,6 +901,145 @@ namespace StoryFlowCharacterContractTestHelpers
 				Project->CharacterIdToPath = BridgeBackup;
 			}
 		}
+
+		// ====================================================================
+		// The localization arm (spec §9)
+		// ====================================================================
+
+		/**
+		 * THE RESOLUTION CHOKEPOINT ITSELF, not a copy of it: the engine's own
+		 * FStoryFlowExecutionContext::GetString, pointed at a project and its one script — the
+		 * same object and the same call UStoryFlowComponent::ResolveString makes on every
+		 * dialogue line. One context serves BOTH keying artifacts because the chain it runs is
+		 * the whole chain: language table -> current script's table -> project globals (which is
+		 * where the importer merges characters.json's) -> the raw id.
+		 */
+		FString ResolveThroughChokepoint(UStoryFlowProjectAsset* Proj, const FString& StringId, const FString& Language) const
+		{
+			FStoryFlowExecutionContext Context;
+			Context.Project = Proj;
+			Context.CurrentScript = Proj ? Proj->GetScriptByPath(TEXT("main")) : nullptr;
+			return Context.GetString(StringId, Language);
+		}
+
+		/**
+		 * THE REACH RULE. Read the named character's named variable and take THE KEY IT STORES —
+		 * never rebuild the id from the character being read. In this engine the stored key lives
+		 * on the imported character ASSET, the pre-resolution record the §5 `stored` seats already
+		 * compare against, because the runtime store resolves the string family eagerly at seeding.
+		 *
+		 * An inherited value's key names the DECLARING ANCESTOR, so an implementation that builds
+		 * `<characterBeingRead>.<variableId>.value` produces an id nothing carries, passes every
+		 * non-inherited case, and resolves this one to the raw id.
+		 */
+		FString ReachStoredKey(const TSharedPtr<FJsonObject>& Reach) const
+		{
+			const FString RecordKey = ResolveStoredRecordKey(JsonStr(Reach, TEXT("characterId")), FString());
+			return RawStored(RecordKey, JsonStr(Reach, TEXT("variableName"))).GetString();
+		}
+
+		void ProcessLocalized(const FString& CaseName, const TSharedPtr<FJsonObject>& Case)
+		{
+			const FString Language = JsonStr(Case, TEXT("language"));
+			const FString KeyedIn = JsonStr(Case, TEXT("keyedIn"));
+			const FString Expected = JsonStr(Case, TEXT("expected"));
+			bool bExpectFail = false;
+			Case->TryGetBoolField(TEXT("expect_fail"), bExpectFail);
+
+			// The id the lookup runs on: FOLLOWED through the character record when the case
+			// carries a reach, taken verbatim otherwise.
+			FString StringId = JsonStr(Case, TEXT("stringId"));
+			const TSharedPtr<FJsonObject>* Reach = nullptr;
+			if (Case->TryGetObjectField(TEXT("reach"), Reach))
+			{
+				StringId = ReachStoredKey(*Reach);
+				Test.TestEqual(CaseName + TEXT(": the character record stores the ancestor-owned key"),
+					StringId, JsonStr(*Reach, TEXT("storedKey")));
+			}
+
+			const FString Resolved = ResolveThroughChokepoint(Project, StringId, Language);
+
+			if (bExpectFail)
+			{
+				// Inverted: this case's `expected` is the CURRENT SOURCE of an outdated row, which
+				// is what an engine that recomputes status produces. Ruling 2 says the OLD
+				// translation ships. Reporting it as passing would prove exactly that defect.
+				Test.TestTrue(CaseName + TEXT(": expect_fail reported as failing (the deliberately wrong source text is not what resolved)"),
+					Resolved != Expected);
+				// And it misses in the ONE direction the ruling names: by shipping the OLD
+				// translation, which is the row the sidecar itself carries. A resolve that
+				// returned the raw id, or the source text, would also "not equal" — and each of
+				// those is a different silent defect this counter-assertion refuses to accept.
+				Test.TestEqual(CaseName + TEXT(": it misses by shipping the OLD translation the sidecar carries"),
+					Resolved, SidecarRow(Language, StringId));
+				Test.TestFalse(CaseName + TEXT(": and not by falling through to the raw id"), Resolved == StringId);
+				++ExpectFailInverted;
+				return;
+			}
+
+			Test.TestEqual(FString::Printf(TEXT("%s: %s[%s]"), *CaseName, *Language, *StringId), Resolved, Expected);
+			// NEVER undefined and never an accidental empty string — the shape the whole contract
+			// rests on, asserted per case rather than once.
+			Test.TestFalse(CaseName + TEXT(": the resolve is never empty"), Resolved.IsEmpty());
+
+			// A characters.json-keyed id must answer the same OUTSIDE dialogue too: that door
+			// (the project's global table) is where a character Name resolves between scripts.
+			if (KeyedIn == TEXT("characters.json"))
+			{
+				Test.TestEqual(CaseName + TEXT(": the outside-dialogue door agrees"),
+					Project->GetGlobalString(StringId, Language), Expected);
+			}
+		}
+
+		void ProcessLanguageTable(const FString& CaseName, const TSharedPtr<FJsonObject>& Case)
+		{
+			const FString Language = JsonStr(Case, TEXT("language"));
+			const TSharedPtr<FJsonObject> Expected = Case->GetObjectField(TEXT("expected"));
+			int32 Rows = 0;
+			for (const auto& RowPair : Expected->Values)
+			{
+				const FString Resolved = ResolveThroughChokepoint(Project, RowPair.Key, Language);
+				Test.TestEqual(FString::Printf(TEXT("%s: %s[%s]"), *CaseName, *Language, *RowPair.Key),
+					Resolved, RowPair.Value->AsString());
+				Test.TestFalse(CaseName + TEXT(": the resolve is never empty for ") + RowPair.Key, Resolved.IsEmpty());
+				++Rows;
+			}
+			Test.TestTrue(CaseName + TEXT(": the table carried rows to compare"), Rows > 0);
+		}
+
+		/**
+		 * THE ABSENCE BRANCH, against a SECOND project imported from a build folder that genuinely
+		 * carries no localization.json. Nothing is emptied and nothing is mutated: the marker is
+		 * the file existing, so only a real import of a real pre-localization build proves it.
+		 */
+		void ProcessSourceOnly(const FString& CaseName, const TSharedPtr<FJsonObject>& Case)
+		{
+			if (!Test.TestNotNull(*(CaseName + TEXT(": the source-only project imports")), SourceOnlyProject))
+			{
+				return;
+			}
+
+			Test.TestFalse(CaseName + TEXT(": a build with no sidecar is not a localized project"), SourceOnlyProject->bHasLocalization);
+			Test.TestEqual(CaseName + TEXT(": it registers no language tables"), SourceOnlyProject->LanguageStrings.Num(), 0);
+			Test.TestEqual(CaseName + TEXT(": it offers no target languages"), SourceOnlyProject->Languages.Num(), 0);
+			Test.TestEqual(CaseName + TEXT(": its source language is the pre-localization default"), SourceOnlyProject->SourceLanguage, FString(TEXT("en")));
+
+			// Every shipped id, resolved as the plugin behaved before localization existed.
+			const TSharedPtr<FJsonObject> Expected = Case->GetObjectField(TEXT("expected"));
+			for (const auto& RowPair : Expected->Values)
+			{
+				const FString Resolved = ResolveThroughChokepoint(SourceOnlyProject, RowPair.Key, SourceOnlyProject->SourceLanguage);
+				Test.TestEqual(FString::Printf(TEXT("%s: source-only[%s]"), *CaseName, *RowPair.Key), Resolved, RowPair.Value->AsString());
+			}
+
+			// Even asked for a language, a project with no sidecar answers source text: there is
+			// no table to overlay, and the fall-through is the artifact's own.
+			for (const auto& RowPair : Expected->Values)
+			{
+				Test.TestEqual(FString::Printf(TEXT("%s: source-only[%s] asked in fr"), *CaseName, *RowPair.Key),
+					ResolveThroughChokepoint(SourceOnlyProject, RowPair.Key, TEXT("fr")), RowPair.Value->AsString());
+			}
+		}
 	};
 }
 
@@ -893,9 +1073,9 @@ bool FStoryFlowCharacterContractGoldenPackageTest::RunTest(const FString& Parame
 		return false;
 	}
 
-	// The four vendored inputs as a REAL build dir, through the REAL importer.
+	// The five vendored inputs as a REAL build dir, through the REAL importer.
 	UEditorAssetLibrary::DeleteDirectory(ContractTestRoot);
-	if (!TestTrue(TEXT("the contract build folder is writable"), WriteContractBuildDir()))
+	if (!TestTrue(TEXT("the contract build folder is writable"), WriteContractBuildDir(ContractBuildDir(), /*bWithLocalization=*/ true)))
 	{
 		ContractCleanUp();
 		return false;
@@ -908,8 +1088,44 @@ bool FStoryFlowCharacterContractGoldenPackageTest::RunTest(const FString& Parame
 	}
 	FGCObjectScopeGuard ProjectGuard(Project);
 
+	// And the SAME inputs with the sidecar left out — the pre-localization export the
+	// source-only case runs against. A second real import, because the marker is the file
+	// existing and nothing else can stand in for it.
+	UEditorAssetLibrary::DeleteDirectory(SourceOnlyTestRoot);
+	TestTrue(TEXT("the source-only build folder is writable"), WriteContractBuildDir(SourceOnlyBuildDir(), /*bWithLocalization=*/ false));
+	UStoryFlowProjectAsset* SourceOnlyProject = UStoryFlowImporter::ImportProject(SourceOnlyBuildDir(), SourceOnlyTestRoot);
+	FGCObjectScopeGuard SourceOnlyGuard(SourceOnlyProject);
+
 	FContractHarness Harness(*this, W);
 	Harness.Project = Project;
+	Harness.SourceOnlyProject = SourceOnlyProject;
+
+	// The vendored sidecar's own tables — the authority the outdated tripwire counter-asserts
+	// against, so "it misses by shipping the OLD translation" is data and not a literal.
+	{
+		const TSharedPtr<FJsonObject> Sidecar = LoadPackageFile(TEXT("localization.json"));
+		const TSharedPtr<FJsonObject>* Strings = nullptr;
+		if (TestTrue(TEXT("localization.json is vendored and carries its strings"),
+			Sidecar.IsValid() && Sidecar->TryGetObjectField(TEXT("strings"), Strings)))
+		{
+			for (const auto& TablePair : (*Strings)->Values)
+			{
+				TMap<FString, FString>& Table = Harness.SidecarTables.Add(TablePair.Key);
+				for (const auto& RowPair : TablePair.Value->AsObject()->Values)
+				{
+					Table.Add(RowPair.Key, RowPair.Value->AsString());
+				}
+			}
+		}
+	}
+
+	// The import registered the sidecar: the presence marker, the source language and one table
+	// per language. Asserted here rather than inside a case because the case file describes
+	// RESOLUTION, and this is the load step every one of its cases stands on.
+	TestTrue(TEXT("the localized build imports as a localized project"), Project->bHasLocalization);
+	TestEqual(TEXT("the source language came from the sidecar"), Project->SourceLanguage, FString(TEXT("en")));
+	TestEqual(TEXT("one registered table per language the sidecar ships"), Project->LanguageStrings.Num(), Harness.SidecarTables.Num());
+	TestEqual(TEXT("the target languages are registered in the author's order"), Project->Languages.Num(), 2);
 
 	// The vendored assets table, the path authority behind the builtin Image `value` seats.
 	{
@@ -1015,9 +1231,21 @@ bool FStoryFlowCharacterContractGoldenPackageTest::RunTest(const FString& Parame
 			{
 				Harness.ProcessSave(CaseName, Case);
 			}
-			else // degraded — the manifest's kinds list is closed above
+			else if (Kind == TEXT("degraded"))
 			{
 				Harness.ProcessDegraded(CaseName, Case);
+			}
+			else if (Kind == TEXT("localized"))
+			{
+				Harness.ProcessLocalized(CaseName, Case);
+			}
+			else if (Kind == TEXT("language-table"))
+			{
+				Harness.ProcessLanguageTable(CaseName, Case);
+			}
+			else // source-only — the manifest's kinds list is closed above
+			{
+				Harness.ProcessSourceOnly(CaseName, Case);
 			}
 			++Harness.RunCases;
 			++Harness.PerKind.FindOrAdd(Kind);
@@ -1034,6 +1262,185 @@ bool FStoryFlowCharacterContractGoldenPackageTest::RunTest(const FString& Parame
 		Accounting += FString::Printf(TEXT(" %s=%d"), *KindPair.Key, KindPair.Value);
 	}
 	AddInfo(Accounting);
+
+	ContractCleanUp();
+	return true;
+}
+
+// ============================================================================
+// The language API (spec §9), driven through the real dialogue lane
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowLocalizationApiTest,
+	"StoryFlow.CharacterContract.LocalizationApi",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+/**
+ * SetLanguage / GetLanguage / GetLanguages against the vendored package, with the flip observed
+ * where a player would see it: the dialogue state of the script's first line — its title, its
+ * body and its speaker's name — rather than at the lookup the golden cases already pin.
+ *
+ * The expected texts are the vendored sidecar's own rows for node 1, which the golden case file
+ * pins independently; repeating two of them here is what makes this a LIVE-WIRING test (the
+ * language reaches the renderer at all) rather than a second resolution test.
+ */
+bool FStoryFlowLocalizationApiTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowCharacterContractTestHelpers;
+
+	// The unknown-code no-op says so out loud, once per rejected code.
+	AddExpectedError(TEXT("SetLanguage - unknown language"), EAutomationExpectedErrorFlags::Contains, 0);
+	AddExpectedError(TEXT("Source file not found"), EAutomationExpectedErrorFlags::Contains, 0);
+
+	FScopedWorld W;
+	if (!TestTrue(TEXT("world initializes"), W.Init()))
+	{
+		return false;
+	}
+
+	UEditorAssetLibrary::DeleteDirectory(ContractTestRoot);
+	if (!TestTrue(TEXT("the contract build folder is writable"), WriteContractBuildDir(ContractBuildDir(), /*bWithLocalization=*/ true)))
+	{
+		ContractCleanUp();
+		return false;
+	}
+	UStoryFlowProjectAsset* Project = UStoryFlowImporter::ImportProject(ContractBuildDir(), ContractTestRoot);
+	if (!TestNotNull(TEXT("the golden package imports"), Project))
+	{
+		ContractCleanUp();
+		return false;
+	}
+	FGCObjectScopeGuard ProjectGuard(Project);
+	W.Subsystem->SetProject(Project);
+
+	// ONE authored line, rendered through the real dialogue lane.
+	//
+	// The graph is built here rather than executed out of the vendored script.json for one
+	// reason: that artifact's edges carry no handles (it is a binding fixture, and the §5 cases
+	// read its nodes rather than run them), so the executor stops at its start node. What
+	// matters for THIS test travels verbatim from the vendored data anyway — node 1's title and
+	// text ids, its characterRefId, and the imported script's own `strings` table, which is the
+	// source tier every un-translated expectation below falls through to.
+	auto RenderLine = [&W](UStoryFlowProjectAsset* Proj, FString& OutTitle, FString& OutText, FString& OutSpeaker)
+	{
+		using namespace StoryFlowCharacterIndexTestHelpers;
+
+		UStoryFlowScriptAsset* Line = NewObject<UStoryFlowScriptAsset>(GetTransientPackage());
+		FGCObjectScopeGuard LineGuard(Line);
+		if (UStoryFlowScriptAsset* Imported = Proj->GetScriptByPath(TEXT("main")))
+		{
+			Line->Strings = Imported->Strings;
+		}
+		Line->StartNode = TEXT("0");
+		Line->Nodes.Add(TEXT("0"), MakeNode(TEXT("0"), EStoryFlowNodeType::Start, TEXT("start")));
+		{
+			FStoryFlowNode D = MakeNode(TEXT("1"), EStoryFlowNodeType::Dialogue, TEXT("dialogue"));
+			D.Data.Title = TEXT("1.title");
+			D.Data.Text = TEXT("1.text");
+			D.Data.Character = TEXT("characters\\hero.sfc");
+			D.Data.CharacterRefId = TEXT("da_hero0000000000000000000000000a");
+			Line->Nodes.Add(D.Id, D);
+		}
+		Line->Connections.Add(MakeEdge(TEXT("0"), TEXT("1"), StoryFlowHandles::Source(TEXT("0")), StoryFlowHandles::Target(TEXT("1"))));
+		Line->BuildConnectionIndices();
+
+		const FString ScriptName = TEXT("localization_line");
+		Proj->Scripts.Add(ScriptName, Line);
+		W.Component->StartDialogueWithScript(ScriptName);
+		const FStoryFlowDialogueState State = W.Component->GetCurrentDialogue();
+		OutTitle = State.Title;
+		OutText = State.Text;
+		OutSpeaker = State.Character.Name;
+		W.Component->StopDialogue();
+		Proj->Scripts.Remove(ScriptName);
+	};
+
+	auto FirstLine = [&RenderLine, &Project](FString& OutTitle, FString& OutText, FString& OutSpeaker)
+	{
+		RenderLine(Project, OutTitle, OutText, OutSpeaker);
+	};
+
+	FString Title, Text, Speaker;
+
+	// Import defaults to the SOURCE language, and the roster is source-first.
+	TestEqual(TEXT("the game starts in the project's source language"), W.Subsystem->GetLanguage(), FString(TEXT("en")));
+	{
+		const TArray<FStoryFlowLanguage> Languages = W.Subsystem->GetLanguages();
+		if (TestEqual(TEXT("the roster is the source language plus the author's registry"), Languages.Num(), 3))
+		{
+			TestEqual(TEXT("the source language comes first"), Languages[0].Code, FString(TEXT("en")));
+			TestEqual(TEXT("and its label is its own code"), Languages[0].Name, FString(TEXT("en")));
+			TestEqual(TEXT("then the registry order, first code"), Languages[1].Code, FString(TEXT("fr")));
+			TestEqual(TEXT("with the author's label"), Languages[1].Name, FString(TEXT("French")));
+			TestEqual(TEXT("then the registry order, second code"), Languages[2].Code, FString(TEXT("es")));
+			TestEqual(TEXT("with the author's label"), Languages[2].Name, FString(TEXT("Spanish")));
+		}
+	}
+
+	FirstLine(Title, Text, Speaker);
+	TestEqual(TEXT("the source line's title"), Title, FString(TEXT("Greeting")));
+	TestEqual(TEXT("the source line's text"), Text, FString(TEXT("Well met.")));
+	TestEqual(TEXT("the source speaker name"), Speaker, FString(TEXT("Sir Roland")));
+
+	// Case-insensitive in, canonical casing out — a code IS a file name.
+	TestTrue(TEXT("SetLanguage accepts a registered code in any casing"), W.Subsystem->SetLanguage(TEXT("FR")));
+	TestEqual(TEXT("and reports the canonical casing back"), W.Subsystem->GetLanguage(), FString(TEXT("fr")));
+
+	FirstLine(Title, Text, Speaker);
+	TestEqual(TEXT("an OUTDATED row ships the old translation, not the new source"), Title, FString(TEXT("Salutations")));
+	TestEqual(TEXT("a translated row ships the translation"), Text, FString(TEXT("Bien le bonjour.")));
+	TestEqual(TEXT("the speaker name flips with it"), Speaker, FString(TEXT("Sire Roland")));
+
+	// AN UNKNOWN CODE IS A NO-OP. Not a fall back to the default: a typo must never move the
+	// player out of the language they picked.
+	TestFalse(TEXT("SetLanguage refuses a code this project does not carry"), W.Subsystem->SetLanguage(TEXT("de")));
+	TestEqual(TEXT("and leaves the player where they were"), W.Subsystem->GetLanguage(), FString(TEXT("fr")));
+	FirstLine(Title, Text, Speaker);
+	TestEqual(TEXT("the refused switch changed nothing on screen"), Title, FString(TEXT("Salutations")));
+
+	// An EMPTY code is refused on the same rung rather than read as "the default".
+	TestFalse(TEXT("SetLanguage refuses an empty code"), W.Subsystem->SetLanguage(FString()));
+	TestEqual(TEXT("and still leaves the player where they were"), W.Subsystem->GetLanguage(), FString(TEXT("fr")));
+
+	// The second language reads its OWN table: the id French serves outdated is Done here.
+	TestTrue(TEXT("SetLanguage switches to the second language"), W.Subsystem->SetLanguage(TEXT("es")));
+	FirstLine(Title, Text, Speaker);
+	TestEqual(TEXT("per-language tables are independent (title)"), Title, FString(TEXT("Saludo")));
+	TestEqual(TEXT("per-language tables are independent (text)"), Text, FString(TEXT("Well met.")));
+
+	// Back to the source language: it is a legitimate choice with no table of its own.
+	TestTrue(TEXT("the source language is settable"), W.Subsystem->SetLanguage(TEXT("en")));
+	FirstLine(Title, Text, Speaker);
+	TestEqual(TEXT("the source text comes back"), Title, FString(TEXT("Greeting")));
+	TestEqual(TEXT("and so does the source speaker name"), Speaker, FString(TEXT("Sir Roland")));
+
+	// NEVER UNDEFINED: a value that keyed no table anywhere is its own text.
+	TestEqual(TEXT("an unkeyed value resolves to itself in the source language"),
+		Project->GetGlobalString(TEXT("nothing keyed this"), TEXT("en")), FString(TEXT("nothing keyed this")));
+	TestEqual(TEXT("and in a target language too"),
+		Project->GetGlobalString(TEXT("nothing keyed this"), TEXT("fr")), FString(TEXT("nothing keyed this")));
+
+	// A PRE-LOCALIZATION project: no roster, no switching, and the language it was already on.
+	{
+		TestTrue(TEXT("the source-only build folder is writable"), WriteContractBuildDir(SourceOnlyBuildDir(), /*bWithLocalization=*/ false));
+		UEditorAssetLibrary::DeleteDirectory(SourceOnlyTestRoot);
+		UStoryFlowProjectAsset* SourceOnly = UStoryFlowImporter::ImportProject(SourceOnlyBuildDir(), SourceOnlyTestRoot);
+		FGCObjectScopeGuard SourceOnlyGuard(SourceOnly);
+		if (TestNotNull(TEXT("the source-only project imports"), SourceOnly))
+		{
+			W.Subsystem->SetProject(SourceOnly);
+			TestFalse(TEXT("it is not a localized project"), SourceOnly->bHasLocalization);
+			TestEqual(TEXT("it offers no languages to pick from"), W.Subsystem->GetLanguages().Num(), 0);
+			TestEqual(TEXT("and reads in the pre-localization default"), W.Subsystem->GetLanguage(), FString(TEXT("en")));
+			TestFalse(TEXT("SetLanguage cannot move it off source"), W.Subsystem->SetLanguage(TEXT("fr")));
+			TestTrue(TEXT("its own source language is still settable"), W.Subsystem->SetLanguage(TEXT("en")));
+
+			RenderLine(SourceOnly, Title, Text, Speaker);
+			TestEqual(TEXT("a pre-localization export renders exactly as it always did (title)"), Title, FString(TEXT("Greeting")));
+			TestEqual(TEXT("a pre-localization export renders exactly as it always did (text)"), Text, FString(TEXT("Well met.")));
+			TestEqual(TEXT("a pre-localization export renders exactly as it always did (speaker)"), Speaker, FString(TEXT("Sir Roland")));
+		}
+	}
 
 	ContractCleanUp();
 	return true;

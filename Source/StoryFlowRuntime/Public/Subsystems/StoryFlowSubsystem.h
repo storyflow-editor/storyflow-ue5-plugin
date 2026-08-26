@@ -61,6 +61,57 @@ public:
 	TArray<FString> GetAllScriptPaths() const;
 
 	// ========================================================================
+	// Localization (spec §9) — the player's language, game-wide
+	// ========================================================================
+
+	/**
+	 * Switch the language every StoryFlow string is read in. True when the game is now reading
+	 * `LanguageCode`.
+	 *
+	 * AN UNKNOWN CODE IS A NO-OP: it warns, changes nothing and returns false. Falling back to
+	 * the default instead would let a typo in a Blueprint silently move the player out of the
+	 * language they picked, and a caller that wants to know can read GetLanguage. The codes this
+	 * accepts are exactly the rows GetLanguages returns, matched case-insensitively; a project
+	 * with no localization sidecar accepts only its source language, so this is a no-op there by
+	 * construction rather than by a special case.
+	 *
+	 * WHAT MOVES, AND WHEN. Everything resolved AT READ TIME follows immediately: dialogue titles
+	 * and text, option labels, speaker names, character Name/Image doors, string values read
+	 * through the string table. What a script SEEDED stays as it was seeded — the initial values
+	 * of local, global and character string variables are resolved once when the script or the
+	 * project is loaded (the A5 seats the character contract pins), so a mid-session switch
+	 * reaches them at the next ResetGlobalVariables / ResetRuntimeCharacters / dialogue start,
+	 * not before. Switching from a menu before play begins therefore lands everywhere.
+	 *
+	 * PERSISTENCE IS THE GAME'S. This plugin keeps the choice for the SESSION only, deliberately.
+	 * It has no player-settings lane of its own: the save envelope carries story state (globals,
+	 * characters, once-only options, the .sfd overlay) that a slot owns, and a language is not
+	 * that kind of thing — it must survive with no save file at all, apply before any save is
+	 * loaded, and not differ per slot. The HTML runtime reaches the same conclusion and stores it
+	 * beside its volume settings rather than in the envelope. In Unreal that lane already exists
+	 * and belongs to the game: persist the code with your own settings (UGameUserSettings or your
+	 * own USaveGame) and call this once at boot.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Localization")
+	bool SetLanguage(const FString& LanguageCode);
+
+	/** The language code every StoryFlow string is currently read in. The source language until set. */
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Localization")
+	FString GetLanguage() const { return CurrentLanguage; }
+
+	/**
+	 * Every language the player can be switched to: the SOURCE language first, then the author's
+	 * registry order — the list a game's own language picker draws.
+	 *
+	 * The source row's Name is its Code: the registry stores a display label for target languages
+	 * only, because the source language is a label and its text lives in the documents themselves.
+	 * EMPTY for a project with no localization sidecar, which is how a game asks "is this project
+	 * localized at all" without reading a key count.
+	 */
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Localization")
+	TArray<FStoryFlowLanguage> GetLanguages() const;
+
+	// ========================================================================
 	// Global Variables (shared across all components)
 	// ========================================================================
 
@@ -233,6 +284,15 @@ private:
 	/** The loaded project asset */
 	UPROPERTY()
 	TObjectPtr<UStoryFlowProjectAsset> ProjectAsset;
+
+	/**
+	 * The language every string lookup runs in (spec §9). "en" before a project is loaded, which
+	 * is what every pre-localization export's strings are keyed by; SetProject then points it at
+	 * the project's SOURCE language unless the player has already chosen a language the new
+	 * project also carries.
+	 */
+	UPROPERTY()
+	FString CurrentLanguage = TEXT("en");
 
 	/** Runtime copy of global variables (shared across all dialogues) */
 	UPROPERTY()

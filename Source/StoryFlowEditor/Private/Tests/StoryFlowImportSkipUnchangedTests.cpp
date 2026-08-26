@@ -382,10 +382,11 @@ bool FStoryFlowImportHashSchemaSaltTest::RunTest(const FString& Parameters)
 	using namespace StoryFlowSkipUnchangedTestHelpers;
 
 	// The schema-version salt is what forces every asset to re-import ONCE after an import
-	// format change (P4 bumped it 5 -> 6 for the character index and id fields): a hash
-	// recorded under the old salt can never match one computed under the new, so the skip
-	// comparison fails and the asset re-parses. This test pins both halves — the salt is
-	// exactly "6", and a stale old-salt hash really does re-import instead of skipping.
+	// format change (P4 bumped it 5 -> 6 for the character index and id fields; localization
+	// bumped it 6 -> 7 for the translations sidecar): a hash recorded under the old salt can
+	// never match one computed under the new, so the skip comparison fails and the asset
+	// re-parses. This test pins both halves — the salt is exactly "7", and a stale old-salt
+	// hash really does re-import instead of skipping.
 	UEditorAssetLibrary::DeleteDirectory(TestRoot);
 
 	TSharedPtr<FJsonObject> V1 = ScriptV1();
@@ -402,13 +403,13 @@ bool FStoryFlowImportHashSchemaSaltTest::RunTest(const FString& Parameters)
 
 	// A script's hash parts are exactly {condensed source JSON, script path}.
 	const TArray<FString> HashParts = { CondenseJson(V1), TEXT("salt/subject") };
-	const FString CurrentSaltHash = HashWithSalt(TEXT("6"), HashParts);
-	const FString OldSaltHash = HashWithSalt(TEXT("5"), HashParts);
+	const FString CurrentSaltHash = HashWithSalt(TEXT("7"), HashParts);
+	const FString OldSaltHash = HashWithSalt(TEXT("6"), HashParts);
 
-	TestEqual(TEXT("the recorded hash is salted with schema version 6"), Imported->ImportedSourceHash, CurrentSaltHash);
+	TestEqual(TEXT("the recorded hash is salted with schema version 7"), Imported->ImportedSourceHash, CurrentSaltHash);
 	TestNotEqual(TEXT("a hash recorded under the old salt can never match"), CurrentSaltHash, OldSaltHash);
 
-	// Simulate an asset last written by the version-5 plugin: same source, old-salt hash.
+	// Simulate an asset last written by the version-6 plugin: same source, old-salt hash.
 	// The re-import must NOT skip — it must re-parse and re-record the current hash.
 	Imported->ImportedSourceHash = OldSaltHash;
 	UStoryFlowScriptAsset* Reimported = UStoryFlowImporter::ImportScriptFromJson(V1, TEXT("salt/subject"), TestRoot);

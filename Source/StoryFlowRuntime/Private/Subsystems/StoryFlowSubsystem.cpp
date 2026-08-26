@@ -41,6 +41,16 @@ void UStoryFlowSubsystem::SetProject(UStoryFlowProjectAsset* NewProject)
 
 	if (ProjectAsset)
 	{
+		// THE LANGUAGE FIRST, because everything seeded below resolves its strings in it.
+		// The player's choice SURVIVES a re-set of a project that still carries it (the HTML
+		// runtime's first-wins posture: re-installing content mid-game must not undo a choice);
+		// a project that does not carry the current code snaps to that project's source
+		// language, so a game can never be left reading a language nothing ships. For a project
+		// with no localization sidecar the only code that resolves is its source language, so
+		// this line is "en" -> "en" and changes nothing.
+		const FString Carried = ProjectAsset->ResolveLanguageCode(CurrentLanguage);
+		CurrentLanguage = Carried.IsEmpty() ? ProjectAsset->SourceLanguage : Carried;
+
 		// Initialize global variables from project. Detach shared map storage so
 		// runtime map mutations never write into the project asset (HTML inflates
 		// fresh maps from project data on LOAD_CONTENT).
@@ -165,6 +175,47 @@ void UStoryFlowSubsystem::ResetDataAssetOverlay()
 	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Data Asset session writes cleared"));
 }
 
+bool UStoryFlowSubsystem::SetLanguage(const FString& LanguageCode)
+{
+	const FString Next = ProjectAsset ? ProjectAsset->ResolveLanguageCode(LanguageCode) : FString();
+	if (Next.IsEmpty())
+	{
+		// NO-OP, never a fall back to the default: a typo must not move the player out of the
+		// language they picked. The caller is told, and GetLanguage still answers truthfully.
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: SetLanguage - unknown language '%s', staying on '%s'"), *LanguageCode, *CurrentLanguage);
+		return false;
+	}
+
+	if (Next != CurrentLanguage)
+	{
+		CurrentLanguage = Next;
+		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Language set to '%s'"), *CurrentLanguage);
+	}
+	return true;
+}
+
+TArray<FStoryFlowLanguage> UStoryFlowSubsystem::GetLanguages() const
+{
+	TArray<FStoryFlowLanguage> Out;
+	if (!ProjectAsset || !ProjectAsset->bHasLocalization)
+	{
+		return Out;
+	}
+
+	// The source row's Name is its Code — see the header. Emitted only when there IS a source
+	// language, so a hand-edited sidecar with a blank one cannot produce a row a picker would
+	// draw and SetLanguage would then refuse.
+	if (!ProjectAsset->SourceLanguage.IsEmpty())
+	{
+		FStoryFlowLanguage Source;
+		Source.Code = ProjectAsset->SourceLanguage;
+		Source.Name = ProjectAsset->SourceLanguage;
+		Out.Add(Source);
+	}
+	Out.Append(ProjectAsset->Languages);
+	return Out;
+}
+
 void UStoryFlowSubsystem::ResolveStringVariableValues(TMap<FString, FStoryFlowVariable>& Variables)
 {
 	if (!ProjectAsset)
@@ -183,7 +234,7 @@ void UStoryFlowSubsystem::ResolveStringVariableValues(TMap<FString, FStoryFlowVa
 					FString Key = Element.GetString();
 					if (!Key.IsEmpty())
 					{
-						Element.SetString(ProjectAsset->GetGlobalString(Key));
+						Element.SetString(ProjectAsset->GetGlobalString(Key, CurrentLanguage));
 					}
 				}
 			}
@@ -192,7 +243,7 @@ void UStoryFlowSubsystem::ResolveStringVariableValues(TMap<FString, FStoryFlowVa
 				FString Key = VarPair.Value.Value.GetString();
 				if (!Key.IsEmpty())
 				{
-					VarPair.Value.Value.SetString(ProjectAsset->GetGlobalString(Key));
+					VarPair.Value.Value.SetString(ProjectAsset->GetGlobalString(Key, CurrentLanguage));
 				}
 			}
 		}
@@ -211,7 +262,7 @@ void UStoryFlowSubsystem::ResolveStringVariableValues(TMap<FString, FStoryFlowVa
 					FString Key = Entry.Value.GetString();
 					if (!Key.IsEmpty())
 					{
-						Entry.Value.SetString(ProjectAsset->GetGlobalString(Key));
+						Entry.Value.SetString(ProjectAsset->GetGlobalString(Key, CurrentLanguage));
 					}
 				}
 			}

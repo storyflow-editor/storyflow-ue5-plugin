@@ -1207,6 +1207,28 @@ struct STORYFLOWRUNTIME_API FStoryFlowStringTable
 	}
 };
 
+/**
+ * One TARGET language of the localization sidecar (localization spec §9): the code its table is
+ * keyed by, and the display label the author registered for it.
+ *
+ * The SOURCE language is not one of these. It is a code with no table at all — the artifacts
+ * themselves carry the source text — so it appears in UStoryFlowSubsystem::GetLanguages as a row
+ * whose Name is its Code, exactly as the HTML runtime's getLanguages builds it.
+ */
+USTRUCT(BlueprintType)
+struct STORYFLOWRUNTIME_API FStoryFlowLanguage
+{
+	GENERATED_BODY()
+
+	/** The language code, and the key of this language's table ("fr", "es") */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	FString Code;
+
+	/** The display label the author registered ("French"), for a game's own language picker */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	FString Name;
+};
+
 // ============================================================================
 // Character System
 // ============================================================================
