@@ -5,7 +5,9 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Components/StoryFlowComponent.h"
+#include "Data/StoryFlowCharacterAsset.h"
 #include "Data/StoryFlowDataAssetAsset.h"
+#include "Data/StoryFlowDataAssetStore.h"
 #include "Data/StoryFlowHandles.h"
 #include "Data/StoryFlowProjectAsset.h"
 #include "Data/StoryFlowScriptAsset.h"
@@ -371,6 +373,85 @@ bool FStoryFlowCharacterWriteArmsIdFirstTest::RunTest(const FString& Parameters)
 }
 
 // ============================================================================
+// Array-ELEMENT write: Set Array Element's write-back resolves the char array id-first
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowCharacterArrayElementWriteTest,
+	"StoryFlow.Characters.IdResolution.ArrayElementWrite",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowCharacterArrayElementWriteTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowCharacterResolutionTestHelpers;
+
+	FScopedWorld W;
+	if (!TestTrue(TEXT("world initializes"), W.Init()))
+	{
+		return false;
+	}
+	UStoryFlowProjectAsset* Project = ImportVariablesFixture(*this);
+	if (!Project)
+	{
+		return false;
+	}
+	FGCObjectScopeGuard ProjectGuard(Project);
+
+	// HandleArraySetElement's write-back is a DISTINCT resolution site from the whole-array
+	// SetCharacterVar lane: it dispatches on the SOURCE node wired to the array pin and
+	// resolves that node's character binding itself. Same decoy pattern as WriteArms — the
+	// getter is id-bound to the HERO with the VILLAIN in its path field, so a path-first
+	// write-back corrupts the villain's array.
+	UStoryFlowScriptAsset* Script = NewObject<UStoryFlowScriptAsset>(GetTransientPackage());
+	FGCObjectScopeGuard ScriptGuard(Script);
+	Script->StartNode = TEXT("0");
+	Script->Nodes.Add(TEXT("0"), MakeNode(TEXT("0"), EStoryFlowNodeType::Start, TEXT("start")));
+	Script->Nodes.Add(TEXT("GA"), MakeCharGetter(TEXT("GA"), HeroId, VillainKey, TEXT("Inventory"), TEXT("string"), /*bIsArray*/ true));
+	{
+		FStoryFlowNode SE = MakeNode(TEXT("SE"), EStoryFlowNodeType::SetStringArrayElement, TEXT("setStringArrayElement"));
+		SE.Data.Value1.SetInt(1);                  // index (export dialect: value1)
+		SE.Data.Value2.SetString(TEXT("lantern")); // element (export dialect: value2)
+		Script->Nodes.Add(SE.Id, SE);
+	}
+	Script->Nodes.Add(TEXT("End"), MakeNode(TEXT("End"), EStoryFlowNodeType::End, TEXT("end")));
+
+	Script->Connections.Add(MakeEdge(TEXT("GA"), TEXT("SE"),
+		StoryFlowHandles::Source(TEXT("GA"), TEXT("string-array-")),
+		StoryFlowHandles::Target(TEXT("SE"), TEXT("string-array-2"))));
+	Script->Connections.Add(MakeEdge(TEXT("0"), TEXT("SE"), StoryFlowHandles::Source(TEXT("0")), StoryFlowHandles::Target(TEXT("SE"), TEXT("0"))));
+	Script->Connections.Add(MakeEdge(TEXT("SE"), TEXT("End"), StoryFlowHandles::Source(TEXT("SE"), StoryFlowHandles::Out_Flow), StoryFlowHandles::Target(TEXT("End"), TEXT(""))));
+	Script->BuildConnectionIndices();
+
+	Project->Scripts.Add(TEXT("charelem"), Script);
+	W.Subsystem->SetProject(Project);
+	W.Component->StartDialogueWithScript(TEXT("charelem"));
+
+	const FStoryFlowCharacterDef* Hero = W.Subsystem->GetRuntimeCharacters().Find(HeroKey);
+	const FStoryFlowCharacterDef* Villain = W.Subsystem->GetRuntimeCharacters().Find(VillainKey);
+	if (!TestNotNull(TEXT("hero record exists"), Hero) || !TestNotNull(TEXT("villain record exists"), Villain))
+	{
+		CleanUp();
+		return false;
+	}
+
+	const TArray<FStoryFlowVariant>& HeroInventory = Hero->Variables[TEXT("Inventory")].Value.GetArray();
+	if (TestEqual(TEXT("element write kept the hero's array length"), HeroInventory.Num(), 2))
+	{
+		TestEqual(TEXT("element write left index 0 alone"), HeroInventory[0].GetString(), FString(TEXT("sword")));
+		TestEqual(TEXT("element write landed on the id's character at index 1"), HeroInventory[1].GetString(), FString(TEXT("lantern")));
+	}
+
+	// The decoy-path character is untouched — the write-back resolved id-first.
+	const TArray<FStoryFlowVariant>& VillainInventory = Villain->Variables[TEXT("Inventory")].Value.GetArray();
+	if (TestEqual(TEXT("villain array uncorrupted"), VillainInventory.Num(), 1))
+	{
+		TestEqual(TEXT("villain array item uncorrupted"), VillainInventory[0].GetString(), FString(TEXT("dagger")));
+	}
+
+	CleanUp();
+	return true;
+}
+
+// ============================================================================
 // A wired character input still overrides the embedded id — and a wired ID resolves
 // ============================================================================
 
@@ -548,6 +629,9 @@ bool FStoryFlowCharacterPreP4PathLaneTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("path-bound read answers exactly as V2"),
 		Evaluator.EvaluateBooleanFromNode(Context.GetNode(TEXT("GB")), TEXT(""), TEXT("")));
 	TestEqual(TEXT("the pure path world emits no character id warnings"), Context.CharacterIdWarningsEmitted, 0);
+	// ...and the COMPONENT-driven run above (speaker + setter) warned nothing either — the
+	// bare context beside it cannot see that run's latch.
+	TestEqual(TEXT("the component's run emitted no character id warnings"), W.Component->GetCharacterIdWarningsEmitted(), 0);
 
 	CleanUp();
 	return true;
@@ -767,6 +851,12 @@ bool FStoryFlowCharacterOneStateTest::RunTest(const FString& Parameters)
 	Project->Scripts.Add(TEXT("onestate"), Script);
 	W.Subsystem->SetProject(Project);
 
+	// Contract §1 disjointness pin: a character FILE id never names a data-asset seed entry.
+	// The Blueprint branch's bridge-before-seed precedence RELIES on this — an exporter that
+	// let characters into data-assets.json would silently flip which branch answers.
+	TestFalse(TEXT("the character id is absent from the data-asset seed"),
+		StoryFlowDataAssets::HasAsset(W.Subsystem->GetDataAssetSeed(), HeroId));
+
 	// The Blueprint surface reaches characters through a data-asset handle stamped with the
 	// character FILE id — the contract §3 bridge route.
 	UStoryFlowDataAssetAsset* HeroHandle = NewObject<UStoryFlowDataAssetAsset>(GetTransientPackage());
@@ -885,6 +975,43 @@ bool FStoryFlowCharacterCfBuiltinAliasTest::RunTest(const FString& Parameters)
 	// The id lane composes with the alias: cf_name through the hero's FILE id.
 	TestEqual(TEXT("cf_name through the character id"),
 		Context.GetCharacterVariableValue(HeroId, TEXT("cf_name")).GetString(), FString(TEXT("Renamed")));
+
+	// Amendment A2a: the SAME aliases hold on the public Blueprint lanes — the forbidden shape
+	// is a lane where cf_name silently no-ops while another lane writes Name. Both directions:
+	// a cf_ write read back under the display spelling, and a display write read back as cf_.
+	FStoryFlowVariant PublicName;
+	PublicName.SetString(TEXT("Public Renamed"));
+	W.Component->SetCharacterVariable(HeroKey, TEXT("cf_name"), PublicName);
+	TestEqual(TEXT("public SetCharacterVariable accepts cf_name"),
+		W.Component->GetCharacterVariable(HeroKey, TEXT("Name")).GetString(), FString(TEXT("Public Renamed")));
+	TestEqual(TEXT("public GetCharacterVariable accepts cf_image"),
+		W.Component->GetCharacterVariable(HeroKey, TEXT("cf_image")).GetString(), FString(TEXT("portrait.png")));
+
+	// The typed asset-picker lane too (A2a says EVERY name-accepting lane).
+	UStoryFlowCharacterAsset* const* HeroAsset = Project->Characters.Find(HeroKey);
+	if (TestNotNull(TEXT("the hero character asset exists"), HeroAsset ? *HeroAsset : nullptr))
+	{
+		W.Component->SetCharacterStringVariable(*HeroAsset, TEXT("cf_image"), TEXT("typed.png"));
+		TestEqual(TEXT("typed setter accepts cf_image"),
+			W.Component->GetCharacterStringVariable(*HeroAsset, TEXT("Image")), FString(TEXT("typed.png")));
+		TestEqual(TEXT("typed getter accepts cf_name"),
+			W.Component->GetCharacterStringVariable(*HeroAsset, TEXT("cf_name")), FString(TEXT("Public Renamed")));
+	}
+
+	// Interpolation's builtin branch honors the cf_ spellings too (name-or-cf ONLY: the
+	// custom-variable row's id tolerance is a recorded asymmetry and stays off the builtins).
+	{
+		FStoryFlowVariable CharTyped;
+		CharTyped.Id = TEXT("cv");
+		CharTyped.Name = TEXT("protagonist");
+		CharTyped.Type = EStoryFlowVariableType::Character;
+		CharTyped.Value.SetString(HeroKey);
+		Context.LocalVariables.Add(CharTyped.Id, CharTyped);
+		TestEqual(TEXT("interpolation resolves {var.cf_name} to the Name builtin"),
+			Context.InterpolateVariables(TEXT("{protagonist.cf_name}")), FString(TEXT("Public Renamed")));
+		TestEqual(TEXT("interpolation resolves {var.cf_image} to the Image builtin"),
+			Context.InterpolateVariables(TEXT("{protagonist.cf_image}")), FString(TEXT("typed.png")));
+	}
 
 	CleanUp();
 	return true;

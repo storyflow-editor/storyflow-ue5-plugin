@@ -1421,16 +1421,17 @@ FStoryFlowVariant UStoryFlowComponent::GetCharacterVariable(const FString& Chara
 		return FStoryFlowVariant();
 	}
 
-	// Handle built-in "Name" field (stored as string table key — resolve it)
-	if (VariableName.Equals(TEXT("Name"), ESearchCase::IgnoreCase))
+	// Handle built-in "Name" field (stored as string table key — resolve it). The cf_name
+	// alias applies on EVERY name-accepting lane (amendment A2a), this public one included.
+	if (IsCharacterNameBuiltin(VariableName))
 	{
 		FStoryFlowVariant Result;
 		Result.SetString(ResolveString(CharDef->Name));
 		return Result;
 	}
 
-	// Handle built-in "Image" field
-	if (VariableName.Equals(TEXT("Image"), ESearchCase::IgnoreCase))
+	// Handle built-in "Image" field (or cf_image — amendment A2a)
+	if (IsCharacterImageBuiltin(VariableName))
 	{
 		FStoryFlowVariant Result;
 		Result.SetString(CharDef->Image);
@@ -1456,15 +1457,16 @@ void UStoryFlowComponent::SetCharacterVariable(const FString& CharacterPath, con
 		return;
 	}
 
-	// Handle built-in "Name" field
-	if (VariableName.Equals(TEXT("Name"), ESearchCase::IgnoreCase))
+	// Handle built-in "Name" field (or cf_name — amendment A2a: the aliases hold on every
+	// lane, so a cf_ write from Blueprint lands exactly where the node lane's would)
+	if (IsCharacterNameBuiltin(VariableName))
 	{
 		CharDef->Name = Value.ToString();
 		return;
 	}
 
-	// Handle built-in "Image" field
-	if (VariableName.Equals(TEXT("Image"), ESearchCase::IgnoreCase))
+	// Handle built-in "Image" field (or cf_image — amendment A2a)
+	if (IsCharacterImageBuiltin(VariableName))
 	{
 		CharDef->Image = Value.ToString();
 		return;
@@ -1744,13 +1746,13 @@ FString UStoryFlowComponent::GetCharacterStringVariable(UStoryFlowCharacterAsset
 	FStoryFlowCharacterDef* CharDef = FindCharacterFromAsset(Character);
 	if (!CharDef) return TEXT("");
 
-	// Handle built-in "Name" field (stored as string table key)
-	if (VariableName.Equals(TEXT("Name"), ESearchCase::IgnoreCase))
+	// Handle built-in "Name" field (stored as string table key; cf_name alias — amendment A2a)
+	if (IsCharacterNameBuiltin(VariableName))
 	{
 		return ResolveString(CharDef->Name);
 	}
-	// Handle built-in "Image" field
-	if (VariableName.Equals(TEXT("Image"), ESearchCase::IgnoreCase))
+	// Handle built-in "Image" field (or cf_image — amendment A2a)
+	if (IsCharacterImageBuiltin(VariableName))
 	{
 		return CharDef->Image;
 	}
@@ -1768,14 +1770,14 @@ void UStoryFlowComponent::SetCharacterStringVariable(UStoryFlowCharacterAsset* C
 	FStoryFlowCharacterDef* CharDef = FindCharacterFromAsset(Character);
 	if (!CharDef) return;
 
-	// Handle built-in "Name" field
-	if (VariableName.Equals(TEXT("Name"), ESearchCase::IgnoreCase))
+	// Handle built-in "Name" field (or cf_name — amendment A2a)
+	if (IsCharacterNameBuiltin(VariableName))
 	{
 		CharDef->Name = Value;
 		return;
 	}
-	// Handle built-in "Image" field
-	if (VariableName.Equals(TEXT("Image"), ESearchCase::IgnoreCase))
+	// Handle built-in "Image" field (or cf_image — amendment A2a)
+	if (IsCharacterImageBuiltin(VariableName))
 	{
 		CharDef->Image = Value;
 		return;

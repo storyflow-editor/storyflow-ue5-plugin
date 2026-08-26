@@ -697,13 +697,17 @@ FString FStoryFlowExecutionContext::InterpolateVariables(const FString& Text) co
 
 					if (CharDef)
 					{
-						// Handle built-in "Name" property (resolve through string table)
-						if (InnerVarName.Equals(TEXT("Name"), ESearchCase::IgnoreCase))
+						// Handle built-in "Name" property (resolve through string table; cf_name
+						// alias — amendment A2a). NAME-OR-CF SPELLINGS ONLY on this branch: the
+						// custom-variable row below tolerates ids by design (an HTML-reference
+						// asymmetry recorded as deliberate), and that tolerance must not creep
+						// into the builtins.
+						if (IsCharacterNameBuiltin(InnerVarName))
 						{
 							Replacement = GetString(CharDef->Name);
 						}
-						// Handle built-in "Image" property
-						else if (InnerVarName.Equals(TEXT("Image"), ESearchCase::IgnoreCase))
+						// Handle built-in "Image" property (or cf_image — amendment A2a)
+						else if (IsCharacterImageBuiltin(InnerVarName))
 						{
 							Replacement = CharDef->Image;
 						}

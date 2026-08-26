@@ -246,6 +246,13 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")
 	TArray<FString> GetCurrentDialogueTags() const;
 
+	/**
+	 * How many character id warnings this component's execution context has emitted — a TEST
+	 * SEAM mirroring FStoryFlowExecutionContext::CharacterIdWarningsEmitted (the context member
+	 * is private here, and the pre-P4 pins assert a component-driven run warned nothing).
+	 */
+	int32 GetCharacterIdWarningsEmitted() const { return ExecutionContext.CharacterIdWarningsEmitted; }
+
 	/** Check if dialogue is currently active */
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")
 	bool IsDialogueActive() const;
