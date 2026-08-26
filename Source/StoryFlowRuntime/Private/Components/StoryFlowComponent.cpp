@@ -1612,6 +1612,40 @@ UTexture2D* UStoryFlowComponent::ResolveCharacterPortraitTexture(const FString& 
 }
 
 // ============================================================================
+// Character Access (by character FILE id — P4)
+// ============================================================================
+// Thin by rule (contract §4): FindCharacter already resolves ids through
+// ResolveCharacterKey, so the wrappers delegate and never re-resolve — see the
+// header block for why.
+
+void UStoryFlowComponent::GetCharacterById(const FString& CharacterId, FStoryFlowCharacterDef& OutCharacter, bool& bFound)
+{
+	FStoryFlowCharacterDef* CharDef = FindCharacter(CharacterId);
+	bFound = CharDef != nullptr;
+	OutCharacter = CharDef ? *CharDef : FStoryFlowCharacterDef();
+}
+
+void UStoryFlowComponent::GetCharacterPathById(const FString& CharacterId, FString& OutPath, bool& bFound)
+{
+	// The one wrapper that is NOT a FindCharacter delegate: the bridge alone answers, no
+	// loaded record required (and no warn — an unloaded record is not a degraded bridge).
+	UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem();
+	const FString* RecordKey = Subsystem ? Subsystem->GetCharacterIdToPath().Find(CharacterId) : nullptr;
+	bFound = RecordKey != nullptr;
+	OutPath = RecordKey ? *RecordKey : FString();
+}
+
+FStoryFlowVariant UStoryFlowComponent::GetCharacterVariableById(const FString& CharacterId, const FString& VariableName)
+{
+	return GetCharacterVariable(CharacterId, VariableName);
+}
+
+void UStoryFlowComponent::SetCharacterVariableById(const FString& CharacterId, const FString& VariableName, const FStoryFlowVariant& Value)
+{
+	SetCharacterVariable(CharacterId, VariableName, Value);
+}
+
+// ============================================================================
 // Character Variable Access (typed, with asset picker)
 // ============================================================================
 

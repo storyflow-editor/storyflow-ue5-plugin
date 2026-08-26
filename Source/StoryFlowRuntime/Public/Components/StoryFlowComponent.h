@@ -162,9 +162,13 @@ public:
 
 	/**
 	 * Called when a character variable changes (Name, Image, or custom). Lets non-speaker UIs
-	 * react to setCharacterVar mutations. CharacterPath is the RESOLVED record key: an id-bound
-	 * write (P4) broadcasts the key its character id bridged to, path-bound and wired writes
-	 * broadcast the string the node carried exactly as before.
+	 * react to setCharacterVar mutations. NODE-lane writes only, a contract property per P4
+	 * amendment A2(b): Blueprint/script-API writes — SetCharacterVariable and its ById twin,
+	 * the typed setters, and the data-asset surface's character branch — never raise it.
+	 * CharacterPath is the RESOLVED record key: an id-bound write (P4) broadcasts the key its
+	 * character id bridged to (so a handler comparing the payload against a da_ id never
+	 * matches), path-bound and wired writes broadcast the string the node carried exactly as
+	 * before.
 	 */
 	UPROPERTY(BlueprintAssignable, Category = "StoryFlow|Events")
 	FOnCharacterVariableChanged OnCharacterVariableChanged;
@@ -588,6 +592,46 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character (Legacy)")
 	UTexture2D* GetCharacterPortrait(const FString& CharacterPath, const FString& AssetKey = TEXT(""));
+
+	// ========================================================================
+	// Character Access (by character FILE id — P4)
+	// ========================================================================
+	//
+	// The id-taking twins of the path APIs above (P4 contract §4). THIN WRAPPERS by rule:
+	// FindCharacter already routes a `da_` id through ResolveCharacterKey (bridge lookup,
+	// warn-once degraded fall-back), so these delegate to the path APIs and must never
+	// re-resolve or normalize the id themselves — a wrapper that does resolves twice, the
+	// exact drift the IdAndPathReachOneDef pin exists to catch.
+	//
+	// Per amendment A2(b), none of these raise OnCharacterVariableChanged — that delegate
+	// is node-lane only (see its declaration above).
+
+	/**
+	 * The live runtime character a character FILE id resolves to, through the id bridge.
+	 * bFound is false for a dangling id (no bridge entry) and for an id whose record is not
+	 * among the loaded runtime characters (the post-save-load shape) — GetCharacterPathById
+	 * can still answer in that second case, because the bridge itself is project-derived.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character (By Id)")
+	void GetCharacterById(const FString& CharacterId, FStoryFlowCharacterDef& OutCharacter, bool& bFound);
+
+	/**
+	 * The character record key (the path the runtime keys the record by) for a character
+	 * FILE id — a PURE BRIDGE LOOKUP, deliberately unlike GetCharacterById: it requires no
+	 * loaded runtime record, so after a save load it still answers for a character the save
+	 * did not carry. The key comes back verbatim (lowercase, backslashes) and is valid
+	 * input to every path-taking character API.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character (By Id)")
+	void GetCharacterPathById(const FString& CharacterId, FString& OutPath, bool& bFound);
+
+	/** Id twin of GetCharacterVariable. cf_name / cf_image alias the Name / Image builtins here too (amendment A2a). */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character (By Id)")
+	FStoryFlowVariant GetCharacterVariableById(const FString& CharacterId, const FString& VariableName);
+
+	/** Id twin of SetCharacterVariable. Warns and no-ops when the character does not declare the variable. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character (By Id)")
+	void SetCharacterVariableById(const FString& CharacterId, const FString& VariableName, const FStoryFlowVariant& Value);
 
 	// ========================================================================
 	// Character Variable Access (typed, with asset picker)
