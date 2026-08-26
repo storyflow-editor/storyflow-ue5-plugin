@@ -247,8 +247,8 @@ bool FStoryFlowExecutionContext::TryResolveDataAssetBinding(const FStoryFlowNode
 
 	// §6.1: the declaration moved under a live node. Treated as MISSING, never coerced — within
 	// the string family a value carries no evidence of its declared type, which is exactly why
-	// the check is on the DECLARATION. The character-variable arms have no equivalent gate; that
-	// is their bug, not a pattern to copy.
+	// the check is on the DECLARATION. The character-variable node lane carries the same gate
+	// on its write side now (HandleSetCharacterVar, the §5 type-mismatch pin).
 	if (!StoryFlowDataAssets::DeclMatchesNodeData(*Declaration, Accessor.Data))
 	{
 		MaybeWarnDataAsset(Accessor.Id, TEXT("changed"),

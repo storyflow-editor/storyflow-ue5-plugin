@@ -4598,6 +4598,21 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 		}
 		else if (PreCharDef->Variables.Contains(VariableName))
 		{
+			// Contract §5 type-mismatch pin (character-contract type-mismatch-write-refused):
+			// a write whose node snapshot disagrees with the declaration is REFUSED, exactly
+			// like the map branch above and the HTML runtime's setCharacterVariableValue.
+			// Builtins carry no declaration row, and an empty snapshot type carries no
+			// evidence of a mismatch — both stay ungated.
+			if (!VariableType.IsEmpty())
+			{
+				const FStoryFlowVariable* Declaration = PreCharDef->Variables.Find(VariableName);
+				if (Declaration && !StoryFlowDataAssets::DeclMatchesNodeData(*Declaration, Node->Data))
+				{
+					UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: SetCharacterVar type mismatch - variable '%s' on '%s' does not declare the node snapshot's type - write refused"), *VariableName, *CharacterPath);
+					HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
+					return;
+				}
+			}
 			bMutated = true;
 		}
 	}
