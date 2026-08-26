@@ -111,6 +111,17 @@ FString UStoryFlowProjectAsset::GetGlobalString(const FString& Key, const FStrin
 	// TIER 1, the localization overlay (spec §9): the sidecar's row for this id in the language
 	// being read. Absent for a pre-localization export, for the source language and for an id
 	// the sidecar does not carry — all of which fall through to the artifact's own table below.
+	//
+	// THE LOOKUP RUNS ON THE AUTHORED TEMPLATE here too: a caller that interpolates `{Variable}`
+	// tokens must do it on the RESULT of this call, never before it, or it hands this lookup a
+	// string no table was ever keyed by. See the full paragraph on
+	// FStoryFlowExecutionContext::GetString for why that failure is invisible.
+	//
+	// TRIPWIRE: this ladder and FStoryFlowExecutionContext::GetString's are deliberately
+	// separate — that one probes the current script's table before these globals, this one has
+	// no script to probe — but the probes themselves must stay in lockstep. A probe ADDED or
+	// REORDERED here must move there, and the reverse, or a string resolves one way inside
+	// dialogue and another way outside it.
 	if (const FString* Localized = FindLocalizedString(Key, LanguageCode))
 	{
 		return *Localized;

@@ -369,6 +369,8 @@ void UStoryFlowSubsystem::ResetAllState()
 	ResetRuntimeCharacters();
 	// Contract §3: reset clears the OVERLAY only — the seed is content, not state.
 	ResetDataAssetOverlay();
+	// CurrentLanguage deliberately survives, for the reason it survives a save load (spec §9):
+	// the active language is a player SETTING, not session state.
 	UsedOnceOnlyOptions.Empty();
 	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: All runtime state reset"));
 }

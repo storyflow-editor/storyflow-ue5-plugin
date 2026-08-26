@@ -571,6 +571,12 @@ FString FStoryFlowExecutionContext::GetString(const FString& Key, const FString&
 	// for different text. The tables are FULL and PRE-RESOLVED, so this plugin computes no status
 	// and no hash; a miss here simply means the source tiers answer.
 	//
+	// TRIPWIRE: this ladder and UStoryFlowProjectAsset::GetGlobalString's are deliberately
+	// separate — this one probes the current script's table before the project globals, that one
+	// has no script to probe — but the probes themselves must stay in lockstep. A probe ADDED or
+	// REORDERED here must move there, and the reverse, or a string resolves one way inside
+	// dialogue and another way outside it.
+	//
 	// THE LOOKUP RUNS ON THE AUTHORED TEMPLATE. Every caller that interpolates `{Variable}` tokens
 	// calls InterpolateVariables on the RESULT of this function, never the other way round — a
 	// translated line is authored with the same tokens as the source line, so interpolating first
