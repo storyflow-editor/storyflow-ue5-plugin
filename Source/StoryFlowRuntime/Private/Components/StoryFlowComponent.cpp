@@ -1635,6 +1635,18 @@ void UStoryFlowComponent::GetCharacterPathById(const FString& CharacterId, FStri
 	OutPath = RecordKey ? *RecordKey : FString();
 }
 
+TArray<FString> UStoryFlowComponent::GetCharacterPaths()
+{
+	// The LOADED set (amendment A4): RuntimeCharacters' keys in map order — after a save load
+	// that is the save's set, not the project's.
+	TArray<FString> Out;
+	if (UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem())
+	{
+		Subsystem->GetRuntimeCharacters().GetKeys(Out);
+	}
+	return Out;
+}
+
 FStoryFlowVariant UStoryFlowComponent::GetCharacterVariableById(const FString& CharacterId, const FString& VariableName)
 {
 	return GetCharacterVariable(CharacterId, VariableName);

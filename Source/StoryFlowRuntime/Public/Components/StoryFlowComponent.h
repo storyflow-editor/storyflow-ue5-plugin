@@ -625,6 +625,17 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character (By Id)")
 	void GetCharacterPathById(const FString& CharacterId, FString& OutPath, bool& bFound);
 
+	/**
+	 * Record keys of every LOADED character, in map order (no sort promise) — the amendment A4
+	 * enumeration surface. Ids serve stable BINDING, record keys serve enumeration and the
+	 * path-taking APIs above, so by-id enumeration is deliberately not provided: the bridge is
+	 * an implementation mapping, not an enumeration surface. After a save load this reflects
+	 * the LOADED set — which the asset registry cannot tell you, because the project's
+	 * character assets outlive what a save carried.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character (By Id)")
+	TArray<FString> GetCharacterPaths();
+
 	/** Id twin of GetCharacterVariable. cf_name / cf_image alias the Name / Image builtins here too (amendment A2a). */
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character (By Id)")
 	FStoryFlowVariant GetCharacterVariableById(const FString& CharacterId, const FString& VariableName);

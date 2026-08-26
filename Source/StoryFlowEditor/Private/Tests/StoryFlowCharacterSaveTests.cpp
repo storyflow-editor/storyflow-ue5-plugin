@@ -365,6 +365,60 @@ bool FStoryFlowCharacterOldSaveTest::RunTest(const FString& Parameters)
 }
 
 // ============================================================================
+// Enumeration reflects the LOADED set (amendment A4)
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowCharacterEnumerationTest,
+	"StoryFlow.Characters.Save.EnumerationReflectsLoadedSet",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowCharacterEnumerationTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowCharacterSaveTestHelpers;
+
+	// GetCharacterPaths is the A4 enumeration surface, and its whole reason to exist beside
+	// the asset registry is the second half of this test: after a save load it answers with
+	// the LOADED set, which no asset enumeration can know.
+	FScopedWorld W;
+	if (!TestTrue(TEXT("world initializes"), W.Init()))
+	{
+		return false;
+	}
+	UStoryFlowProjectAsset* Project = ImportFixture(*this, TwoCharacterIndex, TwoCharacterVariablesJson);
+	if (!Project)
+	{
+		return false;
+	}
+	FGCObjectScopeGuard ProjectGuard(Project);
+	W.Subsystem->SetProject(Project);
+
+	TArray<FString> Paths = W.Component->GetCharacterPaths();
+	TestEqual(TEXT("the fresh project enumerates both characters"), Paths.Num(), 2);
+	TestTrue(TEXT("the hero's record key is enumerated"), Paths.Contains(FString(HeroKey)));
+	TestTrue(TEXT("the villain's record key is enumerated"), Paths.Contains(FString(VillainKey)));
+
+	// A hero-only save (the OldSaveWholesaleReplace shape), loaded through the real slot.
+	UStoryFlowSaveGame* OldSave = NewObject<UStoryFlowSaveGame>();
+	OldSave->SaveDataJson = TEXT(R"JSON({"version":"1","globalVariables":{},"characters":{
+		"chars\\hero.sfc":{"name":"Hero","image":"","variables":{}}
+		},"usedOnceOnlyOptions":[]})JSON");
+	if (!TestTrue(TEXT("the hero-only save writes to the slot"), UGameplayStatics::SaveGameToSlot(OldSave, SlotName, 0))
+		|| !TestTrue(TEXT("and loads"), W.Subsystem->LoadFromSlot(SlotName, 0)))
+	{
+		CleanUpWithSlot();
+		return false;
+	}
+
+	Paths = W.Component->GetCharacterPaths();
+	TestEqual(TEXT("after the load, enumeration is the save's set"), Paths.Num(), 1);
+	TestTrue(TEXT("the save-carried key is the one enumerated"), Paths.Contains(FString(HeroKey)));
+	TestFalse(TEXT("the character the save did not carry is not enumerated"), Paths.Contains(FString(VillainKey)));
+
+	CleanUpWithSlot();
+	return true;
+}
+
+// ============================================================================
 // THE post-load divergence: a save older than the project's newest character
 // ============================================================================
 
@@ -430,8 +484,9 @@ bool FStoryFlowCharacterPostLoadDivergenceTest::RunTest(const FString& Parameter
 	TestEqual(TEXT("the phase A write restored"),
 		W.Component->GetCharacterVariableById(HeroId, TEXT("Coins")).GetInt(), 55);
 
-	// Three warn sites share the one latch: the Blueprint probe below, then — Reset() re-arms
-	// at dialogue start — exactly one across the run's two id-bound lines.
+	// Two EMITTING sites share the one latch (the pure bridge lookup below deliberately does
+	// not warn — amendment A3a): the record-lookup probe, then — Reset() re-arms at dialogue
+	// start — exactly one across the run's two id-bound lines.
 	AddExpectedError(TEXT("is not among the loaded runtime characters"), EAutomationExpectedErrorFlags::Contains, 2);
 
 	bool bFound = false;
