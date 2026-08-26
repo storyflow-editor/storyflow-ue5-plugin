@@ -103,7 +103,9 @@ namespace StoryFlowCharacterResolutionTestHelpers
 		return ImportFixture(Test, TwoCharacterIndex, TwoCharacterVariablesJson);
 	}
 
-	/** Wire a bare context at the subsystem's maps, the way InitializeWithSubsystem would. */
+	/** Point a bare context at ONLY the fields these suites read (script, characters, bridge).
+	    NOT the full InitializeWithSubsystem wiring — that path is exercised through the
+	    component-driven tests (StartDialogueWithScript). */
 	void WireContext(FStoryFlowExecutionContext& Context, UStoryFlowScriptAsset* Script, UStoryFlowSubsystem* Subsystem)
 	{
 		Context.CurrentScript = Script;

@@ -1931,14 +1931,16 @@ bool UStoryFlowComponent::TryGetCharacterScalarByName(const FStoryFlowCharacterD
 {
 	// The builtin rows are plain strings (cf_ aliases per amendment A1) and the surface never
 	// coerces, so they answer only the STRING accessor — same rule as the seed path's gate.
-	if (IsCharacterNameBuiltin(VariableName) || IsCharacterImageBuiltin(VariableName))
+	const bool bIsName = IsCharacterNameBuiltin(VariableName);
+	const bool bIsImage = IsCharacterImageBuiltin(VariableName);
+	if (bIsName || bIsImage)
 	{
 		if (ExpectedType != EStoryFlowVariableType::String)
 		{
 			return false;
 		}
 		// Name resolves through the string table, exactly like GetCharacterVariable.
-		OutValue.SetString(IsCharacterNameBuiltin(VariableName) ? ResolveString(CharDef.Name) : CharDef.Image);
+		OutValue.SetString(bIsName ? ResolveString(CharDef.Name) : CharDef.Image);
 		return true;
 	}
 
@@ -1954,13 +1956,15 @@ bool UStoryFlowComponent::TryGetCharacterScalarByName(const FStoryFlowCharacterD
 bool UStoryFlowComponent::TrySetCharacterScalarByName(FStoryFlowCharacterDef& CharDef, const FString& VariableName,
 	EStoryFlowVariableType ExpectedType, const FStoryFlowVariant& Value)
 {
-	if (IsCharacterNameBuiltin(VariableName) || IsCharacterImageBuiltin(VariableName))
+	const bool bIsName = IsCharacterNameBuiltin(VariableName);
+	const bool bIsImage = IsCharacterImageBuiltin(VariableName);
+	if (bIsName || bIsImage)
 	{
 		if (ExpectedType != EStoryFlowVariableType::String)
 		{
 			return false;
 		}
-		if (IsCharacterNameBuiltin(VariableName))
+		if (bIsName)
 		{
 			CharDef.Name = Value.ToString();
 		}
@@ -3342,7 +3346,9 @@ void UStoryFlowComponent::HandleArraySetElement(FStoryFlowNode* Node)
 		// The character path may itself arrive on a pin, so resolve it the way the array READER
 		// does rather than trusting the embedded binding alone — the shared helper also picks
 		// the additive characterId first when the node is unwired (P4), keeping this WRITE site
-		// on the same resolution as every read arm.
+		// on the same resolution as every read arm. A null Evaluator cannot evaluate the wire
+		// at all, so that branch falls back to the embedded binding — which still beats the
+		// pre-P4 shape here (a null dereference).
 		FString CharPath = Evaluator
 			? Evaluator->ResolveCharacterTarget(Source)
 			: ExecutionContext.ResolveCharacterRef(Source->Data.CharacterId, Source->Data.CharacterPath);
@@ -4396,43 +4402,13 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: HandleSetCharacterVar - CharPath='%s' VarName='%s' VarType='%s' InlineValue='%s'"),
 		*CharacterPath, *VariableName, *VariableType, *Node->Data.Value.ToString());
 
-	// First check if there's a connected character input
-	FString CharacterInputHandle = StoryFlowHandles::Target(Node->Id, StoryFlowHandles::In_CharacterInput);
-	const FStoryFlowConnection* CharEdge = nullptr;
-	if (UStoryFlowScriptAsset* CurrentScript = ExecutionContext.CurrentScript.Get())
-	{
-		for (const FStoryFlowConnection& Conn : CurrentScript->Connections)
-		{
-			if (Conn.TargetHandle == CharacterInputHandle)
-			{
-				CharEdge = &Conn;
-				break;
-			}
-		}
-	}
-
-	bool bWiredCharacter = false;
-	if (CharEdge)
-	{
-		// Evaluate the connected character node to get the path (character paths are strings).
-		// The wire still overrides the embedded binding exactly as before P4 — it may carry a
-		// path or a character id, and either resolves inside the character accessors through
-		// ResolveCharacterKey.
-		FStoryFlowNode* CharNode = ExecutionContext.GetNode(CharEdge->Source);
-		if (CharNode && Evaluator)
-		{
-			CharacterPath = Evaluator->EvaluateStringFromNode(CharNode, Node->Id, CharEdge->SourceHandle);
-			bWiredCharacter = true;
-		}
-	}
-
-	if (!bWiredCharacter)
-	{
-		// Unwired: id-first with the contract §3 path fall-back (P4). Resolving HERE rather
-		// than inside the accessors alone makes CharacterPath the resolved record key for an
-		// id-bound node — which is also what OnCharacterVariableChanged broadcasts below.
-		CharacterPath = ExecutionContext.ResolveCharacterRef(Node->Data.CharacterId, Node->Data.CharacterPath);
-	}
+	// One resolution, shared with every read arm and the array write-back: wired character
+	// input first, else id-first with the contract §3 path fall-back. Resolving HERE rather
+	// than inside the accessors alone makes CharacterPath the resolved record key for an
+	// id-bound node — which is also what OnCharacterVariableChanged broadcasts below.
+	CharacterPath = Evaluator
+		? Evaluator->ResolveCharacterTarget(Node)
+		: ExecutionContext.ResolveCharacterRef(Node->Data.CharacterId, Node->Data.CharacterPath);
 
 	if (CharacterPath.IsEmpty())
 	{

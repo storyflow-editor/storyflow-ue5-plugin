@@ -35,7 +35,9 @@ inline bool IsCharacterIdRef(const FString& Value)
 /**
  * True when a character-variable access names the Name builtin: the display spelling or the
  * contract-reserved `cf_name` id (P4 contract amendment A1 — character-variable access stays
- * NAME-keyed; the cf_ ids do nothing more than alias the two builtin rows).
+ * NAME-keyed; the cf_ ids do nothing more than alias the two builtin rows). Case-insensitive
+ * like the display spellings it aliases, deliberately unlike IsCharacterIdRef above — these
+ * are authored variable names, not stored ids.
  */
 inline bool IsCharacterNameBuiltin(const FString& VariableName)
 {
