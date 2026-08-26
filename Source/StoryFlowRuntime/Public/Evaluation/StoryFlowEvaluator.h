@@ -223,6 +223,17 @@ public:
 	 */
 	bool TryReadDataAssetVariable(FStoryFlowNode* Node, FStoryFlowVariant& OutValue);
 
+	// === Character Variable Reads ===
+
+	/**
+	 * The character string a char-var node's read or write targets — ONE resolution for every
+	 * typed arm (P4). A WIRED character input still overrides the embedded binding, exactly as
+	 * before P4; the wire carries a string that may be a path or a character id, and either
+	 * resolves inside the character accessors through ResolveCharacterKey. Unwired nodes pick
+	 * id-first with the contract §3 path-field fall-back (ResolveCharacterRef).
+	 */
+	FString ResolveCharacterTarget(FStoryFlowNode* Node);
+
 private:
 	/** Evaluate an integer comparison (GT, GTE, LT, LTE, EQ) */
 	bool EvaluateIntegerComparison(FStoryFlowNode* Node, EStoryFlowNodeType ComparisonType);

@@ -30,7 +30,7 @@ void FStoryFlowExecutionContext::Initialize(UStoryFlowProjectAsset* InProject, U
 	RebuildGlobalNameIndex();
 }
 
-void FStoryFlowExecutionContext::InitializeWithSubsystem(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript, TMap<FString, FStoryFlowVariable>* InGlobalVariables, TMap<FString, FStoryFlowCharacterDef>* InCharacters, TSet<FString>* InUsedOnceOnlyOptions, StoryFlowDataAssets::FStoreRef InDataAssetStore)
+void FStoryFlowExecutionContext::InitializeWithSubsystem(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript, TMap<FString, FStoryFlowVariable>* InGlobalVariables, TMap<FString, FStoryFlowCharacterDef>* InCharacters, TSet<FString>* InUsedOnceOnlyOptions, StoryFlowDataAssets::FStoreRef InDataAssetStore, const TMap<FString, FString>* InCharacterIdToPath)
 {
 	Reset();
 
@@ -40,6 +40,7 @@ void FStoryFlowExecutionContext::InitializeWithSubsystem(UStoryFlowProjectAsset*
 	ExternalCharacters = InCharacters;
 	ExternalUsedOnceOnlyOptions = InUsedOnceOnlyOptions;
 	DataAssetStore = InDataAssetStore;
+	CharacterIdToPath = InCharacterIdToPath;
 
 	if (InScript)
 	{
@@ -80,8 +81,11 @@ void FStoryFlowExecutionContext::Reset()
 	WarnedMapNodes.Empty();
 	WarnedDataAssetNodes.Empty();
 	DataAssetWarningsEmitted = 0;
+	WarnedCharacterIds.Empty();
+	CharacterIdWarningsEmitted = 0;
 	ExternalGlobalVariables = nullptr;
 	ExternalCharacters = nullptr;
+	CharacterIdToPath = nullptr;
 	DataAssetStore = StoryFlowDataAssets::FStoreRef();
 }
 
@@ -256,6 +260,76 @@ bool FStoryFlowExecutionContext::TryResolveDataAssetBinding(const FStoryFlowNode
 	return true;
 }
 
+FString FStoryFlowExecutionContext::ResolveCharacterKeyIn(const TMap<FString, FString>* IdToPath, const TMap<FString, FStoryFlowCharacterDef>* Characters, const FString& IdOrPath, FStoryFlowExecutionContext& WarnLatch)
+{
+	if (IsCharacterIdRef(IdOrPath))
+	{
+		const FString* RecordKey = IdToPath ? IdToPath->Find(IdOrPath) : nullptr;
+		if (RecordKey)
+		{
+			if (Characters && Characters->Contains(*RecordKey))
+			{
+				// VERBATIM, never re-normalized: the bridge value IS the record key (the
+				// export contract guarantees the normalized shape), and a normalize pass
+				// here could only mask an exporter that broke that guarantee.
+				return *RecordKey;
+			}
+			// A bridge hit whose record is not loaded is a MISS of the WHOLE resolution:
+			// after LoadFromSlot the character store holds only what the save carried,
+			// while the bridge is project-derived — falling through to path treatment
+			// (and the caller's path field) is what keeps that mismatch survivable.
+			WarnLatch.MaybeWarnCharacterId(IdOrPath, TEXT("unloaded"),
+				FString::Printf(TEXT("Character id %s maps to '%s', which is not among the loaded runtime characters - falling back to path resolution"), *IdOrPath, **RecordKey));
+		}
+		else
+		{
+			WarnLatch.MaybeWarnCharacterId(IdOrPath, TEXT("dangling"),
+				FString::Printf(TEXT("Character id %s is not in this project's character index - falling back to path resolution"), *IdOrPath));
+		}
+		// Fall through: the id is treated as a path from here. That lookup will normally
+		// miss too, which is exactly the contract's degraded posture — the caller's path
+		// field (via ResolveCharacterRef) or the existing missing-character behavior takes
+		// over, never a crash.
+	}
+	return NormalizeCharacterPath(IdOrPath);
+}
+
+FString FStoryFlowExecutionContext::ResolveCharacterKey(const FString& IdOrPath)
+{
+	return ResolveCharacterKeyIn(CharacterIdToPath, ExternalCharacters, IdOrPath, *this);
+}
+
+FString FStoryFlowExecutionContext::ResolveCharacterRef(const FString& CharacterId, const FString& CharacterPath)
+{
+	if (!CharacterId.IsEmpty())
+	{
+		const FString RecordKey = ResolveCharacterKey(CharacterId);
+		if (ExternalCharacters && ExternalCharacters->Contains(RecordKey))
+		{
+			return RecordKey;
+		}
+		// Dangling or unloaded id (warned once inside ResolveCharacterKey): contract §3 —
+		// the path field is the fall-back.
+	}
+	// VERBATIM, not normalized: pre-P4 content must flow byte-identically through the path
+	// lane, warnings included (they print the authored spelling, as they always have).
+	return CharacterPath;
+}
+
+void FStoryFlowExecutionContext::MaybeWarnCharacterId(const FString& CharacterId, const TCHAR* Reason, const FString& Message)
+{
+	// Id AND reason, like MaybeWarnDataAsset above: an id that is dangling now and unloaded
+	// after a save load names both problems once each.
+	const FString Key = CharacterId + TEXT("|") + Reason;
+	if (WarnedCharacterIds.Contains(Key))
+	{
+		return;
+	}
+	WarnedCharacterIds.Add(Key);
+	++CharacterIdWarningsEmitted;
+	UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: %s"), *Message);
+}
+
 FStoryFlowCharacterDef* FStoryFlowExecutionContext::FindCharacter(const FString& CharacterPath)
 {
 	if (CharacterPath.IsEmpty())
@@ -263,13 +337,14 @@ FStoryFlowCharacterDef* FStoryFlowExecutionContext::FindCharacter(const FString&
 		return nullptr;
 	}
 
-	// Normalize path for lookup
-	FString NormalizedPath = NormalizeCharacterPath(CharacterPath);
+	// The one resolution point (P4): a character id answers its bridged record key verbatim,
+	// anything else normalizes as a path exactly as before P4.
+	FString RecordKey = ResolveCharacterKey(CharacterPath);
 
 	// Use external characters (from subsystem - mutable runtime copies)
 	if (ExternalCharacters)
 	{
-		return ExternalCharacters->Find(NormalizedPath);
+		return ExternalCharacters->Find(RecordKey);
 	}
 
 	// No external characters available - characters are now stored as UStoryFlowCharacterAsset*
@@ -286,6 +361,11 @@ FStoryFlowVariable* FStoryFlowExecutionContext::FindCharacterVariable(const FStr
 		return nullptr;
 	}
 
+	// The builtin rows (Name/Image and their cf_ aliases, amendment A1) have no
+	// FStoryFlowVariable storage — they live as plain fields on the def — so they can never
+	// be answered here. That is correct for every caller: this function serves the map and
+	// array paths, and the builtins are scalar strings. Builtin-aware access goes through
+	// SetCharacterVariable / GetCharacterVariableValue below.
 	return CharDef->Variables.Find(VariableName);
 }
 
@@ -298,15 +378,16 @@ void FStoryFlowExecutionContext::SetCharacterVariable(const FString& CharacterPa
 		return;
 	}
 
-	// Handle built-in "Name" field
-	if (VariableName.Equals(TEXT("Name"), ESearchCase::IgnoreCase))
+	// Handle built-in "Name" field (or its reserved cf_name id — amendment A1: the cf_ ids
+	// alias the builtin rows; all other character-variable access stays name-keyed)
+	if (IsCharacterNameBuiltin(VariableName))
 	{
 		CharDef->Name = Value.ToString();
 		return;
 	}
 
-	// Handle built-in "Image" field
-	if (VariableName.Equals(TEXT("Image"), ESearchCase::IgnoreCase))
+	// Handle built-in "Image" field (or cf_image — amendment A1)
+	if (IsCharacterImageBuiltin(VariableName))
 	{
 		CharDef->Image = Value.GetString();
 		return;
@@ -332,16 +413,16 @@ FStoryFlowVariant FStoryFlowExecutionContext::GetCharacterVariableValue(const FS
 		return FStoryFlowVariant();
 	}
 
-	// Handle built-in "Name" field
-	if (VariableName.Equals(TEXT("Name"), ESearchCase::IgnoreCase))
+	// Handle built-in "Name" field (or cf_name — amendment A1, see SetCharacterVariable)
+	if (IsCharacterNameBuiltin(VariableName))
 	{
 		FStoryFlowVariant Result;
 		Result.SetString(CharDef->Name);
 		return Result;
 	}
 
-	// Handle built-in "Image" field
-	if (VariableName.Equals(TEXT("Image"), ESearchCase::IgnoreCase))
+	// Handle built-in "Image" field (or cf_image — amendment A1)
+	if (IsCharacterImageBuiltin(VariableName))
 	{
 		FStoryFlowVariant Result;
 		Result.SetString(CharDef->Image);

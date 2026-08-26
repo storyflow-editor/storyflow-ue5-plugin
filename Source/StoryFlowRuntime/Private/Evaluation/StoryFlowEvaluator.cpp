@@ -142,6 +142,22 @@ bool FStoryFlowEvaluator::TryReadDataAssetVariable(FStoryFlowNode* Node, FStoryF
 	return Context->TryResolveDataAsset(AssetId, Node->Data.VariableId, OutValue);
 }
 
+FString FStoryFlowEvaluator::ResolveCharacterTarget(FStoryFlowNode* Node)
+{
+	// The wire wins, exactly as before P4 — and it is checked FIRST so a wired-over embedded
+	// binding never resolves (or warns) at all.
+	if (const FStoryFlowConnection* CharEdge = Context->FindInputEdge(Node->Id, StoryFlowHandles::In_CharacterInput))
+	{
+		if (FStoryFlowNode* CharNode = Context->GetNode(CharEdge->Source))
+		{
+			return EvaluateStringFromNode(CharNode, Node->Id, CharEdge->SourceHandle);
+		}
+	}
+	// Unwired: the additive characterId first, the untouched path field as the contract §3
+	// fall-back (P4). Pre-migration nodes carry no id and flow through the path verbatim.
+	return Context->ResolveCharacterRef(Node->Data.CharacterId, Node->Data.CharacterPath);
+}
+
 bool FStoryFlowEvaluator::EvaluateBooleanInput(FStoryFlowNode* Node, const FString& HandleSuffix, bool Fallback)
 {
 	if (!Context || !Node)
@@ -488,14 +504,7 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 	case EStoryFlowNodeType::GetCharacterVar:
 	case EStoryFlowNodeType::SetCharacterVar:
 	{
-		FString CharPath = Node->Data.CharacterPath;
-		if (const FStoryFlowConnection* CharEdge = Context->FindInputEdge(Node->Id, StoryFlowHandles::In_CharacterInput))
-		{
-			if (FStoryFlowNode* CharNode = Context->GetNode(CharEdge->Source))
-			{
-				CharPath = EvaluateStringFromNode(CharNode, Node->Id, CharEdge->SourceHandle);
-			}
-		}
+		FString CharPath = ResolveCharacterTarget(Node);
 		FStoryFlowVariant CharVal = Context->GetCharacterVariableValue(CharPath, Node->Data.VariableName);
 		Result = CharVal.GetBool();
 		break;
@@ -941,17 +950,7 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 	case EStoryFlowNodeType::GetCharacterVar:
 	case EStoryFlowNodeType::SetCharacterVar:
 	{
-		FString CharPath = Node->Data.CharacterPath;
-		if (UStoryFlowScriptAsset* Script = Context->CurrentScript.Get())
-		{
-			if (const FStoryFlowConnection* CharEdge = Script->FindInputEdge(Node->Id, StoryFlowHandles::In_CharacterInput))
-			{
-				if (FStoryFlowNode* CharNode = Context->GetNode(CharEdge->Source))
-				{
-					CharPath = EvaluateStringFromNode(CharNode, Node->Id, CharEdge->SourceHandle);
-				}
-			}
-		}
+		FString CharPath = ResolveCharacterTarget(Node);
 		FStoryFlowVariant CharVal = Context->GetCharacterVariableValue(CharPath, Node->Data.VariableName);
 		Result = CharVal.GetInt();
 		break;
@@ -1211,17 +1210,7 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 	case EStoryFlowNodeType::GetCharacterVar:
 	case EStoryFlowNodeType::SetCharacterVar:
 	{
-		FString CharPath = Node->Data.CharacterPath;
-		if (UStoryFlowScriptAsset* Script = Context->CurrentScript.Get())
-		{
-			if (const FStoryFlowConnection* CharEdge = Script->FindInputEdge(Node->Id, StoryFlowHandles::In_CharacterInput))
-			{
-				if (FStoryFlowNode* CharNode = Context->GetNode(CharEdge->Source))
-				{
-					CharPath = EvaluateStringFromNode(CharNode, Node->Id, CharEdge->SourceHandle);
-				}
-			}
-		}
+		FString CharPath = ResolveCharacterTarget(Node);
 		FStoryFlowVariant CharVal = Context->GetCharacterVariableValue(CharPath, Node->Data.VariableName);
 		Result = CharVal.GetFloat();
 		break;
@@ -1607,17 +1596,7 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 	case EStoryFlowNodeType::GetCharacterVar:
 	case EStoryFlowNodeType::SetCharacterVar:
 	{
-		FString CharPath = Node->Data.CharacterPath;
-		if (UStoryFlowScriptAsset* Script = Context->CurrentScript.Get())
-		{
-			if (const FStoryFlowConnection* CharEdge = Script->FindInputEdge(Node->Id, StoryFlowHandles::In_CharacterInput))
-			{
-				if (FStoryFlowNode* CharNode = Context->GetNode(CharEdge->Source))
-				{
-					CharPath = EvaluateStringFromNode(CharNode, Node->Id, CharEdge->SourceHandle);
-				}
-			}
-		}
+		FString CharPath = ResolveCharacterTarget(Node);
 		FStoryFlowVariant CharVal = Context->GetCharacterVariableValue(CharPath, Node->Data.VariableName);
 		Result = CharVal.GetString();
 		break;
@@ -1791,17 +1770,7 @@ TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateArrayInputGeneric(FStoryF
 	// Handle getCharacterVar/setCharacterVar nodes that can return arrays
 	if (SourceNode->Type == EStoryFlowNodeType::GetCharacterVar || SourceNode->Type == EStoryFlowNodeType::SetCharacterVar)
 	{
-		FString CharPath = SourceNode->Data.CharacterPath;
-		if (UStoryFlowScriptAsset* Script = Context->CurrentScript.Get())
-		{
-			if (const FStoryFlowConnection* CharEdge = Script->FindInputEdge(SourceNode->Id, StoryFlowHandles::In_CharacterInput))
-			{
-				if (FStoryFlowNode* CharNode = Context->GetNode(CharEdge->Source))
-				{
-					CharPath = EvaluateStringFromNode(CharNode, SourceNode->Id, CharEdge->SourceHandle);
-				}
-			}
-		}
+		FString CharPath = ResolveCharacterTarget(SourceNode);
 		FStoryFlowVariant CharVal = Context->GetCharacterVariableValue(CharPath, SourceNode->Data.VariableName);
 		return CharVal.GetArray();
 	}
@@ -2045,14 +2014,7 @@ FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariableByHandle(FStoryF
 		{
 			return nullptr;
 		}
-		FString CharPath = SourceNode->Data.CharacterPath;
-		if (const FStoryFlowConnection* CharEdge = Context->FindInputEdge(SourceNode->Id, StoryFlowHandles::In_CharacterInput))
-		{
-			if (FStoryFlowNode* CharNode = Context->GetNode(CharEdge->Source))
-			{
-				CharPath = EvaluateStringFromNode(CharNode, SourceNode->Id, CharEdge->SourceHandle);
-			}
-		}
+		FString CharPath = ResolveCharacterTarget(SourceNode);
 		FStoryFlowVariable* Var = Context->FindCharacterVariable(CharPath, SourceNode->Data.VariableName);
 		if (Var && Var->Type == EStoryFlowVariableType::Map)
 		{

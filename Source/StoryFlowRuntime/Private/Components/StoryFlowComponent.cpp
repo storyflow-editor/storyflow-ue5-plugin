@@ -107,7 +107,7 @@ void UStoryFlowComponent::StartDialogueWithScript(const FString& ScriptPath)
 
 	// Initialize execution context with project and script
 	// Pass the subsystem's global variables, runtime characters, and once-only options so they're shared across all components
-	ExecutionContext.InitializeWithSubsystem(Project, ScriptAsset, &Subsystem->GetGlobalVariables(), &Subsystem->GetRuntimeCharacters(), &Subsystem->GetUsedOnceOnlyOptions(), Subsystem->GetDataAssetStore());
+	ExecutionContext.InitializeWithSubsystem(Project, ScriptAsset, &Subsystem->GetGlobalVariables(), &Subsystem->GetRuntimeCharacters(), &Subsystem->GetUsedOnceOnlyOptions(), Subsystem->GetDataAssetStore(), &Subsystem->GetCharacterIdToPath());
 	ExecutionContext.bIsExecuting = true;
 	ExecutionContext.bTraceEnabled = bTraceEnabled;
 	// ONCE PER COMPONENT, not once per start. Restarting a dialogue (StartDialogueWithScript on a
@@ -537,11 +537,15 @@ FStoryFlowCharacterDef* UStoryFlowComponent::FindCharacter(const FString& Charac
 		return ExecutionContext.FindCharacter(CharacterPath);
 	}
 
-	// Outside dialogue: look up directly from the subsystem
+	// Outside dialogue: look up directly from the subsystem, through the SAME resolution the
+	// in-dialogue lane uses (P4): a character id answers its bridged record key, a path
+	// normalizes as before. The context only supplies the warn-once latch here — its map
+	// pointers are unwired outside a dialogue, which is why the maps are passed explicitly.
 	if (UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem())
 	{
-		FString NormalizedPath = NormalizeCharacterPath(CharacterPath);
-		return Subsystem->GetRuntimeCharacters().Find(NormalizedPath);
+		const FString RecordKey = FStoryFlowExecutionContext::ResolveCharacterKeyIn(
+			&Subsystem->GetCharacterIdToPath(), &Subsystem->GetRuntimeCharacters(), CharacterPath, ExecutionContext);
+		return Subsystem->GetRuntimeCharacters().Find(RecordKey);
 	}
 
 	return nullptr;
@@ -1903,9 +1907,129 @@ const FStoryFlowVariable* UStoryFlowComponent::FindDataAssetScalarDeclaration(US
 	return Declaration;
 }
 
+FStoryFlowCharacterDef* UStoryFlowComponent::FindBridgedCharacter(const FString& AssetId) const
+{
+	UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem();
+	if (!Subsystem)
+	{
+		return nullptr;
+	}
+	const FString* RecordKey = Subsystem->GetCharacterIdToPath().Find(AssetId);
+	if (!RecordKey)
+	{
+		return nullptr;
+	}
+	// Null when the record is not loaded (post-LoadFromSlot: the bridge is project-derived,
+	// the runtime characters hold only what the save carried) — the branch then misses whole.
+	return Subsystem->GetRuntimeCharacters().Find(*RecordKey);
+}
+
+bool UStoryFlowComponent::TryGetCharacterScalarByName(const FStoryFlowCharacterDef& CharDef, const FString& VariableName,
+	EStoryFlowVariableType ExpectedType, FStoryFlowVariant& OutValue) const
+{
+	// The builtin rows are plain strings (cf_ aliases per amendment A1) and the surface never
+	// coerces, so they answer only the STRING accessor — same rule as the seed path's gate.
+	if (IsCharacterNameBuiltin(VariableName) || IsCharacterImageBuiltin(VariableName))
+	{
+		if (ExpectedType != EStoryFlowVariableType::String)
+		{
+			return false;
+		}
+		// Name resolves through the string table, exactly like GetCharacterVariable.
+		OutValue.SetString(IsCharacterNameBuiltin(VariableName) ? ResolveString(CharDef.Name) : CharDef.Image);
+		return true;
+	}
+
+	const FStoryFlowVariable* Variable = CharDef.Variables.Find(VariableName);
+	if (!Variable || Variable->bIsArray || !DataAssetAccessorTypeMatches(Variable->Type, ExpectedType))
+	{
+		return false;
+	}
+	OutValue = Variable->Value;
+	return true;
+}
+
+bool UStoryFlowComponent::TrySetCharacterScalarByName(FStoryFlowCharacterDef& CharDef, const FString& VariableName,
+	EStoryFlowVariableType ExpectedType, const FStoryFlowVariant& Value)
+{
+	if (IsCharacterNameBuiltin(VariableName) || IsCharacterImageBuiltin(VariableName))
+	{
+		if (ExpectedType != EStoryFlowVariableType::String)
+		{
+			return false;
+		}
+		if (IsCharacterNameBuiltin(VariableName))
+		{
+			CharDef.Name = Value.ToString();
+		}
+		else
+		{
+			CharDef.Image = Value.ToString();
+		}
+		return true;
+	}
+
+	FStoryFlowVariable* Variable = CharDef.Variables.Find(VariableName);
+	if (!Variable || Variable->bIsArray || !DataAssetAccessorTypeMatches(Variable->Type, ExpectedType))
+	{
+		return false;
+	}
+	Variable->Value = Value;
+	return true;
+}
+
+bool UStoryFlowComponent::TryGetCharacterVariantByName(const FStoryFlowCharacterDef& CharDef, const FString& VariableName,
+	FStoryFlowVariant& OutValue) const
+{
+	if (IsCharacterNameBuiltin(VariableName))
+	{
+		OutValue.SetString(ResolveString(CharDef.Name));
+		return true;
+	}
+	if (IsCharacterImageBuiltin(VariableName))
+	{
+		OutValue.SetString(CharDef.Image);
+		return true;
+	}
+
+	const FStoryFlowVariable* Variable = CharDef.Variables.Find(VariableName);
+	if (!Variable)
+	{
+		return false;
+	}
+	if (Variable->Value.IsMap())
+	{
+		// DETACHED storage: SetMap copies the entries into fresh shared storage, so what the
+		// Blueprint holds can be mutated without reaching into the live character — the same
+		// promise the seed path's TryResolve makes.
+		OutValue.SetMap(Variable->Value.GetMap());
+	}
+	else
+	{
+		OutValue = Variable->Value;
+	}
+	return true;
+}
+
 bool UStoryFlowComponent::SetDataAssetScalar(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
 	EStoryFlowVariableType ExpectedType, const FStoryFlowVariant& Value)
 {
+	// Contract §3's character branch (Blueprint surface only): an id the seed cannot know may
+	// be a character FILE id — a bridge hit routes the write to the character system's state
+	// by NAME, with the surface's own bFound posture. The write never touches the .sfd
+	// overlay: the character system is the one runtime-state owner.
+	if (FStoryFlowCharacterDef* BridgedCharacter = DataAsset ? FindBridgedCharacter(DataAsset->AssetId) : nullptr)
+	{
+		const bool bWritten = TrySetCharacterScalarByName(*BridgedCharacter, VariableName, ExpectedType, Value);
+		// Same cache drop the seed write below makes, for the same reason: a memoized
+		// condition above a char-var read would otherwise survive the rebuild.
+		if (bWritten && Evaluator)
+		{
+			Evaluator->ClearCache();
+		}
+		return bWritten;
+	}
+
 	StoryFlowDataAssets::FStoreRef Store;
 	const FStoryFlowVariable* Declaration = FindDataAssetScalarDeclaration(DataAsset, VariableName, ExpectedType, Store);
 	if (!Declaration)
@@ -1937,6 +2061,14 @@ bool UStoryFlowComponent::SetDataAssetScalar(UStoryFlowDataAssetAsset* DataAsset
 bool UStoryFlowComponent::TryGetDataAssetScalar(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
 	EStoryFlowVariableType ExpectedType, FStoryFlowVariant& OutValue) const
 {
+	// Contract §3's character branch — see SetDataAssetScalar above. A read routes to the same
+	// character state a char-var node reads, so a value written on either surface is visible
+	// on the other by construction (one state).
+	if (const FStoryFlowCharacterDef* BridgedCharacter = DataAsset ? FindBridgedCharacter(DataAsset->AssetId) : nullptr)
+	{
+		return TryGetCharacterScalarByName(*BridgedCharacter, VariableName, ExpectedType, OutValue);
+	}
+
 	StoryFlowDataAssets::FStoreRef Store;
 	const FStoryFlowVariable* Declaration = FindDataAssetScalarDeclaration(DataAsset, VariableName, ExpectedType, Store);
 	if (!Declaration)
@@ -2024,6 +2156,16 @@ bool UStoryFlowComponent::SetDataAssetEnumVariable(UStoryFlowDataAssetAsset* Dat
 FStoryFlowVariant UStoryFlowComponent::GetDataAssetVariantVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound)
 {
 	bFound = false;
+
+	// Contract §3's character branch — see SetDataAssetScalar. Untyped like the seed path
+	// below, so this is also the ARRAY and MAP route to a character's variables.
+	if (const FStoryFlowCharacterDef* BridgedCharacter = DataAsset ? FindBridgedCharacter(DataAsset->AssetId) : nullptr)
+	{
+		FStoryFlowVariant CharacterValue;
+		bFound = TryGetCharacterVariantByName(*BridgedCharacter, VariableName, CharacterValue);
+		return bFound ? CharacterValue : FStoryFlowVariant();
+	}
+
 	StoryFlowDataAssets::FStoreRef Store;
 	// No type gate here: this IS the untyped accessor, and the caller picks the value apart with
 	// UStoryFlowVariantLibrary. Arrays and maps have no other Blueprint path.
@@ -3196,15 +3338,12 @@ void UStoryFlowComponent::HandleArraySetElement(FStoryFlowNode* Node)
 		&& Source->Data.bIsArray)
 	{
 		// The character path may itself arrive on a pin, so resolve it the way the array READER
-		// does rather than trusting the embedded path alone.
-		FString CharPath = Source->Data.CharacterPath;
-		if (const FStoryFlowConnection* CharEdge = ExecutionContext.FindInputEdge(Source->Id, StoryFlowHandles::In_CharacterInput))
-		{
-			if (FStoryFlowNode* CharNode = ExecutionContext.GetNode(CharEdge->Source))
-			{
-				CharPath = Evaluator->EvaluateStringFromNode(CharNode, Source->Id, CharEdge->SourceHandle);
-			}
-		}
+		// does rather than trusting the embedded binding alone — the shared helper also picks
+		// the additive characterId first when the node is unwired (P4), keeping this WRITE site
+		// on the same resolution as every read arm.
+		FString CharPath = Evaluator
+			? Evaluator->ResolveCharacterTarget(Source)
+			: ExecutionContext.ResolveCharacterRef(Source->Data.CharacterId, Source->Data.CharacterPath);
 		FStoryFlowVariant Written;
 		Written.SetArray(Arr, ParseVariableType(Source->Data.VariableType));
 		ExecutionContext.SetCharacterVariable(CharPath, Source->Data.VariableName, Written);
@@ -4270,14 +4409,27 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 		}
 	}
 
+	bool bWiredCharacter = false;
 	if (CharEdge)
 	{
-		// Evaluate the connected character node to get the path (character paths are strings)
+		// Evaluate the connected character node to get the path (character paths are strings).
+		// The wire still overrides the embedded binding exactly as before P4 — it may carry a
+		// path or a character id, and either resolves inside the character accessors through
+		// ResolveCharacterKey.
 		FStoryFlowNode* CharNode = ExecutionContext.GetNode(CharEdge->Source);
 		if (CharNode && Evaluator)
 		{
 			CharacterPath = Evaluator->EvaluateStringFromNode(CharNode, Node->Id, CharEdge->SourceHandle);
+			bWiredCharacter = true;
 		}
+	}
+
+	if (!bWiredCharacter)
+	{
+		// Unwired: id-first with the contract §3 path fall-back (P4). Resolving HERE rather
+		// than inside the accessors alone makes CharacterPath the resolved record key for an
+		// id-bound node — which is also what OnCharacterVariableChanged broadcasts below.
+		CharacterPath = ExecutionContext.ResolveCharacterRef(Node->Data.CharacterId, Node->Data.CharacterPath);
 	}
 
 	if (CharacterPath.IsEmpty())
@@ -4416,8 +4568,7 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 	bool bMutated = false;
 	if (FStoryFlowCharacterDef* PreCharDef = ExecutionContext.FindCharacter(CharacterPath))
 	{
-		if (VariableName.Equals(TEXT("Name"), ESearchCase::IgnoreCase) ||
-			VariableName.Equals(TEXT("Image"), ESearchCase::IgnoreCase))
+		if (IsCharacterNameBuiltin(VariableName) || IsCharacterImageBuiltin(VariableName))
 		{
 			bMutated = true;
 		}
@@ -4432,8 +4583,9 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 
 	// For Image field: resolve and cache the texture NOW while still in the correct script context.
 	// Cross-script lookups fail because asset keys are per-script, so we cache the resolved texture
-	// for BuildDialogueState to use as fallback.
-	if (VariableName.Equals(TEXT("Image"), ESearchCase::IgnoreCase))
+	// for BuildDialogueState to use as fallback. (cf_image aliases the builtin — amendment A1 — so
+	// a cf_-spelled write caches identically.)
+	if (IsCharacterImageBuiltin(VariableName))
 	{
 		FString ImageKey = NewValue.GetString();
 		if (!ImageKey.IsEmpty())
@@ -4692,12 +4844,17 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 
 	// IMPORTANT: Resolve character FIRST so {Character.Name} interpolation works
 	// The character must be set in CurrentDialogueState BEFORE interpolating text
-	if (!DialogueNode->Data.Character.IsEmpty())
+	//
+	// Id-first speaker resolution (P4 contract §4): the additive characterRefId wins when it
+	// resolves, the untouched character path field is the contract §3 fall-back. Pre-P4
+	// content carries no id and flows through the path verbatim, exactly as before.
+	const FString SpeakerRef = ExecutionContext.ResolveCharacterRef(DialogueNode->Data.CharacterRefId, DialogueNode->Data.Character);
+	if (!SpeakerRef.IsEmpty())
 	{
-		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: BuildDialogueState - Looking up character '%s'"), *DialogueNode->Data.Character);
+		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: BuildDialogueState - Looking up character '%s'"), *SpeakerRef);
 
 		// Use ExecutionContext.FindCharacter to get the runtime copy (mutable)
-		if (FStoryFlowCharacterDef* CharDef = ExecutionContext.FindCharacter(DialogueNode->Data.Character))
+		if (FStoryFlowCharacterDef* CharDef = ExecutionContext.FindCharacter(SpeakerRef))
 		{
 			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: BuildDialogueState - Found character, raw Name='%s'"), *CharDef->Name);
 			State.Character.Name = ExecutionContext.GetString(CharDef->Name, LanguageCode);
@@ -4708,7 +4865,7 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 			// own assets, the current script's assets, or the project's global assets.
 			if (!CharDef->Image.IsEmpty())
 			{
-				State.Character.Image = ResolveCharacterPortraitTexture(DialogueNode->Data.Character, CharDef->Image, CharDef);
+				State.Character.Image = ResolveCharacterPortraitTexture(SpeakerRef, CharDef->Image, CharDef);
 			}
 
 			// Copy character variables
@@ -4719,7 +4876,7 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 		}
 		else
 		{
-			UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: BuildDialogueState - Character NOT FOUND: '%s'"), *DialogueNode->Data.Character);
+			UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: BuildDialogueState - Character NOT FOUND: '%s'"), *SpeakerRef);
 		}
 	}
 

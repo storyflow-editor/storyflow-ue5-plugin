@@ -160,7 +160,12 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "StoryFlow|Events")
 	FOnVariableChanged OnVariableChanged;
 
-	/** Called when a character variable changes (Name, Image, or custom). Lets non-speaker UIs react to setCharacterVar mutations. */
+	/**
+	 * Called when a character variable changes (Name, Image, or custom). Lets non-speaker UIs
+	 * react to setCharacterVar mutations. CharacterPath is the RESOLVED record key: an id-bound
+	 * write (P4) broadcasts the key its character id bridged to, path-bound and wired writes
+	 * broadcast the string the node carried exactly as before.
+	 */
 	UPROPERTY(BlueprintAssignable, Category = "StoryFlow|Events")
 	FOnCharacterVariableChanged OnCharacterVariableChanged;
 
@@ -899,6 +904,45 @@ protected:
 	 */
 	bool TryGetDataAssetScalar(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
 		EStoryFlowVariableType ExpectedType, FStoryFlowVariant& OutValue) const;
+
+	/**
+	 * Contract §3's character branch, entry point: the runtime character a data-asset accessor's
+	 * id bridges to, or null when the id is no character (the normal .sfd case), there is no
+	 * subsystem, or the bridged record is not among the loaded runtime characters (the
+	 * post-LoadFromSlot shape — a miss of the whole branch, so the seed path answers as today).
+	 * Characters never enter the data-asset store, so a bridge hit and a seed hit are mutually
+	 * exclusive by construction — which is what makes consulting the bridge FIRST equivalent to
+	 * the contract's "misses the seed" ordering, one map probe cheaper.
+	 *
+	 * BLUEPRINT SURFACE ONLY. The script lane's ladder (TryResolveDataAssetBinding) grows no
+	 * such branch: editor scripts cannot bind characters through data-asset pins.
+	 */
+	FStoryFlowCharacterDef* FindBridgedCharacter(const FString& AssetId) const;
+
+	/**
+	 * The character-state route of a typed Data Asset getter (contract §3 one-state): read the
+	 * named variable off the bridged character with the surface's own no-coercion gate. The
+	 * builtin rows (Name/Image, cf_ aliases per amendment A1) are plain strings and answer only
+	 * the STRING accessor; Name resolves through the string table like GetCharacterVariable.
+	 */
+	bool TryGetCharacterScalarByName(const FStoryFlowCharacterDef& CharDef, const FString& VariableName,
+		EStoryFlowVariableType ExpectedType, FStoryFlowVariant& OutValue) const;
+
+	/**
+	 * Setter twin of TryGetCharacterScalarByName — the write lands directly on the runtime
+	 * character (the character system IS the state; nothing enters the .sfd overlay), so a
+	 * data-asset Set on a character and a char-var Set are the same write by construction.
+	 */
+	bool TrySetCharacterScalarByName(FStoryFlowCharacterDef& CharDef, const FString& VariableName,
+		EStoryFlowVariableType ExpectedType, const FStoryFlowVariant& Value);
+
+	/**
+	 * The character-state route of the VARIANT getter: any variable by name, untyped, plus the
+	 * builtin rows as strings. Map values are handed out with DETACHED storage, honoring the
+	 * surface's "can be held or mutated without reaching into the store" promise.
+	 */
+	bool TryGetCharacterVariantByName(const FStoryFlowCharacterDef& CharDef, const FString& VariableName,
+		FStoryFlowVariant& OutValue) const;
 
 	/** Resolve a string table key to localized text using LanguageCode */
 	FString ResolveString(const FString& Key) const;

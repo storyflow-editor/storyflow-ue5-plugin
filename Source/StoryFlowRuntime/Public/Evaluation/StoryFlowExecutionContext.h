@@ -110,7 +110,7 @@ public:
 	void Initialize(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript);
 
 	/** Initialize the context with external global variables, characters, and once-only options (from subsystem) */
-	void InitializeWithSubsystem(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript, TMap<FString, FStoryFlowVariable>* InGlobalVariables, TMap<FString, FStoryFlowCharacterDef>* InCharacters = nullptr, TSet<FString>* InUsedOnceOnlyOptions = nullptr, StoryFlowDataAssets::FStoreRef InDataAssetStore = {});
+	void InitializeWithSubsystem(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript, TMap<FString, FStoryFlowVariable>* InGlobalVariables, TMap<FString, FStoryFlowCharacterDef>* InCharacters = nullptr, TSet<FString>* InUsedOnceOnlyOptions = nullptr, StoryFlowDataAssets::FStoreRef InDataAssetStore = {}, const TMap<FString, FString>* InCharacterIdToPath = nullptr);
 
 	/**
 	 * Reset the context to initial state.
@@ -203,6 +203,15 @@ public:
 	 */
 	TMap<FString, FStoryFlowCharacterDef>* ExternalCharacters = nullptr;
 
+	/**
+	 * Non-owning pointer to the character id bridge (owned by UStoryFlowSubsystem, refreshed
+	 * beside RuntimeCharacters): character FILE id (`da_`) -> the exact ExternalCharacters
+	 * key. Wired in InitializeWithSubsystem next to ExternalCharacters — same source, same
+	 * lifetime. Null (or empty) means a pre-P4 import: ids resolve nothing and the path
+	 * fields stay authoritative. Read exclusively by ResolveCharacterKey.
+	 */
+	const TMap<FString, FString>* CharacterIdToPath = nullptr;
+
 	// === Data Assets (.sfd) ===
 
 	/**
@@ -291,6 +300,22 @@ public:
 	 * a number that only moves when a line is actually written.
 	 */
 	int32 DataAssetWarningsEmitted = 0;
+
+	/**
+	 * Character ids already warned about, keyed "{CharacterId}|{reason}" — the WarnedDataAssetNodes
+	 * sibling for the P4 id bridge. Keyed by ID rather than node id because the same dangling id
+	 * bound on five nodes is ONE authoring problem, and dialogue lines re-resolve their speaker on
+	 * every advance. Two reasons exist: "dangling" (no bridge entry) and "unloaded" (bridge entry
+	 * whose record is not among the loaded runtime characters). Re-armed only by Reset().
+	 */
+	TSet<FString> WarnedCharacterIds;
+
+	/**
+	 * How many character id warnings this context actually EMITTED — a TEST SEAM, exactly like
+	 * DataAssetWarningsEmitted above and for the same reason: the latch set alone cannot prove
+	 * SUPPRESSION. Reset() clears it with the latch.
+	 */
+	int32 CharacterIdWarningsEmitted = 0;
 
 public:
 	// === Node Accessors ===
@@ -381,7 +406,45 @@ public:
 
 	// === Character Accessors ===
 
-	/** Find character definition by path */
+	/**
+	 * THE ONE id-or-path -> record-key resolution point (P4 contract §3/§4). A `da_` id (the
+	 * editor's isCharacterIdRef shape) is looked up in the bridge: a hit whose record is loaded
+	 * answers the record key VERBATIM — never re-normalized, the contract guarantees the shape.
+	 * A dangling id (no bridge entry) or an unloaded one (bridge entry whose record is missing
+	 * from the runtime characters, the post-LoadFromSlot shape — the bridge is project-derived
+	 * while a loaded save carries only what it saved) warns once via MaybeWarnCharacterId and
+	 * falls THROUGH to path treatment of the input. Non-id input normalizes as a path exactly
+	 * as before P4. Callers holding BOTH an id field and a path field pick through
+	 * ResolveCharacterRef, which adds the contract §3 path-field fall-back on top.
+	 */
+	FString ResolveCharacterKey(const FString& IdOrPath);
+
+	/**
+	 * ResolveCharacterKey against EXPLICIT maps — the shared core, for the one caller that
+	 * resolves outside a wired context (UStoryFlowComponent::FindCharacter's outside-dialogue
+	 * lane reads the subsystem's maps directly). WarnLatch supplies the warn-once state; the
+	 * maps may be null (no bridge / no characters), which degrades to plain path treatment.
+	 */
+	static FString ResolveCharacterKeyIn(const TMap<FString, FString>* IdToPath, const TMap<FString, FStoryFlowCharacterDef>* Characters, const FString& IdOrPath, FStoryFlowExecutionContext& WarnLatch);
+
+	/**
+	 * Id-first pick across a node's additive id field and its untouched path field (P4 contract
+	 * §4 with the §3 dangling-id ruling): the id wins when its whole resolution lands on a
+	 * loaded character, the path field — returned VERBATIM, so pre-P4 content flows
+	 * byte-identically through the path lane — is the fall-back for everything else. An empty
+	 * id (pre-migration content) short-circuits to the path with no bridge consult and no warn.
+	 */
+	FString ResolveCharacterRef(const FString& CharacterId, const FString& CharacterPath);
+
+	/**
+	 * Log a degraded character id warning ONCE per id per reason — MaybeWarnDataAsset's sibling
+	 * (same latch pattern, same Reset() re-arm) for the P4 bridge. Speakers re-resolve on every
+	 * dialogue advance and char-var reads sit in option conditions, so an unlatched warn would
+	 * be a line per render.
+	 */
+	void MaybeWarnCharacterId(const FString& CharacterId, const TCHAR* Reason, const FString& Message);
+
+	/** Find character definition by path or character FILE id (routes through ResolveCharacterKey) */
 	FStoryFlowCharacterDef* FindCharacter(const FString& CharacterPath);
 
 	/** Find a variable within a character */
