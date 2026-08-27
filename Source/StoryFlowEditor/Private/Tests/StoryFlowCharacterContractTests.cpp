@@ -1071,6 +1071,21 @@ namespace StoryFlowCharacterContractTestHelpers
 			{
 				return FStoryFlowVariant();
 			}
+			bool bIsArray = false;
+			Declaration->TryGetBoolField(TEXT("isArray"), bIsArray);
+			return NodeLaneReadWithSnapshot(AssetId, VariableId, JsonStr(Declaration, TEXT("name")), JsonStr(Declaration, TEXT("type")),
+				bIsArray, JsonStr(Declaration, TEXT("keyType")), JsonStr(Declaration, TEXT("valueType")), bFound);
+		}
+
+		/**
+		 * NodeLaneReadDataAsset with the §2.2 snapshot passed in rather than read out of the
+		 * vendored bytes — for a seed this harness built itself, which has no vendored file to
+		 * take a snapshot from.
+		 */
+		FStoryFlowVariant NodeLaneReadWithSnapshot(const FString& AssetId, const FString& VariableId, const FString& VariableName,
+			const FString& VariableType, bool bIsArray, const FString& KeyType, const FString& ValueType, bool& bFound)
+		{
+			bFound = false;
 
 			UStoryFlowScriptAsset* Script = NewObject<UStoryFlowScriptAsset>(GetTransientPackage());
 			FGCObjectScopeGuard ScriptGuard(Script);
@@ -1083,12 +1098,12 @@ namespace StoryFlowCharacterContractTestHelpers
 
 			FStoryFlowNode Getter = MakeNode(TEXT("get"), EStoryFlowNodeType::GetDataAssetVariable, TEXT("getDataAssetVariable"));
 			Getter.Data.VariableId = VariableId;
-			Getter.Data.VariableName = JsonStr(Declaration, TEXT("name"));
-			Getter.Data.Variable = Getter.Data.VariableName;
-			Getter.Data.VariableType = JsonStr(Declaration, TEXT("type"));
-			Declaration->TryGetBoolField(TEXT("isArray"), Getter.Data.bIsArray);
-			Getter.Data.KeyType = JsonStr(Declaration, TEXT("keyType"));
-			Getter.Data.ValueType = JsonStr(Declaration, TEXT("valueType"));
+			Getter.Data.VariableName = VariableName;
+			Getter.Data.Variable = VariableName;
+			Getter.Data.VariableType = VariableType;
+			Getter.Data.bIsArray = bIsArray;
+			Getter.Data.KeyType = KeyType;
+			Getter.Data.ValueType = ValueType;
 			Script->Nodes.Add(Getter.Id, Getter);
 
 			Script->Connections.Add(MakeEdge(TEXT("pill"), TEXT("get"),
@@ -1976,6 +1991,138 @@ bool FStoryFlowDataAssetSeedVsWrittenTest::RunTest(const FString& Parameters)
 
 	UGameplayStatics::DeleteGameInSlot(SeedVsWrittenSlot, 0);
 	ContractCleanUp();
+	return true;
+}
+
+// ============================================================================
+// declarationsOnly: the override arm of the gate, in the form THIS engine meets it
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetOverrideNeverLocalizesTest,
+	"StoryFlow.CharacterContract.DataAssetOverrideNeverLocalizes",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+/**
+ * WHY THIS EXISTS, WHEN THE GOLDEN PACKAGE ALREADY CARRIES sfd-override-ships-literal.
+ *
+ * The package's override case cannot fail this plugin, and it is worth writing down why rather
+ * than reading its green as coverage. The reference implementation resolves a `.sfd` value by
+ * BUILDING an id (`<variableId>.value`) at the door, so localizing an override there immediately
+ * serves the ancestor's translation — the bug b18c4de0 fixed. THIS engine never builds an id: the
+ * exporter already put the key in the value, and the door resolves the bytes it read. An override
+ * ships as a literal, a literal keys nothing, and the ladder's total-lookup tier answers an
+ * unkeyed string with itself — so on that package's bytes the gate's Override arm is unobservable,
+ * and a mutation that deletes it changes no result.
+ *
+ * The arm is still load-bearing, because the manifest's collision is about BYTES: the moment an
+ * override's stored value IS a shipped string id, a door that localized overrides hands back
+ * somebody else's prose. That is exactly what walking overrides onto a bare `<variableId>.value`
+ * would produce, which is the thing declarationsOnly forbids. So this builds the smallest seed
+ * that carries it — a base declaring two keyed strings, a child overriding one of them with the
+ * OTHER'S KEY — and reads it through the real door in a real target language.
+ *
+ * Inline rather than vendored: the golden package's bytes are the editor's and must not grow a row
+ * for one engine's test (the same rule the .sfd node suites already follow for shapes the shared
+ * fixtures cannot carry).
+ */
+bool FStoryFlowDataAssetOverrideNeverLocalizesTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowCharacterContractTestHelpers;
+
+	const TCHAR* GateTestRoot = TEXT("/Game/StoryFlowDataAssetGateTests");
+	const FString GateBuildDir = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Temp/StoryFlowDataAssetGate"));
+
+	const TCHAR* DataAssetsBody = TEXT(R"JSON({
+  "dataAssets": {
+    "da_gatebase": {
+      "id": "da_gatebase", "name": "gate-base", "parent": null,
+      "variables": [
+        { "id": "v-gate-desc", "name": "Description", "type": "string", "value": "v-gate-desc.value" },
+        { "id": "v-gate-other", "name": "Other", "type": "string", "value": "v-gate-other.value" }
+      ],
+      "overrides": {}
+    },
+    "da_gatechild": {
+      "id": "da_gatechild", "name": "gate-child", "parent": "da_gatebase",
+      "variables": [],
+      "overrides": { "v-gate-desc": "v-gate-other.value" }
+    }
+  },
+  "strings": { "en": { "v-gate-desc.value": "The base description.", "v-gate-other.value": "A different authored line." } }
+})JSON");
+
+	const TCHAR* LocalizationBody = TEXT(R"JSON({
+  "schemaVersion": "1",
+  "sourceLanguage": "en",
+  "languages": [ { "code": "fr", "name": "French" } ],
+  "strings": { "fr": { "v-gate-desc.value": "La description de base.", "v-gate-other.value": "Une autre ligne." } }
+})JSON");
+
+	FScopedWorld W;
+	if (!TestTrue(TEXT("world initializes"), W.Init()))
+	{
+		return false;
+	}
+
+	IFileManager::Get().DeleteDirectory(*GateBuildDir, false, true);
+	IFileManager::Get().MakeDirectory(*GateBuildDir, true);
+	const bool bWrote = FFileHelper::SaveStringToFile(TEXT(R"JSON({"version":"1.0.0","apiVersion":"1","startupScript":"main"})JSON"),
+			*FPaths::Combine(GateBuildDir, TEXT("project.json")))
+		&& FFileHelper::SaveStringToFile(DataAssetsBody, *FPaths::Combine(GateBuildDir, TEXT("data-assets.json")))
+		&& FFileHelper::SaveStringToFile(LocalizationBody, *FPaths::Combine(GateBuildDir, TEXT("localization.json")));
+	if (!TestTrue(TEXT("the gate build folder is writable"), bWrote))
+	{
+		return false;
+	}
+
+	UEditorAssetLibrary::DeleteDirectory(GateTestRoot);
+	UStoryFlowProjectAsset* Project = UStoryFlowImporter::ImportProject(GateBuildDir, GateTestRoot);
+	if (!TestNotNull(TEXT("the gate seed imports"), Project))
+	{
+		return false;
+	}
+	FGCObjectScopeGuard ProjectGuard(Project);
+	W.Subsystem->SetProject(Project);
+
+	UStoryFlowDataAssetAsset* Base = Project->DataAssets.FindRef(TEXT("da_gatebase"));
+	UStoryFlowDataAssetAsset* Child = Project->DataAssets.FindRef(TEXT("da_gatechild"));
+	if (!TestNotNull(TEXT("the base imported"), Base) || !TestNotNull(TEXT("the child imported"), Child))
+	{
+		UEditorAssetLibrary::DeleteDirectory(GateTestRoot);
+		IFileManager::Get().DeleteDirectory(*GateBuildDir, false, true);
+		return false;
+	}
+
+	bool bFound = false;
+	TestTrue(TEXT("the engine accepts fr"), W.Subsystem->SetLanguage(TEXT("fr")));
+
+	// The two DECLARATIONS localize — without this the test could pass on a plugin that localizes
+	// nothing at all, which is the failure mode a lone negative assertion always admits.
+	TestEqual(TEXT("the base's declared Description localizes"),
+		W.Component->GetDataAssetStringVariable(Base, TEXT("Description"), bFound), FString(TEXT("La description de base.")));
+	TestEqual(TEXT("and so does the other declaration, whose key the override carries"),
+		W.Component->GetDataAssetStringVariable(Base, TEXT("Other"), bFound), FString(TEXT("Une autre ligne.")));
+
+	// THE OVERRIDE. Its stored bytes are a real shipped key, so a door that localized overrides
+	// would answer "Une autre ligne." here — the other declaration's prose, served for a text the
+	// descendant deliberately replaced. Verbatim is the only right answer.
+	const FString ChildDescription = W.Component->GetDataAssetStringVariable(Child, TEXT("Description"), bFound);
+	TestTrue(TEXT("the child's Description is found"), bFound);
+	TestEqual(TEXT("an override is handed back verbatim, key-shaped or not"), ChildDescription, FString(TEXT("v-gate-other.value")));
+	TestNotEqual(TEXT("and specifically NOT the other declaration's translation"), ChildDescription, FString(TEXT("Une autre ligne.")));
+
+	// The script lane must agree, or the rule holds at one surface only.
+	FContractHarness Harness(*this, W);
+	Harness.Project = Project;
+	Harness.DataAssetsFile = nullptr;
+	bool bNodeFound = false;
+	const FStoryFlowVariant NodeValue = Harness.NodeLaneReadWithSnapshot(TEXT("da_gatechild"), TEXT("v-gate-desc"),
+		TEXT("Description"), TEXT("string"), /*bIsArray=*/ false, FString(), FString(), bNodeFound);
+	TestTrue(TEXT("the script lane resolves the override too"), bNodeFound);
+	TestEqual(TEXT("and hands back the same verbatim bytes"), NodeValue.GetString(), FString(TEXT("v-gate-other.value")));
+
+	UEditorAssetLibrary::DeleteDirectory(GateTestRoot);
+	IFileManager::Get().DeleteDirectory(*GateBuildDir, false, true);
 	return true;
 }
 
