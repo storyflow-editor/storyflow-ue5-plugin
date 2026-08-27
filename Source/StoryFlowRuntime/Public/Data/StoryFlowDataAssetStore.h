@@ -6,6 +6,7 @@
 #include "Data/StoryFlowTypes.h"
 
 class UStoryFlowDataAssetAsset;
+class UStoryFlowProjectAsset;
 
 /**
  * The .sfd Data Asset STORE (engine contract §3) and its chain RESOLVER (§4).
@@ -73,10 +74,15 @@ namespace StoryFlowDataAssets
 	 * ResetRuntimeCharacters draws): the seed is never written to, but a read hands map
 	 * entries out and nothing downstream should reach the asset's storage through them.
 	 *
-	 * Deliberately does NOT resolve string-table keys the way character and global variables
-	 * do: data-assets.json carries no strings table (json-export-strategy.ts exportDataAssets
-	 * writes values verbatim), so a .sfd string value is a literal, and running the lookup
-	 * over it would replace every literal with a failed lookup.
+	 * Deliberately does NOT resolve string-table keys the way character and global variables do,
+	 * and the reason CHANGED with localization spec §2's amendment of 2026-08-27 (which supersedes
+	 * engine-contract 2.1's literal-value posture): data-assets.json now DOES carry a strings
+	 * table, and a declared .sfd string value is a table key like any other artifact's. It is
+	 * still not resolved here, because the seed is the store's read-only half and a bake would
+	 * (a) freeze the authored text in whatever language happened to be current at SetProject, and
+	 * (b) destroy the one thing the localization gate needs — the difference between a value that
+	 * came from the seed and one a script wrote. Resolution happens at the READ DOOR instead: see
+	 * TryRead below.
 	 */
 	STORYFLOWRUNTIME_API void BuildSeed(const TMap<FString, UStoryFlowDataAssetAsset*>& Assets, FSeed& OutSeed);
 
@@ -109,6 +115,28 @@ namespace StoryFlowDataAssets
 	STORYFLOWRUNTIME_API const FStoryFlowVariable* FindDeclarationByName(const FSeed& Seed, const FString& AssetId, const FString& VariableName);
 
 	/**
+	 * WHAT ANSWERED a resolve — the PROVENANCE of the value, which the localization gate reads and
+	 * nothing else does.
+	 *
+	 * Three values and not two, because "not the declaration" has two different reasons and a
+	 * reader who cannot tell them apart re-derives the gate wrongly. The reference implementation
+	 * learned this the hard way: its origin enum folded an ancestor's DECLARATION and an
+	 * ancestor's OVERRIDE into one `inherited` token, and the accessor door that gated on it
+	 * served the ancestor's translation for a text the descendant had deliberately replaced (fixed
+	 * editor-side at b18c4de0). The failure is not a missing translation — it is a WRONG VALUE,
+	 * invisible in the source language.
+	 */
+	enum class EResolvedFrom : uint8
+	{
+		/** The root-most declaration's own authored value (contract §4.3). The only tier that LOCALIZES. */
+		Declaration,
+		/** An `overrides` entry at some chain level. Authored, but NOT keyed — see TryRead. */
+		Override,
+		/** An overlay entry: a write this session made. Live data, never content — see TryRead. */
+		SessionWrite,
+	};
+
+	/**
 	 * Effective value of `VariableId` as seen by `AssetId` (contract §4), mirroring
 	 * runtime-data-assets.js resolveEntry. Walks leaf -> root taking, per level and in order,
 	 * the overlay entry, else that level's override; first hit wins, and an ancestor's entry
@@ -122,8 +150,15 @@ namespace StoryFlowDataAssets
 	 * Returns false (leaving OutValue untouched) for an unknown asset or an id nothing
 	 * declares. The value is COPIED OUT with detached map storage (contract §3: graph code
 	 * must not be able to mutate the seed or the overlay through a read).
+	 *
+	 * THIS IS THE STORE'S CHAIN RULE AND NOTHING MORE: it answers the value the contract says the
+	 * chain holds, with no string-table lookup anywhere in it. Game-facing reads go through
+	 * TryRead, which layers the localization gate on top. Saves and the fixture harnesses want
+	 * this one — a persisted overlay entry must be the bytes the game wrote.
+	 *
+	 * `OutResolvedFrom` is optional and reports which tier answered.
 	 */
-	STORYFLOWRUNTIME_API bool TryResolve(const FSeed& Seed, const FOverlay& Overlay, const FString& AssetId, const FString& VariableId, FStoryFlowVariant& OutValue);
+	STORYFLOWRUNTIME_API bool TryResolve(const FSeed& Seed, const FOverlay& Overlay, const FString& AssetId, const FString& VariableId, FStoryFlowVariant& OutValue, EResolvedFrom* OutResolvedFrom = nullptr);
 
 	/**
 	 * TryResolve's convenience twin: the resolved value, or an UNSET variant when nothing
@@ -131,6 +166,55 @@ namespace StoryFlowDataAssets
 	 * tell "unset" apart from a legitimately empty value want TryResolve instead.
 	 */
 	STORYFLOWRUNTIME_API FStoryFlowVariant Resolve(const FSeed& Seed, const FOverlay& Overlay, const FString& AssetId, const FString& VariableId);
+
+	/**
+	 * THE READ DOOR: TryResolve plus the localization gate, and the ONE function every surface that
+	 * hands a `.sfd` value to game code calls (the script lane's accessor arms, the typed Blueprint
+	 * getters, the untyped variant getter). Localization spec §2's amendment of 2026-08-27 —
+	 * which SUPERSEDES engine-contract 2.1's "a .sfd value is a literal, never look it up" — makes
+	 * a Data Asset's declared string values player-facing prose that ships as stable table keys in
+	 * data-assets.json's own `strings.en`, resolving through the very ladder every other artifact's
+	 * strings already use (UStoryFlowProjectAsset::GetGlobalString, which the importer merges that
+	 * table into beside characters.json's).
+	 *
+	 * WHAT LOCALIZES, and the three rules that are re-derivable wrongly (manifest
+	 * localization.dataAssets in the vendored golden package spells all of them out):
+	 *
+	 *  - ONLY A DECLARATION. `EResolvedFrom::Override` and `EResolvedFrom::SessionWrite` are handed
+	 *    back verbatim. An override is authored but UNKEYED: a `.sfd` id carries no per-asset
+	 *    segment, so a declaration and a descendant's override of it would collide on one
+	 *    `<variableId>.value`, and the exporter therefore keys declarations only. Localizing an
+	 *    override does not MISS — it serves the ancestor's translation for a text the descendant
+	 *    replaced.
+	 *  - A WRITTEN VALUE NEVER LOCALIZES, including after a save/load, because the save carries the
+	 *    overlay and a restored write was never content. The gate is WHERE THE VALUE CAME FROM and
+	 *    never whether it LOOKS like a key: a write that happened to equal a key would otherwise be
+	 *    translated into a string the game has since redefined, and that failure is invisible in
+	 *    the source language.
+	 *  - STRING-TYPED PROSE ONLY, decided by the DECLARED type: string scalars, string array
+	 *    elements, and the values of a map whose ValueType is String (which defaults to String, so
+	 *    an absent valueType is a string map). Enum, image, audio, character, integer, float and
+	 *    boolean pass through even when their values are strings. And prose is non-blank: a value
+	 *    that is empty or whitespace after trimming is left alone, because no translator can reach
+	 *    an id keyed by whitespace.
+	 *
+	 * THE ID IS BUILT FROM THE VARIABLE ALONE — `<variableId>.value`, `.value.<index>`,
+	 * `.value.<mapKey>` — and it is the exporter that built it; nothing here re-derives one. That
+	 * is the deliberate CONTRAST with a character value's `<characterId>.<variableId>.value`, and
+	 * the reason a chain localizes at every level that declares something: it is the VARIABLE that
+	 * is unique, not the asset.
+	 *
+	 * RESOLUTION IS AT THIS DOOR, not baked into the seed, so a mid-session SetLanguage lands on the
+	 * very next `.sfd` read. That is a difference from global and character string variables, whose
+	 * initial values this plugin resolves once at seeding (see UStoryFlowSubsystem::SetLanguage's
+	 * "what moves, and when") — and it is forced, not chosen: the seed is read-only forever and a
+	 * baked value could no longer be told apart from a write.
+	 *
+	 * `Project` may be null (a store with no project localizes nothing and every value passes
+	 * through), and an empty `LanguageCode` reads as the source language, since no language table
+	 * is keyed by it and the artifact's own source table answers.
+	 */
+	STORYFLOWRUNTIME_API bool TryRead(const FStoreRef& Store, const UStoryFlowProjectAsset* Project, const FString& LanguageCode, const FString& AssetId, const FString& VariableId, FStoryFlowVariant& OutValue);
 
 	/** True when any level of `AssetId`'s chain declares `VariableId` (what Set validates against). */
 	STORYFLOWRUNTIME_API bool IsDeclaredOnChain(const FSeed& Seed, const FString& AssetId, const FString& VariableId);

@@ -2,6 +2,7 @@
 
 #include "Data/StoryFlowDataAssetStore.h"
 #include "Data/StoryFlowDataAssetAsset.h"
+#include "Data/StoryFlowProjectAsset.h"
 #include "StoryFlowRuntime.h"
 
 namespace StoryFlowDataAssets
@@ -75,6 +76,71 @@ namespace StoryFlowDataAssets
 			FStoryFlowVariant Copy = Value;
 			Copy.DeepCopyMap();
 			return Copy;
+		}
+
+		/**
+		 * Is this string PROSE, i.e. worth looking up? Non-blank after trimming, exactly as the
+		 * editor's keying pass decides it — a whitespace-only value keys nothing there, so looking
+		 * one up here would probe an id no translator can ever reach.
+		 */
+		bool IsProse(const FString& Value)
+		{
+			return !Value.TrimStartAndEnd().IsEmpty();
+		}
+
+		/** One string through the project's string ladder, left alone when it is not prose. */
+		void LocalizeString(const UStoryFlowProjectAsset& Project, const FString& LanguageCode, FStoryFlowVariant& Value)
+		{
+			const FString Key = Value.GetString();
+			if (IsProse(Key))
+			{
+				Value.SetString(Project.GetGlobalString(Key, LanguageCode));
+			}
+		}
+
+		/**
+		 * TryRead's second half: a DECLARED value with its string-table keys resolved, in place.
+		 *
+		 * The type gate is the exporter's, transcribed (json-export-strategy.ts
+		 * keyDataAssetDeclaration): a string scalar, the elements of a string ARRAY, and the values
+		 * of a map whose ValueType is String. Everything else — enum, image, audio, character, and
+		 * every number and boolean — passes through untouched even when its value is a string, and
+		 * a map's KEYS are identifiers that never resolve whatever their KeyType is. A gate that
+		 * drifted from the exporter's would look up an id nothing keyed, or hand back a key.
+		 *
+		 * ValueType defaults to String on FStoryFlowVariable, which is how "an absent valueType is
+		 * a string map" arrives here without a special case.
+		 */
+		void LocalizeDeclaredValue(const FStoryFlowVariable& Declaration, const UStoryFlowProjectAsset& Project, const FString& LanguageCode, FStoryFlowVariant& Value)
+		{
+			if (Declaration.Type == EStoryFlowVariableType::Map)
+			{
+				if (Declaration.ValueType != EStoryFlowVariableType::String || !Value.IsMap())
+				{
+					return;
+				}
+				for (FStoryFlowMapEntry& Entry : Value.GetMapMutable())
+				{
+					LocalizeString(Project, LanguageCode, Entry.Value);
+				}
+				return;
+			}
+
+			if (Declaration.Type != EStoryFlowVariableType::String)
+			{
+				return;
+			}
+
+			if (Declaration.bIsArray)
+			{
+				for (FStoryFlowVariant& Element : Value.GetArrayMutable())
+				{
+					LocalizeString(Project, LanguageCode, Element);
+				}
+				return;
+			}
+
+			LocalizeString(Project, LanguageCode, Value);
 		}
 	}
 
@@ -159,7 +225,7 @@ namespace StoryFlowDataAssets
 		return Declared;
 	}
 
-	bool TryResolve(const FSeed& Seed, const FOverlay& Overlay, const FString& AssetId, const FString& VariableId, FStoryFlowVariant& OutValue)
+	bool TryResolve(const FSeed& Seed, const FOverlay& Overlay, const FString& AssetId, const FString& VariableId, FStoryFlowVariant& OutValue, EResolvedFrom* OutResolvedFrom)
 	{
 		// resolveEntry's two accumulators, kept apart on purpose:
 		//  - Nearest: the FIRST overlay-or-override hit leaf -> root (nearest wins, §4.1/§4.2).
@@ -170,6 +236,10 @@ namespace StoryFlowDataAssets
 		// behind as inert data. An override counts only when the chain still declares the id.
 		const FStoryFlowVariant* Nearest = nullptr;
 		const FStoryFlowVariant* Declared = nullptr;
+		// WHICH of Nearest's two sources hit. Recorded where the branch already is rather than
+		// re-derived afterwards: an overlay entry and an override are indistinguishable once both
+		// are just a variant pointer, and the localization gate needs them apart (EResolvedFrom).
+		EResolvedFrom NearestFrom = EResolvedFrom::Override;
 
 		WalkChain(Seed, AssetId, [&](const FStoryFlowDataAssetDef& Level)
 		{
@@ -178,10 +248,18 @@ namespace StoryFlowDataAssets
 				if (const TMap<FString, FStoryFlowVariant>* LevelOverlay = Overlay.Find(Level.Id))
 				{
 					Nearest = LevelOverlay->Find(VariableId);
+					if (Nearest)
+					{
+						NearestFrom = EResolvedFrom::SessionWrite;
+					}
 				}
 				if (!Nearest)
 				{
 					Nearest = Level.Overrides.Find(VariableId);
+					if (Nearest)
+					{
+						NearestFrom = EResolvedFrom::Override;
+					}
 				}
 			}
 			if (const FStoryFlowVariable* Decl = FindDeclaredOnLevel(Level, VariableId))
@@ -195,6 +273,10 @@ namespace StoryFlowDataAssets
 		{
 			return false;
 		}
+		if (OutResolvedFrom)
+		{
+			*OutResolvedFrom = Nearest ? NearestFrom : EResolvedFrom::Declaration;
+		}
 		OutValue = CopyOut(Nearest ? *Nearest : *Declared);
 		return true;
 	}
@@ -204,6 +286,41 @@ namespace StoryFlowDataAssets
 		FStoryFlowVariant Value;
 		TryResolve(Seed, Overlay, AssetId, VariableId, Value);
 		return Value;
+	}
+
+	bool TryRead(const FStoreRef& Store, const UStoryFlowProjectAsset* Project, const FString& LanguageCode, const FString& AssetId, const FString& VariableId, FStoryFlowVariant& OutValue)
+	{
+		if (!Store.IsValid())
+		{
+			return false;
+		}
+
+		EResolvedFrom From = EResolvedFrom::Declaration;
+		if (!TryResolve(*Store.Seed, *Store.Overlay, AssetId, VariableId, OutValue, &From))
+		{
+			return false;
+		}
+
+		// THE GATE, and it is the whole of it: only the seed's own declared value is content.
+		// An override ships literal (the exporter keys declarations only) and a session write is
+		// live data — neither has a row in any table, so a lookup over one could only find
+		// SOMEBODY ELSE'S prose. Gated on provenance, never on the value's shape.
+		if (From != EResolvedFrom::Declaration || !Project)
+		{
+			return true;
+		}
+
+		// The declaration the walk just answered from, for its DECLARED type — the gate the
+		// amendment puts on prose. FindDeclaration repeats the walk rather than TryResolve
+		// handing the pointer back: the chain rule stays a value-answering function, and this
+		// costs one more walk on a path that is already doing a string-table lookup.
+		const FStoryFlowVariable* Declaration = FindDeclaration(*Store.Seed, AssetId, VariableId);
+		if (!Declaration)
+		{
+			return true;
+		}
+		LocalizeDeclaredValue(*Declaration, *Project, LanguageCode, OutValue);
+		return true;
 	}
 
 	bool IsDeclaredOnChain(const FSeed& Seed, const FString& AssetId, const FString& VariableId)
