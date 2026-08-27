@@ -207,6 +207,28 @@ void UStoryFlowImporter::ImportDataAssets(const FString& BuildDirectory, const F
 		{
 			InOutProjectHashParts.Add(SerializeJsonCondensed(DataAssetsJson.ToSharedRef()));
 
+			// data-assets.json's OWN strings table, merged into the project's global table
+			// exactly as characters.json's is — same call, same collision warning, same
+			// `<code>.<key>` shape. Since localization spec §2's amendment (2026-08-27, which
+			// supersedes engine-contract 2.1's literal-value posture) a Data Asset's declared
+			// string values ship as keys into this table, and it is the SOURCE TIER the read
+			// door falls through to when the language being read carries no row. ABSENT for a
+			// pre-amendment export, and then every .sfd value is its own text again — the same
+			// thing this plugin did before the table existed, with no branch for it.
+			if (DataAssetsJson->HasField(TEXT("strings")))
+			{
+				TMap<FString, FString> DataAssetStrings;
+				ParseStrings(DataAssetsJson->GetObjectField(TEXT("strings")), DataAssetStrings);
+				for (const auto& Pair : DataAssetStrings)
+				{
+					if (ProjectAsset->GlobalStrings.Contains(Pair.Key))
+					{
+						UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Data Asset string key '%s' overwrites existing global string"), *Pair.Key);
+					}
+					ProjectAsset->GlobalStrings.Add(Pair.Key, Pair.Value);
+				}
+			}
+
 			if (DataAssetsJson->HasField(TEXT("dataAssets")))
 			{
 				TSharedPtr<FJsonObject> AssetsObject = DataAssetsJson->GetObjectField(TEXT("dataAssets"));
