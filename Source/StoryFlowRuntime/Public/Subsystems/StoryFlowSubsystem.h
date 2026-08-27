@@ -1,4 +1,4 @@
-// Copyright 2026 StoryFlow. All Rights Reserved.
+﻿// Copyright 2026 StoryFlow. All Rights Reserved.
 
 #pragma once
 
@@ -105,6 +105,17 @@ public:
 	 * ActiveLanguage) so that a `.sfd` read done by a graph node mid-dialogue resolves in the
 	 * language the player is in NOW, not the one the dialogue started in. C++ only, deliberately —
 	 * Blueprint gets the value copy above, which is what a Blueprint can hold safely.
+	 *
+	 * WHY IT IS SAFE, since a raw reference to mutable state is not obviously so: it binds to the
+	 * MEMBER, not to the string, and SetLanguage assigns through that member rather than replacing
+	 * it — so a reassignment leaves every holder valid and looking at the new code. It is valid for
+	 * the subsystem's lifetime (GameInstance scope) and NOT ONE MOMENT LONGER; nothing outliving the
+	 * subsystem may hold it.
+	 *
+	 * DO NOT DEFENSIVELY COPY IT. A copy taken once at wiring time is precisely the bug the pointer
+	 * exists to avoid: it freezes the language a context was initialized with, and every `.sfd` value
+	 * that context reads afterwards answers in it, silently, for the rest of the dialogue. Sparing
+	 * the per-read FString copy is a side benefit and never the reason.
 	 */
 	const FString& GetLanguageRef() const { return CurrentLanguage; }
 
