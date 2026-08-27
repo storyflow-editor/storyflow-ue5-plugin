@@ -30,7 +30,7 @@ void FStoryFlowExecutionContext::Initialize(UStoryFlowProjectAsset* InProject, U
 	RebuildGlobalNameIndex();
 }
 
-void FStoryFlowExecutionContext::InitializeWithSubsystem(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript, TMap<FString, FStoryFlowVariable>* InGlobalVariables, TMap<FString, FStoryFlowCharacterDef>* InCharacters, TSet<FString>* InUsedOnceOnlyOptions, StoryFlowDataAssets::FStoreRef InDataAssetStore, const TMap<FString, FString>* InCharacterIdToPath)
+void FStoryFlowExecutionContext::InitializeWithSubsystem(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript, TMap<FString, FStoryFlowVariable>* InGlobalVariables, TMap<FString, FStoryFlowCharacterDef>* InCharacters, TSet<FString>* InUsedOnceOnlyOptions, StoryFlowDataAssets::FStoreRef InDataAssetStore, const TMap<FString, FString>* InCharacterIdToPath, const FString* InActiveLanguage)
 {
 	Reset();
 
@@ -41,6 +41,7 @@ void FStoryFlowExecutionContext::InitializeWithSubsystem(UStoryFlowProjectAsset*
 	ExternalUsedOnceOnlyOptions = InUsedOnceOnlyOptions;
 	DataAssetStore = InDataAssetStore;
 	CharacterIdToPath = InCharacterIdToPath;
+	ActiveLanguage = InActiveLanguage;
 
 	if (InScript)
 	{
@@ -87,6 +88,7 @@ void FStoryFlowExecutionContext::Reset()
 	ExternalCharacters = nullptr;
 	CharacterIdToPath = nullptr;
 	DataAssetStore = StoryFlowDataAssets::FStoreRef();
+	ActiveLanguage = nullptr;
 }
 
 FStoryFlowNode* FStoryFlowExecutionContext::GetCurrentNode()
@@ -148,11 +150,17 @@ FStoryFlowVariant FStoryFlowExecutionContext::GetVariableValue(const FString& Va
 
 bool FStoryFlowExecutionContext::TryResolveDataAsset(const FString& AssetId, const FString& VariableId, FStoryFlowVariant& OutValue) const
 {
-	if (!DataAssetStore.IsValid())
-	{
-		return false;
-	}
-	return StoryFlowDataAssets::TryResolve(*DataAssetStore.Seed, *DataAssetStore.Overlay, AssetId, VariableId, OutValue);
+	// TryRead, not TryResolve: a `.sfd` value read by graph code is read by a PLAYER, so a
+	// declared string one resolves through the string tables here exactly as it does through the
+	// Blueprint accessors (localization spec §2's amendment). The store's own null-check is
+	// TryRead's, so the guard the other accessors here repeat is not repeated.
+	//
+	// This deliberately does NOT go through GetString: that ladder probes the current SCRIPT's
+	// table first, and a `.sfd` id is keyed by data-assets.json, which the importer merges into
+	// the project globals. TryRead consults the project's ladder directly, so a `.sfd` value
+	// reads the same inside a dialogue and outside one — which is why the tripwire on the two
+	// GetString ladders does not extend to a third here.
+	return StoryFlowDataAssets::TryRead(DataAssetStore, Project.Get(), ActiveLanguage ? *ActiveLanguage : FString(), AssetId, VariableId, OutValue);
 }
 
 bool FStoryFlowExecutionContext::TrySetDataAsset(const FString& AssetId, const FString& VariableId, const FStoryFlowVariant& Value)

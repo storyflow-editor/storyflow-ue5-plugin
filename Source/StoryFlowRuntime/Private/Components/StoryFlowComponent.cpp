@@ -111,7 +111,7 @@ void UStoryFlowComponent::StartDialogueWithScript(const FString& ScriptPath)
 
 	// Initialize execution context with project and script
 	// Pass the subsystem's global variables, runtime characters, and once-only options so they're shared across all components
-	ExecutionContext.InitializeWithSubsystem(Project, ScriptAsset, &Subsystem->GetGlobalVariables(), &Subsystem->GetRuntimeCharacters(), &Subsystem->GetUsedOnceOnlyOptions(), Subsystem->GetDataAssetStore(), &Subsystem->GetCharacterIdToPath());
+	ExecutionContext.InitializeWithSubsystem(Project, ScriptAsset, &Subsystem->GetGlobalVariables(), &Subsystem->GetRuntimeCharacters(), &Subsystem->GetUsedOnceOnlyOptions(), Subsystem->GetDataAssetStore(), &Subsystem->GetCharacterIdToPath(), &Subsystem->GetLanguageRef());
 	ExecutionContext.bIsExecuting = true;
 	ExecutionContext.bTraceEnabled = bTraceEnabled;
 	// ONCE PER COMPONENT, not once per start. Restarting a dialogue (StartDialogueWithScript on a
@@ -2148,8 +2148,11 @@ bool UStoryFlowComponent::TryGetDataAssetScalar(UStoryFlowDataAssetAsset* DataAs
 	}
 
 	// Through the RESOLVER, never a cached copy: chain defaults, ancestor overrides and this
-	// session's writes all have to be visible here (contract §4).
-	return StoryFlowDataAssets::TryResolve(*Store.Seed, *Store.Overlay, DataAsset->AssetId, Declaration->Id, OutValue);
+	// session's writes all have to be visible here (contract §4). TryRead is the resolver plus the
+	// localization gate — the SAME door the script lane's accessor arms use, so a declared string
+	// value reads translated on both surfaces and a written one stays verbatim on both
+	// (localization spec §2's amendment; every rule lives on TryRead).
+	return StoryFlowDataAssets::TryRead(Store, GetProject(), ActiveLanguageCode(), DataAsset->AssetId, Declaration->Id, OutValue);
 }
 
 bool UStoryFlowComponent::GetDataAssetBoolVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound)
@@ -2247,8 +2250,10 @@ FStoryFlowVariant UStoryFlowComponent::GetDataAssetVariantVariable(UStoryFlowDat
 	}
 
 	FStoryFlowVariant Value;
-	bFound = StoryFlowDataAssets::TryResolve(*Store.Seed, *Store.Overlay, DataAsset->AssetId, Declaration->Id, Value);
-	// TryResolve copies out with map storage detached, so what a Blueprint gets can be held or
+	// The SAME door the typed accessors use — this is the array and map route, and an array's
+	// elements and a string map's values localize exactly as a scalar does (see TryRead).
+	bFound = StoryFlowDataAssets::TryRead(Store, GetProject(), ActiveLanguageCode(), DataAsset->AssetId, Declaration->Id, Value);
+	// TryRead copies out with map storage detached, so what a Blueprint gets can be held or
 	// mutated without reaching into the store (contract §3).
 	return bFound ? Value : FStoryFlowVariant();
 }

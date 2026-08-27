@@ -100,6 +100,15 @@ public:
 	FString GetLanguage() const { return CurrentLanguage; }
 
 	/**
+	 * The same code as a LIVE reference, for the one caller that must see a SetLanguage it was not
+	 * told about: an execution context holds this by pointer (FStoryFlowExecutionContext's
+	 * ActiveLanguage) so that a `.sfd` read done by a graph node mid-dialogue resolves in the
+	 * language the player is in NOW, not the one the dialogue started in. C++ only, deliberately —
+	 * Blueprint gets the value copy above, which is what a Blueprint can hold safely.
+	 */
+	const FString& GetLanguageRef() const { return CurrentLanguage; }
+
+	/**
 	 * Every language the player can be switched to: the SOURCE language first, then the author's
 	 * registry order — the list a game's own language picker draws.
 	 *

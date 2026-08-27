@@ -110,7 +110,7 @@ public:
 	void Initialize(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript);
 
 	/** Initialize the context with external global variables, characters, and once-only options (from subsystem) */
-	void InitializeWithSubsystem(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript, TMap<FString, FStoryFlowVariable>* InGlobalVariables, TMap<FString, FStoryFlowCharacterDef>* InCharacters = nullptr, TSet<FString>* InUsedOnceOnlyOptions = nullptr, StoryFlowDataAssets::FStoreRef InDataAssetStore = {}, const TMap<FString, FString>* InCharacterIdToPath = nullptr);
+	void InitializeWithSubsystem(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript, TMap<FString, FStoryFlowVariable>* InGlobalVariables, TMap<FString, FStoryFlowCharacterDef>* InCharacters = nullptr, TSet<FString>* InUsedOnceOnlyOptions = nullptr, StoryFlowDataAssets::FStoreRef InDataAssetStore = {}, const TMap<FString, FString>* InCharacterIdToPath = nullptr, const FString* InActiveLanguage = nullptr);
 
 	/**
 	 * Reset the context to initial state.
@@ -240,6 +240,23 @@ public:
 	 */
 	StoryFlowDataAssets::FStoreRef DataAssetStore;
 
+	/**
+	 * Non-owning pointer to the subsystem's LIVE language code — the ExternalGlobalVariables
+	 * idiom again, same source and same lifetime, wired in InitializeWithSubsystem.
+	 *
+	 * NOT SeedLanguageCode, and the difference is the point: that field is the language a script's
+	 * local string variables were seeded in and deliberately does not move afterwards, while a
+	 * `.sfd` value is looked up at the moment it is READ (localization spec §2's amendment, and
+	 * StoryFlowDataAssets::TryRead's note on why the seed cannot be baked). Pointing at the
+	 * subsystem's own field rather than copying the code is what makes a mid-session SetLanguage
+	 * land on the very next `.sfd` read instead of the next dialogue.
+	 *
+	 * Null for a context built by the plain Initialize (a test, or a component with no subsystem):
+	 * the lookup then runs with an empty code, which no language table is keyed by, so every value
+	 * answers with its source text.
+	 */
+	const FString* ActiveLanguage = nullptr;
+
 	// === Once-Only Tracking ===
 
 	/**
@@ -358,9 +375,12 @@ public:
 	// instead of making every caller repeat the guard.
 
 	/**
-	 * Effective value of a Data Asset variable through its chain and this session's overlay
-	 * (contract §4). False when there is no store, the asset is unknown, or no chain level
-	 * declares the id; OutValue is untouched in that case.
+	 * THE SCRIPT LANE'S `.sfd` READ DOOR: the effective value of a Data Asset variable through its
+	 * chain and this session's overlay (contract §4), with a DECLARED string value resolved
+	 * through the string tables in the live language (localization spec §2's amendment — see
+	 * StoryFlowDataAssets::TryRead, which owns every rule and which the Blueprint accessors call
+	 * too, so the two surfaces cannot drift). False when there is no store, the asset is unknown,
+	 * or no chain level declares the id; OutValue is untouched in that case.
 	 */
 	bool TryResolveDataAsset(const FString& AssetId, const FString& VariableId, FStoryFlowVariant& OutValue) const;
 
