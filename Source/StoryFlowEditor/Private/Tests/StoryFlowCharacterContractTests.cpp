@@ -6,6 +6,8 @@
 
 #include "Components/StoryFlowComponent.h"
 #include "Data/StoryFlowCharacterAsset.h"
+#include "Data/StoryFlowDataAssetAsset.h"
+#include "Data/StoryFlowDataAssetStore.h"
 #include "Data/StoryFlowHandles.h"
 #include "Data/StoryFlowProjectAsset.h"
 #include "Data/StoryFlowSaveGame.h"
@@ -176,6 +178,8 @@ namespace StoryFlowCharacterContractTestHelpers
 		TMap<FString, FString> AssetPaths;
 		/** localization.json as vendored: `<code>` -> `<stringId>` -> text. The sidecar's own word. */
 		TMap<FString, TMap<FString, FString>> SidecarTables;
+		/** data-assets.json as vendored — the `unkeyed` cases read their literals out of it. */
+		TSharedPtr<FJsonObject> DataAssetsFile;
 		int32 ScriptCounter = 0;
 		int32 RunCases = 0;
 		int32 SkippedExcluded = 0;
@@ -991,6 +995,275 @@ namespace StoryFlowCharacterContractTestHelpers
 			}
 		}
 
+		// --------------------------------------------------------------------
+		// The `.sfd` lane (spec §2's amendment of 2026-08-27)
+		// --------------------------------------------------------------------
+
+		/**
+		 * The DECLARATION json for a variable id, found by scanning every asset in the vendored
+		 * seed rather than by walking one chain — which is not a shortcut but the id rule itself:
+		 * a `.sfd` id carries no asset segment BECAUSE a variable is declared at exactly one level
+		 * of exactly one chain, so a scan cannot find two. It is also what a case needs, since an
+		 * `unkeyed` override case names the asset carrying the OVERRIDE while the declaration
+		 * (and the accessor snapshot the §6.1 gate compares against) lives on an ancestor.
+		 */
+		TSharedPtr<FJsonObject> DeclarationJson(const FString& VariableId) const
+		{
+			const TSharedPtr<FJsonObject>* Assets = nullptr;
+			if (!DataAssetsFile.IsValid() || !DataAssetsFile->TryGetObjectField(TEXT("dataAssets"), Assets))
+			{
+				return nullptr;
+			}
+			for (const auto& AssetPair : (*Assets)->Values)
+			{
+				const TSharedPtr<FJsonObject> Asset = AssetPair.Value->AsObject();
+				const TArray<TSharedPtr<FJsonValue>>* Variables = nullptr;
+				if (!Asset.IsValid() || !Asset->TryGetArrayField(TEXT("variables"), Variables))
+				{
+					continue;
+				}
+				for (const TSharedPtr<FJsonValue>& VariableValue : *Variables)
+				{
+					const TSharedPtr<FJsonObject> Variable = VariableValue->AsObject();
+					if (Variable.IsValid() && JsonStr(Variable, TEXT("id")) == VariableId)
+					{
+						return Variable;
+					}
+				}
+			}
+			return nullptr;
+		}
+
+		/** The imported Data Asset for an id — the handle a Blueprint holds. */
+		UStoryFlowDataAssetAsset* DataAssetFor(const FString& AssetId) const
+		{
+			return Project ? Project->DataAssets.FindRef(AssetId) : nullptr;
+		}
+
+		/**
+		 * THE BLUEPRINT READ DOOR, driven the way game code drives it: by the display NAME an
+		 * author typed, off an asset handle. The name is looked up from the seed's own
+		 * declaration, so the id -> name -> id round trip at that boundary is exercised too.
+		 */
+		FStoryFlowVariant HostReadDataAsset(const FString& AssetId, const FString& VariableId, bool& bFound)
+		{
+			bFound = false;
+			UStoryFlowDataAssetAsset* Asset = DataAssetFor(AssetId);
+			const FStoryFlowVariable* Declaration = StoryFlowDataAssets::FindDeclaration(W.Subsystem->GetDataAssetSeed(), AssetId, VariableId);
+			if (!Asset || !Declaration)
+			{
+				return FStoryFlowVariant();
+			}
+			return W.Component->GetDataAssetVariantVariable(Asset, Declaration->Name, bFound);
+		}
+
+		/**
+		 * THE SCRIPT LANE'S READ DOOR: a real pill -> accessor graph through the real evaluator,
+		 * with the accessor's §2.2 spawn snapshot taken from the exporter's own declaration bytes
+		 * so the §6.1 declMatches gate passes for the right reason. TryReadDataAssetVariable is
+		 * the one function every typed arm funnels through, which makes it this lane's `read()`.
+		 */
+		FStoryFlowVariant NodeLaneReadDataAsset(const FString& AssetId, const FString& VariableId, bool& bFound)
+		{
+			bFound = false;
+			const TSharedPtr<FJsonObject> Declaration = DeclarationJson(VariableId);
+			if (!Declaration.IsValid())
+			{
+				return FStoryFlowVariant();
+			}
+
+			UStoryFlowScriptAsset* Script = NewObject<UStoryFlowScriptAsset>(GetTransientPackage());
+			FGCObjectScopeGuard ScriptGuard(Script);
+			Script->StartNode = TEXT("0");
+			Script->Nodes.Add(TEXT("0"), MakeNode(TEXT("0"), EStoryFlowNodeType::Start, TEXT("start")));
+
+			FStoryFlowNode Pill = MakeNode(TEXT("pill"), EStoryFlowNodeType::GetDataAsset, TEXT("getDataAsset"));
+			Pill.Data.AssetId = AssetId;
+			Script->Nodes.Add(Pill.Id, Pill);
+
+			FStoryFlowNode Getter = MakeNode(TEXT("get"), EStoryFlowNodeType::GetDataAssetVariable, TEXT("getDataAssetVariable"));
+			Getter.Data.VariableId = VariableId;
+			Getter.Data.VariableName = JsonStr(Declaration, TEXT("name"));
+			Getter.Data.Variable = Getter.Data.VariableName;
+			Getter.Data.VariableType = JsonStr(Declaration, TEXT("type"));
+			Declaration->TryGetBoolField(TEXT("isArray"), Getter.Data.bIsArray);
+			Getter.Data.KeyType = JsonStr(Declaration, TEXT("keyType"));
+			Getter.Data.ValueType = JsonStr(Declaration, TEXT("valueType"));
+			Script->Nodes.Add(Getter.Id, Getter);
+
+			Script->Connections.Add(MakeEdge(TEXT("pill"), TEXT("get"),
+				StoryFlowHandles::Source(TEXT("pill"), TEXT("dataAsset-")),
+				StoryFlowHandles::Target(TEXT("get"), StoryFlowHandles::In_DataAssetRef)));
+			Script->BuildConnectionIndices();
+
+			FStoryFlowExecutionContext Context;
+			Context.InitializeWithSubsystem(Project, Script, &W.Subsystem->GetGlobalVariables(), &W.Subsystem->GetRuntimeCharacters(),
+				&W.Subsystem->GetUsedOnceOnlyOptions(), W.Subsystem->GetDataAssetStore(), &W.Subsystem->GetCharacterIdToPath(),
+				&W.Subsystem->GetLanguageRef());
+			FStoryFlowEvaluator Evaluator(&Context);
+			FStoryFlowVariant Value;
+			bFound = Evaluator.TryReadDataAssetVariable(Context.GetNode(TEXT("get")), Value);
+			return Value;
+		}
+
+		/**
+		 * BOTH `.sfd` read doors at once, required to AGREE — the same discipline the character
+		 * arm's `read` kind applies, and for the same reason: a rule implemented at one surface
+		 * and not the other is a bug a single-surface test cannot see.
+		 */
+		FStoryFlowVariant ReadDataAsset(const FString& CaseName, const FString& AssetId, const FString& VariableId)
+		{
+			bool bHostFound = false;
+			bool bNodeFound = false;
+			const FStoryFlowVariant Host = HostReadDataAsset(AssetId, VariableId, bHostFound);
+			const FStoryFlowVariant Node = NodeLaneReadDataAsset(AssetId, VariableId, bNodeFound);
+			Test.TestTrue(FString::Printf(TEXT("%s: %s.%s resolves through the Blueprint door"), *CaseName, *AssetId, *VariableId), bHostFound);
+			Test.TestTrue(FString::Printf(TEXT("%s: %s.%s resolves through the script lane"), *CaseName, *AssetId, *VariableId), bNodeFound);
+			Test.TestTrue(FString::Printf(TEXT("%s: the two .sfd doors agree on %s.%s"), *CaseName, *AssetId, *VariableId),
+				VariantsEqual(Host, Node));
+			return Host;
+		}
+
+		/** Structural equality over the shapes a `.sfd` read hands back (scalar, array, map). */
+		static bool VariantsEqual(const FStoryFlowVariant& A, const FStoryFlowVariant& B)
+		{
+			if (A.GetType() != B.GetType())
+			{
+				return false;
+			}
+			if (A.IsMap())
+			{
+				const TArray<FStoryFlowMapEntry>& EntriesA = A.GetMap();
+				const TArray<FStoryFlowMapEntry>& EntriesB = B.GetMap();
+				if (EntriesA.Num() != EntriesB.Num())
+				{
+					return false;
+				}
+				for (int32 Index = 0; Index < EntriesA.Num(); ++Index)
+				{
+					if (EntriesA[Index].Key.ToString() != EntriesB[Index].Key.ToString()
+						|| EntriesA[Index].Value.ToString() != EntriesB[Index].Value.ToString())
+					{
+						return false;
+					}
+				}
+				return true;
+			}
+			if (A.GetArray().Num() != B.GetArray().Num())
+			{
+				return false;
+			}
+			for (int32 Index = 0; Index < A.GetArray().Num(); ++Index)
+			{
+				if (A.GetArray()[Index].ToString() != B.GetArray()[Index].ToString())
+				{
+					return false;
+				}
+			}
+			return A.ToString() == B.ToString();
+		}
+
+		/**
+		 * THE `unkeyed` KIND: a `.sfd` value that ships LITERAL, driven through THIS ENGINE'S OWN
+		 * data-asset accessors once per language.
+		 *
+		 * The manifest is explicit that a harness which only byte-copies the value out of
+		 * data-assets.json proves nothing, and it is right: every `.sfd` rule is about the ID A
+		 * READ DOOR BUILDS on its way to a table, and a byte comparison never reaches that door.
+		 * So this reads the bytes (a drifted literal is a stale case), then asks the real doors,
+		 * then checks the absence, then — where the case carries a `collidesWith` — resolves the
+		 * id a WRONG implementation would have built and confirms the doors did not answer with it.
+		 * That last step is what makes the override case teeth rather than decoration: walking
+		 * overrides does not miss, it serves the ancestor's prose.
+		 */
+		void ProcessUnkeyed(const FString& CaseName, const TSharedPtr<FJsonObject>& Case)
+		{
+			const FString AssetId = JsonStr(Case, TEXT("dataAssetId"));
+			const FString VariableId = JsonStr(Case, TEXT("variableId"));
+			const FString From = JsonStr(Case, TEXT("from"));
+			const FString Literal = JsonStr(Case, TEXT("literal"));
+
+			// 1. THE BYTES, where `from` says an engine reads them.
+			const TSharedPtr<FJsonObject>* Assets = nullptr;
+			if (!Test.TestTrue(*(CaseName + TEXT(": data-assets.json is vendored")),
+				DataAssetsFile.IsValid() && DataAssetsFile->TryGetObjectField(TEXT("dataAssets"), Assets)))
+			{
+				return;
+			}
+			const TSharedPtr<FJsonObject>* Asset = nullptr;
+			if (!Test.TestTrue(*(CaseName + TEXT(": the seed carries this Data Asset")), (*Assets)->TryGetObjectField(AssetId, Asset)))
+			{
+				return;
+			}
+			FString Stored;
+			if (From == TEXT("override"))
+			{
+				const TSharedPtr<FJsonObject>* Overrides = nullptr;
+				(*Asset)->TryGetObjectField(TEXT("overrides"), Overrides);
+				if (Overrides)
+				{
+					(*Overrides)->TryGetStringField(VariableId, Stored);
+				}
+			}
+			else
+			{
+				Stored = JsonStr(DeclarationJson(VariableId), TEXT("value"));
+			}
+			Test.TestEqual(CaseName + TEXT(": the artifact still carries this literal"), Stored, Literal);
+
+			// 2. THE DOORS, once per language the case names. The language is the subsystem's, so
+			//    it is set and restored around the reads — a `.sfd` value resolves at READ time,
+			//    which is exactly what makes driving the door per language meaningful.
+			const FString LanguageBefore = W.Subsystem->GetLanguage();
+			const TSharedPtr<FJsonObject> ExpectedByLanguage = Case->GetObjectField(TEXT("expected"));
+			for (const auto& LanguagePair : ExpectedByLanguage->Values)
+			{
+				const FString Language = LanguagePair.Key;
+				const FString Expected = LanguagePair.Value->AsString();
+				Test.TestEqual(CaseName + TEXT(": the case expects the literal in ") + Language, Expected, Literal);
+				Test.TestTrue(CaseName + TEXT(": the engine accepts ") + Language, W.Subsystem->SetLanguage(Language));
+
+				const FStoryFlowVariant Read = ReadDataAsset(CaseName, AssetId, VariableId);
+				Test.TestEqual(FString::Printf(TEXT("%s: the accessor answers the literal in %s"), *CaseName, *Language),
+					Read.GetString(), Expected);
+
+				// 4. THE TEETH. The id a walker of overrides would have built resolves to somebody
+				//    ELSE's prose in this language, and the door did not hand that back.
+				const TSharedPtr<FJsonObject>* Collides = nullptr;
+				if (Case->TryGetObjectField(TEXT("collidesWith"), Collides))
+				{
+					const FString CollidingId = JsonStr(*Collides, TEXT("stringId"));
+					const FString CollidingText = JsonStr((*Collides)->GetObjectField(TEXT("resolved")), *Language);
+					Test.TestEqual(FString::Printf(TEXT("%s: %s resolves the colliding id %s"), *CaseName, *Language, *CollidingId),
+						ResolveThroughChokepoint(Project, CollidingId, Language), CollidingText);
+					Test.TestNotEqual(FString::Printf(TEXT("%s: the collision is real in %s, so the case has teeth"), *CaseName, *Language),
+						CollidingText, Literal);
+					Test.TestNotEqual(FString::Printf(TEXT("%s: the accessor did NOT serve the colliding text in %s"), *CaseName, *Language),
+						Read.GetString(), CollidingText);
+				}
+			}
+			W.Subsystem->SetLanguage(LanguageBefore);
+
+			// 3. THE ABSENCE, which IS the contract: no table anywhere keys an id an implementation
+			//    might have minted for this value. The raw-fallback tier answers an unkeyed id with
+			//    itself, so "resolves to itself" is how a total lookup says "nothing keys this".
+			const TArray<TSharedPtr<FJsonValue>>* AbsentIds = nullptr;
+			if (Case->TryGetArrayField(TEXT("absentIds"), AbsentIds))
+			{
+				for (const TSharedPtr<FJsonValue>& AbsentValue : *AbsentIds)
+				{
+					const FString AbsentId = AbsentValue->AsString();
+					for (const auto& TablePair : SidecarTables)
+					{
+						Test.TestFalse(FString::Printf(TEXT("%s: the %s table carries no row for %s"), *CaseName, *TablePair.Key, *AbsentId),
+							TablePair.Value.Contains(AbsentId));
+					}
+					Test.TestEqual(FString::Printf(TEXT("%s: %s keys no artifact either"), *CaseName, *AbsentId),
+						ResolveThroughChokepoint(Project, AbsentId, TEXT("fr")), AbsentId);
+				}
+			}
+		}
+
 		void ProcessLanguageTable(const FString& CaseName, const TSharedPtr<FJsonObject>& Case)
 		{
 			const FString Language = JsonStr(Case, TEXT("language"));
@@ -1127,6 +1400,11 @@ bool FStoryFlowCharacterContractGoldenPackageTest::RunTest(const FString& Parame
 	TestEqual(TEXT("one registered table per language the sidecar ships"), Project->LanguageStrings.Num(), Harness.SidecarTables.Num());
 	TestEqual(TEXT("the target languages are registered in the author's order"), Project->Languages.Num(), 2);
 
+	// The vendored `.sfd` seed — the third keying artifact since spec §2's amendment, and the
+	// bytes the `unkeyed` cases read their literals and their accessor snapshots out of.
+	Harness.DataAssetsFile = LoadPackageFile(TEXT("data-assets.json"));
+	TestTrue(TEXT("data-assets.json is vendored"), Harness.DataAssetsFile.IsValid());
+
 	// The vendored assets table, the path authority behind the builtin Image `value` seats.
 	{
 		const TSharedPtr<FJsonObject> CharactersFile = LoadPackageFile(TEXT("characters.json"));
@@ -1243,9 +1521,24 @@ bool FStoryFlowCharacterContractGoldenPackageTest::RunTest(const FString& Parame
 			{
 				Harness.ProcessLanguageTable(CaseName, Case);
 			}
-			else // source-only — the manifest's kinds list is closed above
+			else if (Kind == TEXT("unkeyed"))
+			{
+				Harness.ProcessUnkeyed(CaseName, Case);
+			}
+			else if (Kind == TEXT("source-only"))
 			{
 				Harness.ProcessSourceOnly(CaseName, Case);
+			}
+			else
+			{
+				// A kind the MANIFEST lists and this harness has no arm for. Previously the last
+				// arm was an unguarded `else`, so a newly vendored kind was silently fed to the
+				// source-only processor and reported as a case-shaped mismatch rather than as the
+				// missing arm it is — which is exactly what the `unkeyed` kind did on arrival. The
+				// closed vocabulary check above only catches kinds the manifest does NOT list;
+				// this catches the ones it does.
+				AddError(FString::Printf(TEXT("%s: kind '%s' is in the manifest but this harness has no arm for it"), *CaseName, *Kind));
+				continue;
 			}
 			++Harness.RunCases;
 			++Harness.PerKind.FindOrAdd(Kind);
@@ -1442,6 +1735,246 @@ bool FStoryFlowLocalizationApiTest::RunTest(const FString& Parameters)
 		}
 	}
 
+	ContractCleanUp();
+	return true;
+}
+
+// ============================================================================
+// The `.sfd` read door (localization spec §2's amendment, 2026-08-27)
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetReadDoorTest,
+	"StoryFlow.CharacterContract.DataAssetReadDoor",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+/**
+ * WHAT A BYTE COMPARISON CANNOT SEE. The golden package's `unkeyed` cases already drive the two
+ * absence shapes through the real accessors; this drives the PRESENCE shapes through the same
+ * doors, because the id a door builds on the way to a table is where every `.sfd` rule is obeyed
+ * or broken and a wrong id fails as a WRONG VALUE, not as a miss.
+ *
+ * Its expectations are computed from the VENDORED sidecar, never written by hand: a hand-written
+ * expectation is one more copy of the rule under test, and it would agree with a wrong door as
+ * happily as with a right one.
+ *
+ * The four things it asks, per language, are the four the id rule is made of:
+ *   1. the three id shapes — scalar, array element by index, map entry value by key;
+ *   2. an override beside the declaration it shadows, which must NOT move while the declaration
+ *      does (adjacent on purpose: with no asset segment, walking overrides is a plausible reading
+ *      and its damage is invisible unless the two are read together);
+ *   3. a DESCENDANT'S OWN declaration, which keys — the half of the rule an asset-segment reading
+ *      loses, since it is the variable that is unique, not the asset;
+ *   4. the type gate, at the door: an enum whose value is a string stays literal.
+ */
+bool FStoryFlowDataAssetReadDoorTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowCharacterContractTestHelpers;
+
+	FScopedWorld W;
+	if (!TestTrue(TEXT("world initializes"), W.Init()))
+	{
+		return false;
+	}
+
+	UEditorAssetLibrary::DeleteDirectory(ContractTestRoot);
+	if (!TestTrue(TEXT("the contract build folder is writable"), WriteContractBuildDir(ContractBuildDir(), /*bWithLocalization=*/ true)))
+	{
+		ContractCleanUp();
+		return false;
+	}
+	UStoryFlowProjectAsset* Project = UStoryFlowImporter::ImportProject(ContractBuildDir(), ContractTestRoot);
+	if (!TestNotNull(TEXT("the golden package imports"), Project))
+	{
+		ContractCleanUp();
+		return false;
+	}
+	FGCObjectScopeGuard ProjectGuard(Project);
+	W.Subsystem->SetProject(Project);
+
+	FContractHarness Harness(*this, W);
+	Harness.Project = Project;
+	Harness.DataAssetsFile = LoadPackageFile(TEXT("data-assets.json"));
+	if (!TestTrue(TEXT("data-assets.json is vendored"), Harness.DataAssetsFile.IsValid()))
+	{
+		ContractCleanUp();
+		return false;
+	}
+
+	const FString ItemBase = TEXT("da_itembase0000000000000000000000");
+	const FString ItemRelic = TEXT("da_itemrelic000000000000000000000");
+
+	for (const TCHAR* Language : { TEXT("fr"), TEXT("es") })
+	{
+		const FString Code(Language);
+		if (!TestTrue(TEXT("the engine accepts the language ") + Code, W.Subsystem->SetLanguage(Code)))
+		{
+			continue;
+		}
+		// The sidecar's own answer for an id, through the string chokepoint — the expectation
+		// side of every assertion below, derived rather than transcribed.
+		const auto Resolved = [&Harness, &Project, &Code](const TCHAR* StringId)
+		{
+			return Harness.ResolveThroughChokepoint(Project, StringId, Code);
+		};
+
+		// 1 + 2. The override and the declaration it shadows, out of ONE store and adjacent.
+		const FStoryFlowVariant Override = Harness.ReadDataAsset(Code + TEXT(" override"), ItemRelic, TEXT("v-item-desc"));
+		TestEqual(Code + TEXT(": an override ships literal, in every language"),
+			Override.GetString(), FString(TEXT("A blade that hums with old grief.")));
+		const FStoryFlowVariant Shadowed = Harness.ReadDataAsset(Code + TEXT(" declaration"), ItemBase, TEXT("v-item-desc"));
+		TestEqual(Code + TEXT(": the declaration it shadows localizes"), Shadowed.GetString(), Resolved(TEXT("v-item-desc.value")));
+		TestNotEqual(Code + TEXT(": and the two are genuinely different texts"), Override.GetString(), Shadowed.GetString());
+
+		// 1. THE THREE ID SHAPES, each read whole, as game code reads it.
+		TestEqual(Code + TEXT(": a scalar keys <variableId>.value"),
+			Harness.ReadDataAsset(Code + TEXT(" scalar"), ItemBase, TEXT("v-item-name")).GetString(), Resolved(TEXT("v-item-name.value")));
+
+		const FStoryFlowVariant Tags = Harness.ReadDataAsset(Code + TEXT(" array"), ItemBase, TEXT("v-item-tags"));
+		if (TestEqual(Code + TEXT(": the array read carries both elements"), Tags.GetArray().Num(), 2))
+		{
+			TestEqual(Code + TEXT(": element 0 keys .value.0"), Tags.GetArray()[0].GetString(), Resolved(TEXT("v-item-tags.value.0")));
+			TestEqual(Code + TEXT(": element 1 keys .value.1"), Tags.GetArray()[1].GetString(), Resolved(TEXT("v-item-tags.value.1")));
+		}
+
+		const FStoryFlowVariant Slots = Harness.ReadDataAsset(Code + TEXT(" map"), ItemBase, TEXT("v-item-slots"));
+		if (TestEqual(Code + TEXT(": the map read carries both entries"), Slots.GetMap().Num(), 2))
+		{
+			// KEYS ARE IDENTIFIERS and never resolve, whatever the keyType — asserted here and not
+			// only implied, because a lookup over a key is the mistake that costs a map its shape.
+			TestEqual(Code + TEXT(": the first key is untouched"), Slots.GetMap()[0].Key.GetString(), FString(TEXT("hand")));
+			TestEqual(Code + TEXT(": its value keys .value.hand"), Slots.GetMap()[0].Value.GetString(), Resolved(TEXT("v-item-slots.value.hand")));
+			TestEqual(Code + TEXT(": the second key is untouched"), Slots.GetMap()[1].Key.GetString(), FString(TEXT("back")));
+			TestEqual(Code + TEXT(": its value keys .value.back"), Slots.GetMap()[1].Value.GetString(), Resolved(TEXT("v-item-slots.value.back")));
+		}
+
+		// 3. A DESCENDANT'S OWN declaration keys, on the same chain as the base's.
+		TestEqual(Code + TEXT(": a descendant's own declaration keys too"),
+			Harness.ReadDataAsset(Code + TEXT(" descendant"), ItemRelic, TEXT("v-relic-oath")).GetString(), Resolved(TEXT("v-relic-oath.value")));
+
+		// 4. THE TYPE GATE at the door: the declared type decides, not the value's shape.
+		TestEqual(Code + TEXT(": an enum whose value is a string stays literal"),
+			Harness.ReadDataAsset(Code + TEXT(" enum"), ItemBase, TEXT("v-item-rarity")).GetString(), FString(TEXT("Common")));
+	}
+
+	// THE FR/ES DIVERGENCE, in one assertion: the same id answers differently in the two
+	// languages, so a door that resolved once and cached across a language switch fails here.
+	TestTrue(TEXT("the language actually moves the value"), W.Subsystem->SetLanguage(TEXT("fr")));
+	bool bFound = false;
+	const FString FrenchName = Harness.HostReadDataAsset(ItemBase, TEXT("v-item-name"), bFound).GetString();
+	TestTrue(TEXT("the fr read is found"), bFound);
+	TestTrue(TEXT("the engine accepts es"), W.Subsystem->SetLanguage(TEXT("es")));
+	const FString SpanishName = Harness.HostReadDataAsset(ItemBase, TEXT("v-item-name"), bFound).GetString();
+	TestNotEqual(TEXT("a mid-session language switch reaches the very next .sfd read"), FrenchName, SpanishName);
+	TestEqual(TEXT("fr serves the translation"), FrenchName, FString(TEXT("Epee de fer")));
+	TestEqual(TEXT("es has no row, so it serves the source"), SpanishName, FString(TEXT("Iron Sword")));
+
+	ContractCleanUp();
+	return true;
+}
+
+// ============================================================================
+// seedVsWritten: the rule the golden package STATES but does not pin
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetSeedVsWrittenTest,
+	"StoryFlow.CharacterContract.DataAssetSeedVsWritten",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+/**
+ * manifest.localization.dataAssets.seedVsWritten: a seed localizes, a WRITTEN value never does,
+ * including after a save/load, since the save carries the overlay and a restored write was never
+ * content. The manifest states the rule and says plainly that NO CASE IN THE PACKAGE PINS IT —
+ * each engine owns its own write / save / load / read case rather than reading a green package
+ * run as coverage. This is Unreal's, and it walks the real slot pair a game calls.
+ *
+ * THE SECOND WRITE IS THE POINT. The manifest's warning is that an engine must gate on WHERE A
+ * VALUE CAME FROM and never on whether it LOOKS like a key, so this writes a value that is
+ * character-for-character a real string-table key. An implementation that resolved anything
+ * key-shaped hands back the translation of a string the game has already redefined — and in the
+ * source language it looks perfect.
+ */
+bool FStoryFlowDataAssetSeedVsWrittenTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowCharacterContractTestHelpers;
+
+	const TCHAR* SeedVsWrittenSlot = TEXT("StoryFlowSeedVsWrittenSlot");
+
+	FScopedWorld W;
+	if (!TestTrue(TEXT("world initializes"), W.Init()))
+	{
+		return false;
+	}
+
+	UEditorAssetLibrary::DeleteDirectory(ContractTestRoot);
+	if (!TestTrue(TEXT("the contract build folder is writable"), WriteContractBuildDir(ContractBuildDir(), /*bWithLocalization=*/ true)))
+	{
+		ContractCleanUp();
+		return false;
+	}
+	UStoryFlowProjectAsset* Project = UStoryFlowImporter::ImportProject(ContractBuildDir(), ContractTestRoot);
+	if (!TestNotNull(TEXT("the golden package imports"), Project))
+	{
+		ContractCleanUp();
+		return false;
+	}
+	FGCObjectScopeGuard ProjectGuard(Project);
+	W.Subsystem->SetProject(Project);
+
+	UStoryFlowDataAssetAsset* ItemBase = Project->DataAssets.FindRef(TEXT("da_itembase0000000000000000000000"));
+	if (!TestNotNull(TEXT("the item-base Data Asset imported"), ItemBase))
+	{
+		ContractCleanUp();
+		return false;
+	}
+
+	bool bFound = false;
+	TestTrue(TEXT("the engine accepts fr"), W.Subsystem->SetLanguage(TEXT("fr")));
+
+	// The seed, before anything is written: prose, and it localizes.
+	TestEqual(TEXT("an untouched declaration localizes"),
+		W.Component->GetDataAssetStringVariable(ItemBase, TEXT("Item Name"), bFound), FString(TEXT("Epee de fer")));
+	TestTrue(TEXT("and reports found"), bFound);
+
+	// THE WRITE. From here on this variable is live data, not the author's string.
+	TestTrue(TEXT("a session write lands"), W.Component->SetDataAssetStringVariable(ItemBase, TEXT("Item Name"), TEXT("Runed Sword")));
+	TestEqual(TEXT("and the very next read hands it back verbatim, in fr"),
+		W.Component->GetDataAssetStringVariable(ItemBase, TEXT("Item Name"), bFound), FString(TEXT("Runed Sword")));
+
+	// THE KEY-SHAPED WRITE, on the variable beside it: a value that IS a table key, byte for byte.
+	TestTrue(TEXT("a key-shaped write lands"), W.Component->SetDataAssetStringVariable(ItemBase, TEXT("Description"), TEXT("v-item-desc.value")));
+	TestEqual(TEXT("and is NOT translated, because provenance decides and not shape"),
+		W.Component->GetDataAssetStringVariable(ItemBase, TEXT("Description"), bFound), FString(TEXT("v-item-desc.value")));
+
+	TestTrue(TEXT("SaveToSlot succeeds with no dialogue running"), W.Subsystem->SaveToSlot(SeedVsWrittenSlot, 0));
+
+	// A restart drops the session: the seed is back, and translated again.
+	W.Subsystem->ResetDataAssetOverlay();
+	TestEqual(TEXT("the reset restores the seed, which localizes"),
+		W.Component->GetDataAssetStringVariable(ItemBase, TEXT("Item Name"), bFound), FString(TEXT("Epee de fer")));
+
+	// THE LOAD, in a DIFFERENT language than the write was made in.
+	TestTrue(TEXT("LoadFromSlot succeeds"), W.Subsystem->LoadFromSlot(SeedVsWrittenSlot, 0));
+	TestTrue(TEXT("the engine accepts es"), W.Subsystem->SetLanguage(TEXT("es")));
+
+	TestEqual(TEXT("a restored write is still live data, verbatim, in a third language"),
+		W.Component->GetDataAssetStringVariable(ItemBase, TEXT("Item Name"), bFound), FString(TEXT("Runed Sword")));
+	TestEqual(TEXT("and the key-shaped one is still not translated"),
+		W.Component->GetDataAssetStringVariable(ItemBase, TEXT("Description"), bFound), FString(TEXT("v-item-desc.value")));
+	// The counter-assertion that gives the previous line teeth: this is what a shape-gated
+	// implementation would have handed back instead.
+	TestEqual(TEXT("es really does key that id to somebody's prose"),
+		Project->GetGlobalString(TEXT("v-item-desc.value"), TEXT("es")), FString(TEXT("Una hoja sencilla, bien forjada.")));
+
+	// And a declaration the session never touched still localizes after the load — the load
+	// restored an OVERLAY, not a whole store, so the seed under it is still content.
+	const FStoryFlowVariant Slots = W.Component->GetDataAssetVariantVariable(ItemBase, TEXT("Slots"), bFound);
+	TestTrue(TEXT("the untouched map is found"), bFound);
+	if (TestEqual(TEXT("and carries both entries"), Slots.GetMap().Num(), 2))
+	{
+		TestEqual(TEXT("whose values still localize in es"), Slots.GetMap()[1].Value.GetString(), FString(TEXT("En la vaina")));
+	}
+
+	UGameplayStatics::DeleteGameInSlot(SeedVsWrittenSlot, 0);
 	ContractCleanUp();
 	return true;
 }
