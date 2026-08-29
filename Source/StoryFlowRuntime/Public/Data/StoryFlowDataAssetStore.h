@@ -131,8 +131,12 @@ namespace StoryFlowDataAssets
 	 * DEDUPED BY NAME on top of the dedupe by id, at the root-most position: two levels can declare
 	 * the same display name under different ids, and FindDeclarationByName can only ever reach one
 	 * of them. The name comparison is FindDeclarationByName's own (default FString equality), so
-	 * the list and the by-name getter cannot disagree about what "the same name" means. Empty
-	 * names are skipped — a by-name getter can never reach them.
+	 * the list and the by-name getter cannot disagree about what "the same name" means. That
+	 * equality is case-INSENSITIVE, which is STRICTER than the reference implementation's exact
+	 * string keys — "Power" and "power" list twice there and once here. Not a drift to "fix":
+	 * this engine's by-name getter treats them as one name, so listing both would advertise a
+	 * name the getter cannot distinguish. Empty names are skipped — a by-name getter can never
+	 * reach them.
 	 *
 	 * Empty for an unknown asset, which is every degraded case the node can meet.
 	 */

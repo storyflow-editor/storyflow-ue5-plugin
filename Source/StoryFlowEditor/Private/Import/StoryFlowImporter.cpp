@@ -114,8 +114,12 @@ namespace
 	    nodes gain the characterRefId / characterId fields (P4), so assets imported
 	    under 5 must re-parse to pick them up.
 	    7: localization.json joins the import (spec §9), so a project asset written
-	    under 6 must re-parse to pick up its language tables. */
-	constexpr const TCHAR* ImportHashSchemaVersion = TEXT("7");
+	    under 6 must re-parse to pick up its language tables.
+	    8: ParseNodeType learns getDataAssetVariableNames (contract §11.1), so a
+	    script imported under 7 that carries one — parsed then as Unknown, and
+	    Node.Type persists in the .uasset — must re-parse or the node answers
+	    empty arrays forever. */
+	constexpr const TCHAR* ImportHashSchemaVersion = TEXT("8");
 
 	FString SerializeJsonCondensed(const TSharedRef<FJsonObject>& JsonObject)
 	{
