@@ -172,6 +172,17 @@ bool FStoryFlowExecutionContext::TrySetDataAsset(const FString& AssetId, const F
 	return StoryFlowDataAssets::TrySet(*DataAssetStore.Seed, *DataAssetStore.Overlay, AssetId, VariableId, Value);
 }
 
+TArray<FString> FStoryFlowExecutionContext::GetDataAssetVariableNames(const FString& AssetId) const
+{
+	// Null-check-and-forward, the same shape as the accessors above: a context with no store
+	// answers "no names" instead of making the caller repeat the guard.
+	if (!DataAssetStore.IsValid())
+	{
+		return TArray<FString>();
+	}
+	return StoryFlowDataAssets::VariableNames(*DataAssetStore.Seed, AssetId);
+}
+
 void FStoryFlowExecutionContext::MaybeWarnDataAsset(const FString& NodeId, const TCHAR* Reason, const FString& Message)
 {
 	// The key is node AND reason, so a node with two problems reports both once,

@@ -2509,6 +2509,7 @@ const TMap<EStoryFlowNodeType, UStoryFlowComponent::FNodeHandler>& UStoryFlowCom
 		// tripping ProcessNode's "Unknown node type" branch and bricking the session on an error.
 		T.Add(EStoryFlowNodeType::GetDataAsset,          LogicHandler);
 		T.Add(EStoryFlowNodeType::GetDataAssetVariable,  LogicHandler);
+		T.Add(EStoryFlowNodeType::GetDataAssetVariableNames, LogicHandler);
 		T.Add(EStoryFlowNodeType::SetDataAssetVariable,  &UStoryFlowComponent::HandleSetDataAssetVariable);
 
 		// Map variable handlers

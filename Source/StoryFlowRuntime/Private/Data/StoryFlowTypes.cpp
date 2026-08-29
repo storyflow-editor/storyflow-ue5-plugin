@@ -564,6 +564,7 @@ EStoryFlowNodeType ParseNodeType(const FString& TypeString)
 		{ TEXT("getDataAsset"), EStoryFlowNodeType::GetDataAsset },
 		{ TEXT("getDataAssetVariable"), EStoryFlowNodeType::GetDataAssetVariable },
 		{ TEXT("setDataAssetVariable"), EStoryFlowNodeType::SetDataAssetVariable },
+		{ TEXT("getDataAssetVariableNames"), EStoryFlowNodeType::GetDataAssetVariableNames },
 
 		// Map Variables
 		{ TEXT("getMap"), EStoryFlowNodeType::GetMap },

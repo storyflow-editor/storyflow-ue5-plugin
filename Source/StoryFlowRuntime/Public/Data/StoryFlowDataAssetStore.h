@@ -115,6 +115,30 @@ namespace StoryFlowDataAssets
 	STORYFLOWRUNTIME_API const FStoryFlowVariable* FindDeclarationByName(const FSeed& Seed, const FString& AssetId, const FString& VariableName);
 
 	/**
+	 * The display NAMES of every variable `AssetId`'s chain DECLARES (contract §11.1) — the Get
+	 * Variable Names node's whole answer, mirroring runtime-data-assets.js `variableNames` over
+	 * `eachDeclaration`. Derived from the SAME chain walk every resolver function here uses, so the
+	 * list can never disagree with what an accessor then resolves.
+	 *
+	 * ORDER is the editor's: chain ROOT-first, each level's variables in file order.
+	 *
+	 * DECLARATIONS ONLY, and first-wins per id with the walk running root-first — which IS the
+	 * root-most-wins rule FindDeclaration follows. `Overrides` are never visited: an override
+	 * re-states a value for a variable the chain already declares, so it can neither add a name nor
+	 * duplicate one. (Category rows never appear here for the same reason they never resolve: the
+	 * importer drops them from the seed, §9.1's "deliberately identical to an undeclared id".)
+	 *
+	 * DEDUPED BY NAME on top of the dedupe by id, at the root-most position: two levels can declare
+	 * the same display name under different ids, and FindDeclarationByName can only ever reach one
+	 * of them. The name comparison is FindDeclarationByName's own (default FString equality), so
+	 * the list and the by-name getter cannot disagree about what "the same name" means. Empty
+	 * names are skipped — a by-name getter can never reach them.
+	 *
+	 * Empty for an unknown asset, which is every degraded case the node can meet.
+	 */
+	STORYFLOWRUNTIME_API TArray<FString> VariableNames(const FSeed& Seed, const FString& AssetId);
+
+	/**
 	 * WHAT ANSWERED a resolve — the PROVENANCE of the value, which the localization gate reads and
 	 * nothing else does.
 	 *

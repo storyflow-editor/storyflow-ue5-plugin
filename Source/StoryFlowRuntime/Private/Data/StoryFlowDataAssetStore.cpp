@@ -225,6 +225,55 @@ namespace StoryFlowDataAssets
 		return Declared;
 	}
 
+	TArray<FString> VariableNames(const FSeed& Seed, const FString& AssetId)
+	{
+		// THE shared walk hands the chain over leaf -> root; the list's order is ROOT-first, so the
+		// levels are collected and then iterated BACKWARDS — the same shape the reference
+		// implementation's eachDeclaration takes (chainOf + a reverse loop). The reverse iteration
+		// is load-bearing twice over: first-wins on the id below is root-most-wins ONLY because the
+		// root is visited first, and the name dedupe keeps the root-most position for the same
+		// reason.
+		TArray<const FStoryFlowDataAssetDef*> Chain;
+		WalkChain(Seed, AssetId, [&Chain](const FStoryFlowDataAssetDef& Level)
+		{
+			Chain.Add(&Level);
+			return true;
+		});
+
+		TArray<FString> Names;
+		TSet<FString> ClaimedIds;
+		TSet<FString> ClaimedNames;
+		for (int32 Index = Chain.Num() - 1; Index >= 0; --Index)
+		{
+			// Declarations only — Overrides are deliberately never visited (see the header note).
+			for (const FStoryFlowVariable& Declaration : Chain[Index]->Variables)
+			{
+				bool bIdClaimed = false;
+				ClaimedIds.Add(Declaration.Id, &bIdClaimed);
+				if (bIdClaimed)
+				{
+					// A descendant re-declaring an inherited id: the root-most declaration keeps
+					// its slot, exactly as FindDeclaration resolves it.
+					continue;
+				}
+				if (Declaration.Name.IsEmpty())
+				{
+					continue;
+				}
+				bool bNameClaimed = false;
+				ClaimedNames.Add(Declaration.Name, &bNameClaimed);
+				if (bNameClaimed)
+				{
+					// The same display name under a different id: stated once, at the root-most
+					// position — the only one FindDeclarationByName can reach.
+					continue;
+				}
+				Names.Add(Declaration.Name);
+			}
+		}
+		return Names;
+	}
+
 	bool TryResolve(const FSeed& Seed, const FOverlay& Overlay, const FString& AssetId, const FString& VariableId, FStoryFlowVariant& OutValue, EResolvedFrom* OutResolvedFrom)
 	{
 		// resolveEntry's two accumulators, kept apart on purpose:

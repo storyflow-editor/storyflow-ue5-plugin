@@ -392,6 +392,16 @@ public:
 	bool TrySetDataAsset(const FString& AssetId, const FString& VariableId, const FStoryFlowVariant& Value);
 
 	/**
+	 * The names the asset's chain DECLARES (contract §11.1) — the Get Variable Names node's
+	 * answer, forwarded to StoryFlowDataAssets::VariableNames, which owns every rule (root-first
+	 * order, declarations only, dedupe by id then by name). Empty when there is no store or the
+	 * seed does not carry the asset. Deliberately NOT routed through the §6 ladder: the node has
+	 * no variableId to be degraded about, and the reference implementation answers every broken
+	 * shape with a silent empty list.
+	 */
+	TArray<FString> GetDataAssetVariableNames(const FString& AssetId) const;
+
+	/**
 	 * THE DEGRADATION LADDER an accessor node's binding walks (contract §6), mirroring
 	 * runtime-data-assets.js `resolveBinding` reason for reason. False — with a warning latched
 	 * once per node per reason — when any part of the binding is broken:

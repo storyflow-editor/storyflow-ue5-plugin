@@ -1942,4 +1942,302 @@ bool FStoryFlowDataAssetBlueprintWriteInvalidatesTest::RunTest(const FString& Pa
 	return true;
 }
 
+// ============================================================================
+// Get Variable Names (contract §11.1) — the chain's declared names as a string array
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetVariableNamesTest,
+	"StoryFlow.DataAssets.Nodes.GetVariableNames",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowDataAssetVariableNamesTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowDataAssetNodeTestHelpers;
+
+	// A bespoke chain rather than the shared golden seed, because the semantics under test need
+	// shapes that seed deliberately does not carry: an ORPHAN override, a re-declared inherited id,
+	// and the same display NAME on two different ids across levels. Two chains, byte-identical in
+	// their DECLARATIONS, differing only in overrides:
+	//
+	//  - NamesBase/NamesChild carry overrides, one of them an override whose id NOTHING on the
+	//    chain declares (v_ghost, with a name-shaped string value). This is the only fixture shape
+	//    that tells "never visits overrides" apart from "visits them harmlessly" — an override of a
+	//    DECLARED id produces the correct list either way.
+	//  - CleanBase/CleanChild carry no overrides at all. The names lists must be identical.
+	//
+	// Imported through the REAL importer, so the category row takes the import path it takes in a
+	// game (dropped from the seed) rather than a shape this test invented.
+	//
+	// THE ORPHANS ARE INJECTED AFTER IMPORT, not authored in the JSON: this importer DROPS an
+	// override nothing on the chain declares (it cannot type the value without a declaration), so
+	// a JSON-authored ghost never reaches the seed and the counter-assert goes vacuous — the
+	// mutation check caught exactly that on this test's first draft. The seed STRUCT still admits
+	// the shape (the editor's loader does not prune, and TryResolve's orphan guard exists because
+	// of it), so the pin plants the ghost at the store boundary, the layer the walk actually reads.
+	const FString NamesSeedJson = TEXT(R"JSON(
+	{ "dataAssets": {
+		"da_bb000000000000000000000000000001": {
+			"id": "da_bb000000000000000000000000000001",
+			"name": "NamesBase",
+			"parent": null,
+			"variables": [
+				{ "id": "v_hp", "name": "hp", "type": "integer", "value": 10 },
+				{ "id": "v_lore", "name": "Lore", "type": "category" },
+				{ "id": "v_title", "name": "title", "type": "string", "value": "x" },
+				{ "id": "v_blank", "name": "", "type": "integer", "value": 1 },
+				{ "id": "v_shared_base", "name": "shared", "type": "integer", "value": 2 }
+			],
+			"overrides": { "v_hp": 55 }
+		},
+		"da_bb000000000000000000000000000002": {
+			"id": "da_bb000000000000000000000000000002",
+			"name": "NamesChild",
+			"parent": "da_bb000000000000000000000000000001",
+			"variables": [
+				{ "id": "v_hp", "name": "hpChild", "type": "integer", "value": 99 },
+				{ "id": "v_speed", "name": "speed", "type": "float", "value": 1.5 },
+				{ "id": "v_shared_child", "name": "shared", "type": "string", "value": "s" }
+			],
+			"overrides": {}
+		},
+		"da_bb000000000000000000000000000003": {
+			"id": "da_bb000000000000000000000000000003",
+			"name": "CleanBase",
+			"parent": null,
+			"variables": [
+				{ "id": "v_hp", "name": "hp", "type": "integer", "value": 10 },
+				{ "id": "v_lore", "name": "Lore", "type": "category" },
+				{ "id": "v_title", "name": "title", "type": "string", "value": "x" },
+				{ "id": "v_blank", "name": "", "type": "integer", "value": 1 },
+				{ "id": "v_shared_base", "name": "shared", "type": "integer", "value": 2 }
+			],
+			"overrides": {}
+		},
+		"da_bb000000000000000000000000000004": {
+			"id": "da_bb000000000000000000000000000004",
+			"name": "CleanChild",
+			"parent": "da_bb000000000000000000000000000003",
+			"variables": [
+				{ "id": "v_hp", "name": "hpChild", "type": "integer", "value": 99 },
+				{ "id": "v_speed", "name": "speed", "type": "float", "value": 1.5 },
+				{ "id": "v_shared_child", "name": "shared", "type": "string", "value": "s" }
+			],
+			"overrides": {}
+		}
+	} }
+	)JSON");
+
+	const FString NamesBaseId = TEXT("da_bb000000000000000000000000000001");
+	const FString NamesChildId = TEXT("da_bb000000000000000000000000000002");
+	const FString CleanChildId = TEXT("da_bb000000000000000000000000000004");
+
+	StoryFlowDataAssets::FSeed Seed;
+	UStoryFlowProjectAsset* Project = ImportInlineSeed(*this, NamesSeedJson, Seed);
+	if (!Project)
+	{
+		return false;
+	}
+	FGCObjectScopeGuard ProjectGuard(Project);
+	TestEqual(TEXT("the names seed imports all four assets"), Seed.Num(), 4);
+
+	// Plant the orphan overrides (see the fixture note above). One at each level, and the base's
+	// carries a name-shaped STRING value so a walk that visits overrides has something plausible
+	// to list.
+	if (FStoryFlowDataAssetDef* NamesBase = Seed.Find(NamesBaseId))
+	{
+		NamesBase->Overrides.Add(TEXT("v_ghost"), FStoryFlowVariant::FromString(TEXT("GhostName")));
+	}
+	else
+	{
+		AddError(TEXT("the names base is missing from the seed"));
+	}
+	if (FStoryFlowDataAssetDef* NamesChild = Seed.Find(NamesChildId))
+	{
+		NamesChild->Overrides.Add(TEXT("v_ghost2"), FStoryFlowVariant::FromInt(7));
+	}
+	else
+	{
+		AddError(TEXT("the names child is missing from the seed"));
+	}
+
+	// The happy path goes through REAL exported JSON, so this test also pins the importer's half:
+	// a getDataAssetVariableNames node is id/type/position only, and the wire is the binding.
+	const FString Json = TEXT(R"JSON(
+	{
+		"startNode": "0",
+		"nodes": {
+			"0":     { "type": "start", "id": "0" },
+			"pC":    { "type": "getDataAsset", "id": "pC", "assetId": "da_bb000000000000000000000000000002" },
+			"pB":    { "type": "getDataAsset", "id": "pB", "assetId": "da_bb000000000000000000000000000001" },
+			"pClean": { "type": "getDataAsset", "id": "pClean", "assetId": "da_bb000000000000000000000000000004" },
+			"nC":    { "type": "getDataAssetVariableNames", "id": "nC" },
+			"nB":    { "type": "getDataAssetVariableNames", "id": "nB" },
+			"nClean": { "type": "getDataAssetVariableNames", "id": "nClean" },
+			"sC":    { "type": "setBool", "id": "sC" },
+			"sB":    { "type": "setBool", "id": "sB" },
+			"sClean": { "type": "setBool", "id": "sClean" }
+		},
+		"connections": [
+			{ "id": "c1", "source": "pC", "target": "nC", "sourceHandle": "source-pC-dataAsset-", "targetHandle": "target-nC-dataAsset-asset" },
+			{ "id": "c2", "source": "pB", "target": "nB", "sourceHandle": "source-pB-dataAsset-", "targetHandle": "target-nB-dataAsset-asset" },
+			{ "id": "c3", "source": "pClean", "target": "nClean", "sourceHandle": "source-pClean-dataAsset-", "targetHandle": "target-nClean-dataAsset-asset" },
+			{ "id": "c4", "source": "nC", "target": "sC", "sourceHandle": "source-nC-string-array-", "targetHandle": "target-sC-string-array-" },
+			{ "id": "c5", "source": "nB", "target": "sB", "sourceHandle": "source-nB-string-array-", "targetHandle": "target-sB-string-array-" },
+			{ "id": "c6", "source": "nClean", "target": "sClean", "sourceHandle": "source-nClean-string-array-", "targetHandle": "target-sClean-string-array-" }
+		],
+		"variables": {}
+	}
+	)JSON");
+
+	TSharedPtr<FJsonObject> JsonObject;
+	TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Json);
+	if (!TestTrue(TEXT("the names script JSON parses"), FJsonSerializer::Deserialize(Reader, JsonObject) && JsonObject.IsValid()))
+	{
+		CleanUp();
+		return false;
+	}
+	UStoryFlowScriptAsset* Script = UStoryFlowImporter::ImportScriptFromJson(JsonObject, TEXT("data_asset_names_test"), NodeTestRoot);
+	if (!TestNotNull(TEXT("the names script imports"), Script))
+	{
+		CleanUp();
+		return false;
+	}
+	if (const FStoryFlowNode* Names = Script->Nodes.Find(TEXT("nC")))
+	{
+		TestTrue(TEXT("the node parsed as getDataAssetVariableNames, not Unknown"),
+			Names->Type == EStoryFlowNodeType::GetDataAssetVariableNames);
+	}
+	else
+	{
+		AddError(TEXT("the names node is missing from the imported script"));
+	}
+
+	StoryFlowDataAssets::FOverlay Overlay;
+	FStoryFlowExecutionContext Context;
+	Context.CurrentScript = Script;
+	Context.DataAssetStore = { &Seed, &Overlay };
+	FStoryFlowEvaluator Evaluator(&Context);
+
+	auto NamesOf = [&Evaluator, &Context](const TCHAR* SinkId)
+	{
+		TArray<FString> Out;
+		for (const FStoryFlowVariant& Item : Evaluator.EvaluateStringArrayInput(Context.GetNode(SinkId), TEXT("string-array-")))
+		{
+			Out.Add(Item.GetString());
+		}
+		return Out;
+	};
+
+	// --- root-first order across the chain: the parent's names, in file order, then the child's
+	// additions — with the category, the blank name, the re-declared inherited id and the
+	// duplicate display name all resolved exactly as the reference implementation resolves them ---
+	const TArray<FString> ChildNames = NamesOf(TEXT("sC"));
+	if (TestEqual(TEXT("the child chain lists exactly four names"), ChildNames.Num(), 4))
+	{
+		TestEqual(TEXT("root's first declaration leads"), ChildNames[0], TEXT("hp"));
+		TestEqual(TEXT("root file order holds"), ChildNames[1], TEXT("title"));
+		TestEqual(TEXT("the duplicate display name sits at its root-most position"), ChildNames[2], TEXT("shared"));
+		TestEqual(TEXT("the child's own addition comes after every root name"), ChildNames[3], TEXT("speed"));
+	}
+	TestFalse(TEXT("a re-declared inherited id does not list under its child name"), ChildNames.Contains(TEXT("hpChild")));
+	TestFalse(TEXT("a category is never listed"), ChildNames.Contains(TEXT("Lore")));
+	TestFalse(TEXT("an empty display name is skipped"), ChildNames.Contains(TEXT("")));
+
+	// --- THE ORPHAN-OVERRIDE PIN: v_ghost is an override whose id NOTHING on the chain declares.
+	// Its name-shaped value must be absent, its id must be absent, and the whole list must equal
+	// the list of the override-free twin chain — the one assertion a mutant that visits overrides
+	// cannot survive, however harmlessly it visits them. ---
+	TestFalse(TEXT("the ghost override's value never becomes a name"), ChildNames.Contains(TEXT("GhostName")));
+	TestFalse(TEXT("the ghost override's id never becomes a name"), ChildNames.Contains(TEXT("v_ghost")));
+	TestFalse(TEXT("the child-level ghost override's id never becomes a name"), ChildNames.Contains(TEXT("v_ghost2")));
+	const TArray<FString> CleanNames = NamesOf(TEXT("sClean"));
+	if (TestEqual(TEXT("the override-free twin lists the same count"), CleanNames.Num(), ChildNames.Num()))
+	{
+		for (int32 Index = 0; Index < ChildNames.Num(); ++Index)
+		{
+			TestEqual(FString::Printf(TEXT("overrides changed nothing at position %d"), Index), ChildNames[Index], CleanNames[Index]);
+		}
+	}
+
+	// --- the base alone: no child additions, same root rules ---
+	const TArray<FString> BaseNames = NamesOf(TEXT("sB"));
+	if (TestEqual(TEXT("the base chain lists exactly three names"), BaseNames.Num(), 3))
+	{
+		TestEqual(TEXT("base name 0"), BaseNames[0], TEXT("hp"));
+		TestEqual(TEXT("base name 1"), BaseNames[1], TEXT("title"));
+		TestEqual(TEXT("base name 2"), BaseNames[2], TEXT("shared"));
+	}
+
+	// --- degraded paths, hand-built: every one answers an EMPTY array, silently — this node has
+	// no variableId to be degraded ABOUT, and the reference implementation warns nothing ---
+	UStoryFlowScriptAsset* Degraded = NewObject<UStoryFlowScriptAsset>(GetTransientPackage());
+	FGCObjectScopeGuard DegradedGuard(Degraded);
+	Degraded->StartNode = TEXT("0");
+	Degraded->Nodes.Add(TEXT("0"), MakeNode(TEXT("0"), EStoryFlowNodeType::Start, TEXT("start")));
+
+	struct FDegradedCase
+	{
+		const TCHAR* Label;
+		const TCHAR* NamesId;
+		const TCHAR* SinkId;
+	};
+	const TArray<FDegradedCase> Cases = {
+		{ TEXT("an unwired dataAsset pin"), TEXT("nUnwired"), TEXT("kUnwired") },
+		{ TEXT("a pill naming an asset the seed does not carry"), TEXT("nDead"), TEXT("kDead") },
+		{ TEXT("an unbound pill"), TEXT("nUnbound"), TEXT("kUnbound") },
+		{ TEXT("a non-pill source"), TEXT("nDecoy"), TEXT("kDecoy") },
+	};
+	for (const FDegradedCase& Case : Cases)
+	{
+		Degraded->Nodes.Add(Case.NamesId, MakeNode(Case.NamesId, EStoryFlowNodeType::GetDataAssetVariableNames, TEXT("getDataAssetVariableNames")));
+		Degraded->Nodes.Add(Case.SinkId, MakeNode(Case.SinkId, EStoryFlowNodeType::SetBool, TEXT("setBool")));
+		Degraded->Connections.Add(MakeEdge(Case.NamesId, Case.SinkId,
+			StoryFlowHandles::Source(Case.NamesId, TEXT("string-array-")),
+			StoryFlowHandles::Target(Case.SinkId, TEXT("string-array-"))));
+	}
+	Degraded->Nodes.Add(TEXT("pDead"), MakePill(TEXT("pDead"), AbsentId));
+	Degraded->Connections.Add(MakePillEdge(TEXT("pDead"), TEXT("nDead")));
+	Degraded->Nodes.Add(TEXT("pUnbound"), MakePill(TEXT("pUnbound"), TEXT("")));
+	Degraded->Connections.Add(MakePillEdge(TEXT("pUnbound"), TEXT("nUnbound")));
+	{
+		// The decoy carries a REAL assetId in a place the wire-follow must refuse to look
+		// (contract §6 row 1's shape, applied to this node).
+		FStoryFlowNode Decoy = MakeNode(TEXT("pDecoy"), EStoryFlowNodeType::GetBool, TEXT("getBool"));
+		Decoy.Data.AssetId = NamesChildId;
+		Degraded->Nodes.Add(Decoy.Id, Decoy);
+		Degraded->Connections.Add(MakePillEdge(TEXT("pDecoy"), TEXT("nDecoy")));
+	}
+	// One healthy pill too, wired to a fifth names node — read through a context with NO store.
+	Degraded->Nodes.Add(TEXT("pLive"), MakePill(TEXT("pLive"), NamesChildId));
+	Degraded->Nodes.Add(TEXT("nNoStore"), MakeNode(TEXT("nNoStore"), EStoryFlowNodeType::GetDataAssetVariableNames, TEXT("getDataAssetVariableNames")));
+	Degraded->Nodes.Add(TEXT("kNoStore"), MakeNode(TEXT("kNoStore"), EStoryFlowNodeType::SetBool, TEXT("setBool")));
+	Degraded->Connections.Add(MakePillEdge(TEXT("pLive"), TEXT("nNoStore")));
+	Degraded->Connections.Add(MakeEdge(TEXT("nNoStore"), TEXT("kNoStore"),
+		StoryFlowHandles::Source(TEXT("nNoStore"), TEXT("string-array-")),
+		StoryFlowHandles::Target(TEXT("kNoStore"), TEXT("string-array-"))));
+	Degraded->BuildConnectionIndices();
+
+	FStoryFlowExecutionContext DegradedContext;
+	DegradedContext.CurrentScript = Degraded;
+	DegradedContext.DataAssetStore = { &Seed, &Overlay };
+	FStoryFlowEvaluator DegradedEvaluator(&DegradedContext);
+	for (const FDegradedCase& Case : Cases)
+	{
+		TestEqual(FString::Printf(TEXT("%s answers an empty array"), Case.Label),
+			DegradedEvaluator.EvaluateStringArrayInput(DegradedContext.GetNode(Case.SinkId), TEXT("string-array-")).Num(), 0);
+	}
+	TestEqual(TEXT("no degraded names read emitted a warning — the node has no §6 ladder of its own"),
+		DegradedContext.DataAssetWarningsEmitted, 0);
+
+	FStoryFlowExecutionContext StorelessContext;
+	StorelessContext.CurrentScript = Degraded;
+	FStoryFlowEvaluator StorelessEvaluator(&StorelessContext);
+	TestEqual(TEXT("an absent store answers an empty array"),
+		StorelessEvaluator.EvaluateStringArrayInput(StorelessContext.GetNode(TEXT("kNoStore")), TEXT("string-array-")).Num(), 0);
+	TestEqual(TEXT("and emits no warning either"), StorelessContext.DataAssetWarningsEmitted, 0);
+
+	CleanUp();
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

@@ -226,6 +226,10 @@ enum class EStoryFlowNodeType : uint8
 	GetDataAsset,
 	GetDataAssetVariable,
 	SetDataAssetVariable,
+	// Get Variable Names (contract §11.1): pure, NO fields of its own — it reaches
+	// its asset over the same `dataAsset` pin the accessors use and answers the
+	// names the chain DECLARES as a string array.
+	GetDataAssetVariableNames,
 
 	// Map Variables
 	GetMap,

@@ -1791,6 +1791,24 @@ TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateArrayInputGeneric(FStoryF
 		return TArray<FStoryFlowVariant>();
 	}
 
+	// Get Variable Names (contract §11.1): the names the wired asset's chain DECLARES, as a
+	// string array. The asset arrives over the wire exactly as it does for the bound accessors
+	// (ResolveDataAssetId — the wire is the binding), and the list itself is the store's
+	// (StoryFlowDataAssets::VariableNames), derived from the SAME chain walk the resolver uses,
+	// so the list can never disagree with what an accessor then reads. Every degraded shape —
+	// an unwired pin, a dead ref, an unknown asset, an absent store — answers the empty array
+	// SILENTLY: the node has no variableId to be degraded about, so the §6 ladder does not
+	// apply, and the reference implementation warns nothing here either.
+	if (SourceNode->Type == EStoryFlowNodeType::GetDataAssetVariableNames)
+	{
+		TArray<FStoryFlowVariant> Names;
+		for (const FString& Name : Context->GetDataAssetVariableNames(Context->ResolveDataAssetId(*SourceNode)))
+		{
+			Names.Add(FStoryFlowVariant::FromString(Name));
+		}
+		return Names;
+	}
+
 	// mapKeys / mapValues: pure ops that project a map into an array. Recomputed
 	// fresh on every pull — maps mutate in place, so a cached output would go
 	// stale (the HTML runtime recomputes these inline too). Entries are already
