@@ -193,16 +193,28 @@ void UStoryFlowLipsyncComponent::ResolveFace(const StoryFlowVisemeTable::FTable&
 {
 	Targets.Reset();
 
-	const USceneComponent* Root = FaceRoot != nullptr ? FaceRoot.Get() : (GetOwner() != nullptr ? GetOwner()->GetRootComponent() : nullptr);
+	USceneComponent* Root = FaceRoot != nullptr ? FaceRoot.Get() : (GetOwner() != nullptr ? GetOwner()->GetRootComponent() : nullptr);
 	if (Root == nullptr)
 	{
 		return;
 	}
 
+	// SCOPED TO THE FACE ROOT's subtree, matching the Unity arm. Collecting every skeletal mesh on the actor
+	// instead would drive a held weapon or a prop that happened to carry a morph of the same name, and would
+	// make FaceRoot a setting that reads as if it does something and does not.
 	TArray<USkeletalMeshComponent*> Meshes;
-	if (AActor* Owner = GetOwner())
+	if (USkeletalMeshComponent* RootMesh = Cast<USkeletalMeshComponent>(Root))
 	{
-		Owner->GetComponents<USkeletalMeshComponent>(Meshes);
+		Meshes.Add(RootMesh);
+	}
+	TArray<USceneComponent*> Children;
+	Root->GetChildrenComponents(true, Children);
+	for (USceneComponent* Child : Children)
+	{
+		if (USkeletalMeshComponent* Mesh = Cast<USkeletalMeshComponent>(Child))
+		{
+			Meshes.Add(Mesh);
+		}
 	}
 
 	const TSet<FName> Owned = StoryFlowVisemeTable::OwnedMorphs(Table);
