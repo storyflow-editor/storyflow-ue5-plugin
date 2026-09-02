@@ -4913,6 +4913,11 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 	// resolves, the untouched character path field is the contract §3 fall-back. Pre-P4
 	// content carries no id and flows through the path verbatim, exactly as before.
 	const FString SpeakerRef = ExecutionContext.ResolveCharacterRef(DialogueNode->Data.CharacterRefId, DialogueNode->Data.Character);
+
+	// Remembered for GetCurrentSpeakerPath: the lipsync component (and any game code that cares WHICH
+	// character is talking rather than what they are called) matches on this, because the display name in
+	// the state below is localized and the state carries no id of its own.
+	CurrentSpeakerPath = SpeakerRef;
 	if (!SpeakerRef.IsEmpty())
 	{
 		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: BuildDialogueState - Looking up character '%s'"), *SpeakerRef);

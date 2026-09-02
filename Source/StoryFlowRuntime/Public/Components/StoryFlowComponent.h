@@ -254,6 +254,18 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")
 	FStoryFlowDialogueState GetCurrentDialogue() const;
 
+	/**
+	 * The character PATH the current line's speaker was resolved to, empty when the line has no speaker.
+	 *
+	 * The dialogue state carries the speaker's resolved DATA (name, portrait, variables) but nothing that
+	 * identifies WHICH character it is, and the display name is localized, so it cannot be matched against.
+	 * This is the id-native answer: pair it with GetCharacterPathById to ask "is my character speaking",
+	 * which is what the lipsync component does. Read-only, and additive — the dialogue state's shape, which
+	 * every engine plugin mirrors, is untouched.
+	 */
+	UFUNCTION(BlueprintPure, Category = "StoryFlow")
+	FString GetCurrentSpeakerPath() const { return CurrentSpeakerPath; }
+
 	/** Get the current dialogue's presentation tags (empty when untagged) */
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")
 	TArray<FString> GetCurrentDialogueTags() const;
@@ -1065,6 +1077,13 @@ protected:
 	void OnDialogueAudioFinished();
 
 private:
+
+	/**
+	 * The character path the CURRENT line's speaker resolved to — see GetCurrentSpeakerPath. Set wherever
+	 * the state is built, from the same resolution the character data itself came from, so the two can never
+	 * disagree about who is talking.
+	 */
+	FString CurrentSpeakerPath;
 	/** Member function pointer type for node handlers */
 	using FNodeHandler = void (UStoryFlowComponent::*)(FStoryFlowNode*);
 
