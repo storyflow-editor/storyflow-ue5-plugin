@@ -119,6 +119,15 @@ private:
 
 	bool SpeakerIsMine() const;
 	void ResolveFace(const StoryFlowVisemeTable::FTable& Table);
+
+	/**
+	 * Re-resolve the face when the meshes we cached are gone.
+	 *
+	 * Sidekick assembles a character from part components and REBUILDS them whenever the outfit changes at
+	 * runtime: the old components are destroyed and new ones created. Targets resolved once at BeginPlay then
+	 * point at nothing, and the mouth quietly stops moving — no error, just a face that used to work.
+	 */
+	bool RefreshFaceIfStale(float DeltaSeconds);
 	void ApplyWeights();
 	void StartAnalysis();
 	void StopAnalysis();
@@ -131,6 +140,13 @@ private:
 	};
 
 	TArray<FFaceTarget> Targets;
+
+	/** Kept so a re-resolve costs nothing but the component walk. */
+	StoryFlowVisemeTable::FTable ResolvedTable;
+
+	/** Throttles the "still no face" retry, and keeps its warning to one. */
+	float SinceFaceCheck = 0.0f;
+	bool bWarnedNoFace = false;
 	TArray<float> AnalysisFrequencies;
 	TArray<float> Magnitudes;
 	TUniquePtr<FStoryFlowLipsyncDriver> Driver;

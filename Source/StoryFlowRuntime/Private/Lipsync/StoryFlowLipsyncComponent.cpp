@@ -16,6 +16,9 @@ namespace
 {
 	/** How many frequencies to ask the mixer for across the band. Ample for a mouth, cheap to sample. */
 	constexpr int32 AnalysisBands = 24;
+
+	/** How often to look again when no face was found at all — see RefreshFaceIfStale. */
+	constexpr float FaceRecheckSeconds = 1.0f;
 }
 
 UStoryFlowLipsyncComponent::UStoryFlowLipsyncComponent()
@@ -28,9 +31,9 @@ void UStoryFlowLipsyncComponent::BeginPlay()
 {
 	Super::BeginPlay();
 
-	const StoryFlowVisemeTable::FTable Table = VisemeMap != nullptr ? VisemeMap->ToTable() : StoryFlowVisemeTable::Default();
-	Driver = MakeUnique<FStoryFlowLipsyncDriver>(Table);
-	ResolveFace(Table);
+	ResolvedTable = VisemeMap != nullptr ? VisemeMap->ToTable() : StoryFlowVisemeTable::Default();
+	Driver = MakeUnique<FStoryFlowLipsyncDriver>(ResolvedTable);
+	ResolveFace(ResolvedTable);
 
 	// The frequencies the analysis is sampled at: evenly spaced across the driver's band, so the
 	// magnitude-weighted mean index IS the normalised centroid the spec describes.
@@ -86,6 +89,8 @@ void UStoryFlowLipsyncComponent::TickComponent(float DeltaTime, ELevelTick TickT
 	Driver->Sensitivity = Sensitivity;
 	Driver->JawBias = JawBias;
 	Driver->Smooth = Smoothing;
+
+	RefreshFaceIfStale(DeltaTime);
 
 	if (bSpeaking && bAnalysing)
 	{
@@ -245,11 +250,20 @@ void UStoryFlowLipsyncComponent::ResolveFace(const StoryFlowVisemeTable::FTable&
 		}
 	}
 
+	// A face was found, so the next disappearance is worth reporting again.
+	bWarnedNoFace = bWarnedNoFace && Targets.Num() == 0;
+
 	if (Targets.Num() == 0)
 	{
-		UE_LOG(LogStoryFlow, Warning,
-			TEXT("StoryFlow: Lipsync on '%s' found no morph targets on any skeletal mesh. Point FaceRoot at the character's face."),
-			*GetNameSafe(GetOwner()));
+		// Once, not once per retry: RefreshFaceIfStale comes back every second while a face is missing.
+		if (!bWarnedNoFace)
+		{
+			bWarnedNoFace = true;
+			UE_LOG(LogStoryFlow, Warning,
+				TEXT("StoryFlow: Lipsync on '%s' found no morph targets on any skeletal mesh under the face root. ")
+				TEXT("Point FaceRoot at the character's face."),
+				*GetNameSafe(GetOwner()));
+		}
 	}
 	else if (Missing.Num() > 0)
 	{
@@ -262,6 +276,41 @@ void UStoryFlowLipsyncComponent::ResolveFace(const StoryFlowVisemeTable::FTable&
 			TEXT("StoryFlow: Lipsync on '%s': the rig has no %s. Those parts of each pose are skipped; the rest still plays."),
 			*GetNameSafe(GetOwner()), *FString::Join(Names, TEXT(", ")));
 	}
+}
+
+
+/**
+ * Re-resolve the face when what we cached has gone.
+ *
+ * The case that forced this: Sidekick builds a character from part components and REBUILDS them whenever the
+ * outfit changes at runtime — old components destroyed, new ones created. Targets resolved once at BeginPlay
+ * then point at nothing and the mouth quietly stops moving. No error, no warning, just a face that used to
+ * work, which is the worst way for a feature to fail.
+ *
+ * A stale target is free to detect (a weak pointer test over a handful of entries) so that check runs every
+ * frame. Having found NOTHING is different: re-walking the component tree every frame to see whether a face
+ * has appeared would cost something on every character that legitimately has no face, so that retry is
+ * throttled, and its warning is kept to one rather than one per second.
+ */
+bool UStoryFlowLipsyncComponent::RefreshFaceIfStale(float DeltaSeconds)
+{
+	const bool bAnyStale = Targets.ContainsByPredicate([](const FFaceTarget& Target) { return !Target.Mesh.IsValid(); });
+
+	if (!bAnyStale && Targets.Num() > 0)
+	{
+		SinceFaceCheck = 0.0f;
+		return false;
+	}
+
+	SinceFaceCheck += DeltaSeconds;
+	if (!bAnyStale && SinceFaceCheck < FaceRecheckSeconds)
+	{
+		return false;
+	}
+
+	SinceFaceCheck = 0.0f;
+	ResolveFace(ResolvedTable);
+	return true;
 }
 
 void UStoryFlowLipsyncComponent::ApplyWeights()
