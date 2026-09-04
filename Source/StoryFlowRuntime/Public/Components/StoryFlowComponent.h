@@ -814,6 +814,51 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
 	TArray<FString> GetDataAssetVariableNames(UStoryFlowDataAssetAsset* DataAsset);
 
+	/**
+	 * Replace a Data Asset's ARRAY variable with these elements. True when the write landed.
+	 *
+	 * The container half of the surface, which used to be read-only: every type could be READ
+	 * (scalars typed, arrays and maps through GetDataAssetVariantVariable) and only scalars could
+	 * be written, so a Data Asset holding a list was a list a Blueprint could not edit.
+	 *
+	 * TWO SETTERS, NOT ONE VARIANT SETTER, and that is the whole design. A variant cannot say
+	 * whether it is an array: FStoryFlowVariant::SetArray infers its Type from the FIRST element,
+	 * so an empty array and a scalar of that type are the same value. A variant setter would
+	 * therefore be unable to tell "write an empty array" from "the caller passed a scalar by
+	 * mistake" — and writing the second over an array declaration leaves a value nothing can
+	 * read, which is exactly why the V2 contract left it out rather than half-building it. Here
+	 * the shape is in the SIGNATURE, so there is nothing to infer.
+	 *
+	 * THE SHAPE GATE. The declaration must be an array (never a map, never a scalar) and every
+	 * element must match its declared type, with the same string-family tolerance the scalar
+	 * accessors use. A mismatch refuses the whole write rather than landing a partial one: half a
+	 * list is a shape no author declared.
+	 *
+	 * An EMPTY array is a legitimate write and clears the variable. Writes land at the referenced
+	 * asset's own level and cascade to its descendants, like every other Data Asset write.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetArrayVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, const TArray<FStoryFlowVariant>& Elements);
+
+	/**
+	 * Replace a Data Asset's MAP variable with these entries. True when the write landed.
+	 *
+	 * The map twin of SetDataAssetArrayVariable — see it for why the shape lives in the signature
+	 * rather than in a variant.
+	 *
+	 * THE SHAPE GATE is one step wider here: the declaration must be a map, every KEY must match
+	 * its declared key type and every VALUE its declared value type. Key order is the caller's and
+	 * is preserved, matching the ordered entry lists the format ships.
+	 *
+	 * PARALLEL ARRAYS, mirroring GetMapVariable's out-params rather than taking entry structs:
+	 * FStoryFlowMapEntry is a plain struct and cannot cross the Blueprint boundary. Keys and
+	 * Values must be the same length; a mismatch refuses the write rather than truncating to the
+	 * shorter one, which would silently drop entries the caller listed.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetMapVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
+		const TArray<FStoryFlowVariant>& Keys, const TArray<FStoryFlowVariant>& Values);
+
 	// ========================================================================
 	// Utility Functions
 	// ========================================================================
@@ -995,6 +1040,13 @@ protected:
 		EStoryFlowVariableType ExpectedType, StoryFlowDataAssets::FStoreRef& OutStore) const;
 
 	/** The shared tail of every typed Data Asset setter: gate, then write at the asset's own level. */
+	/**
+	 * The store write and cache drop the two container setters share, once — the tail of
+	 * SetDataAssetScalar with the scalar gate already behind it.
+	 */
+	bool WriteDataAssetContainer(UStoryFlowDataAssetAsset* DataAsset, const FStoryFlowVariable* Declaration,
+		StoryFlowDataAssets::FStoreRef& Store, const FStoryFlowVariant& Value);
+
 	bool SetDataAssetScalar(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
 		EStoryFlowVariableType ExpectedType, const FStoryFlowVariant& Value);
 

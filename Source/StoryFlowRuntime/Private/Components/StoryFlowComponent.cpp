@@ -2227,6 +2227,104 @@ bool UStoryFlowComponent::SetDataAssetEnumVariable(UStoryFlowDataAssetAsset* Dat
 	return SetDataAssetScalar(DataAsset, VariableName, EStoryFlowVariableType::Enum, NewValue);
 }
 
+bool UStoryFlowComponent::SetDataAssetArrayVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
+	const TArray<FStoryFlowVariant>& Elements)
+{
+	StoryFlowDataAssets::FStoreRef Store;
+	const FStoryFlowVariable* Declaration = FindDataAssetDeclaration(DataAsset, VariableName, Store);
+	if (!Declaration)
+	{
+		return false;
+	}
+
+	// THE SHAPE GATE, the whole reason this is a container setter and not a variant one. A map is
+	// refused here rather than falling through: its entries are a different shape, and writing an
+	// array over one leaves a value nothing can read.
+	if (!Declaration->bIsArray || Declaration->Type == EStoryFlowVariableType::Map)
+	{
+		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: '%s.%s' is not an array"), *DataAsset->AssetId, *VariableName);
+		return false;
+	}
+
+	// EVERY element, checked BEFORE anything is written: a partial list is a shape no author
+	// declared, so a single mismatch refuses the whole write.
+	for (const FStoryFlowVariant& Element : Elements)
+	{
+		if (!DataAssetAccessorTypeMatches(Declaration->Type, Element.GetType()))
+		{
+			UE_LOG(LogStoryFlow, Verbose,
+				TEXT("StoryFlow: an element offered to '%s.%s' does not match its declared type"), *DataAsset->AssetId, *VariableName);
+			return false;
+		}
+	}
+
+	FStoryFlowVariant Value;
+	// The typed overload, so an EMPTY write still lands as an array of the declared type rather
+	// than as a type-less variant — SetArray's one-argument form infers from the first element and
+	// has nothing to infer from here.
+	Value.SetArray(Elements, Declaration->Type);
+	return WriteDataAssetContainer(DataAsset, Declaration, Store, Value);
+}
+
+bool UStoryFlowComponent::SetDataAssetMapVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
+	const TArray<FStoryFlowVariant>& Keys, const TArray<FStoryFlowVariant>& Values)
+{
+	StoryFlowDataAssets::FStoreRef Store;
+	const FStoryFlowVariable* Declaration = FindDataAssetDeclaration(DataAsset, VariableName, Store);
+	if (!Declaration)
+	{
+		return false;
+	}
+
+	if (Declaration->Type != EStoryFlowVariableType::Map)
+	{
+		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: '%s.%s' is not a map"), *DataAsset->AssetId, *VariableName);
+		return false;
+	}
+
+	// Refused rather than truncated to the shorter: truncating silently drops entries the caller
+	// listed, and a caller that mismatched these has a bug worth being told about.
+	if (Keys.Num() != Values.Num())
+	{
+		UE_LOG(LogStoryFlow, Verbose,
+			TEXT("StoryFlow: '%s.%s' was offered %d keys and %d values"), *DataAsset->AssetId, *VariableName, Keys.Num(), Values.Num());
+		return false;
+	}
+
+	const EStoryFlowVariableType DeclaredKeyType = Declaration->KeyType;
+	const EStoryFlowVariableType DeclaredValueType = Declaration->ValueType;
+	TArray<FStoryFlowMapEntry> Entries;
+	Entries.Reserve(Keys.Num());
+	for (int32 Index = 0; Index < Keys.Num(); ++Index)
+	{
+		if (!DataAssetAccessorTypeMatches(DeclaredKeyType, Keys[Index].GetType())
+			|| !DataAssetAccessorTypeMatches(DeclaredValueType, Values[Index].GetType()))
+		{
+			UE_LOG(LogStoryFlow, Verbose,
+				TEXT("StoryFlow: an entry offered to '%s.%s' does not match its declared key/value types"), *DataAsset->AssetId, *VariableName);
+			return false;
+		}
+		Entries.Add(FStoryFlowMapEntry{ Keys[Index], Values[Index] });
+	}
+
+	FStoryFlowVariant Value;
+	Value.SetMap(Entries);
+	return WriteDataAssetContainer(DataAsset, Declaration, Store, Value);
+}
+
+bool UStoryFlowComponent::WriteDataAssetContainer(UStoryFlowDataAssetAsset* DataAsset, const FStoryFlowVariable* Declaration,
+	StoryFlowDataAssets::FStoreRef& Store, const FStoryFlowVariant& Value)
+{
+	// The same store call and the same cache drop the scalar setters make — see SetDataAssetScalar
+	// for why both are here. The write lands at the referenced asset's OWN level (contract §5).
+	const bool bWritten = StoryFlowDataAssets::TrySet(*Store.Seed, *Store.Overlay, DataAsset->AssetId, Declaration->Id, Value);
+	if (bWritten && Evaluator)
+	{
+		Evaluator->ClearCache();
+	}
+	return bWritten;
+}
+
 TArray<FString> UStoryFlowComponent::GetDataAssetVariableNames(UStoryFlowDataAssetAsset* DataAsset)
 {
 	if (!DataAsset)

@@ -1059,6 +1059,73 @@ bool FStoryFlowDataAssetBlueprintSurfaceTest::RunTest(const FString& Parameters)
 			W.Component->GetDataAssetVariableNames(nullptr).Num(), 0);
 	}
 
+	// --- The container setters (design 2026-09-04) ---
+	//
+	// The surface used to be read-any / write-scalars-only, so a Data Asset holding a list was a
+	// list a Blueprint could not edit. What is pinned here is the SHAPE GATE, because that is the
+	// whole reason these are two typed setters rather than one variant setter: a variant cannot
+	// say whether it is an array (SetArray infers its type from the first element, so an empty
+	// array and a scalar are the same value), and writing the wrong shape leaves a value nothing
+	// can read.
+	{
+		// `tags` is the fixture's string array, `loot` its map.
+		TArray<FStoryFlowVariant> Elements;
+		Elements.Add(FStoryFlowVariant::FromString(TEXT("alpha")));
+		Elements.Add(FStoryFlowVariant::FromString(TEXT("beta")));
+		if (TestTrue(TEXT("a matching array write lands"), W.Component->SetDataAssetArrayVariable(Base, TEXT("tags"), Elements)))
+		{
+			const FStoryFlowVariant Read = W.Component->GetDataAssetVariantVariable(Base, TEXT("tags"), bFound);
+			TestTrue(TEXT("and reads back"), bFound);
+			if (TestEqual(TEXT("with both elements"), Read.GetArray().Num(), 2))
+			{
+				TestEqual(TEXT("in the order written"), Read.GetArray()[1].GetString(), FString(TEXT("beta")));
+			}
+		}
+
+		// An EMPTY write is legitimate and clears the list — the case a variant setter could not
+		// tell from a scalar.
+		TestTrue(TEXT("an empty array write lands"), W.Component->SetDataAssetArrayVariable(Base, TEXT("tags"), TArray<FStoryFlowVariant>()));
+		TestEqual(TEXT("and clears the list"), W.Component->GetDataAssetVariantVariable(Base, TEXT("tags"), bFound).GetArray().Num(), 0);
+
+		// THE GATE, from every side.
+		TArray<FStoryFlowVariant> Mistyped;
+		Mistyped.Add(FStoryFlowVariant::FromInt(7));
+		TestFalse(TEXT("an element of the wrong type refuses the write"),
+			W.Component->SetDataAssetArrayVariable(Base, TEXT("tags"), Mistyped));
+		// `title` is a STRING SCALAR, so the elements' type matches and only the SHAPE differs -
+		// which is the point: an int-typed scalar would be refused by the element check instead
+		// and would leave the shape gate unexercised.
+		TestFalse(TEXT("a SCALAR declaration refuses an array write even when the elements match its type"),
+			W.Component->SetDataAssetArrayVariable(Base, TEXT("title"), Elements));
+		TestEqual(TEXT("and the scalar it refused to clobber still reads as a scalar"),
+			W.Component->GetDataAssetStringVariable(Base, TEXT("title"), bFound), FString(TEXT("Grunt")));
+		TestFalse(TEXT("a MAP declaration refuses an array write"),
+			W.Component->SetDataAssetArrayVariable(Base, TEXT("loot"), Elements));
+		TestFalse(TEXT("a null asset refuses"), W.Component->SetDataAssetArrayVariable(nullptr, TEXT("tags"), Elements));
+
+
+		// --- the map twin ---
+		TArray<FStoryFlowVariant> Keys;
+		TArray<FStoryFlowVariant> Values;
+		Keys.Add(FStoryFlowVariant::FromString(TEXT("gold")));
+		Values.Add(FStoryFlowVariant::FromInt(5));
+		if (TestTrue(TEXT("a matching map write lands"), W.Component->SetDataAssetMapVariable(Base, TEXT("loot"), Keys, Values)))
+		{
+			const FStoryFlowVariant Read = W.Component->GetDataAssetVariantVariable(Base, TEXT("loot"), bFound);
+			if (TestEqual(TEXT("with one entry"), Read.GetMap().Num(), 1))
+			{
+				TestEqual(TEXT("carrying the key"), Read.GetMap()[0].Key.GetString(), FString(TEXT("gold")));
+				TestEqual(TEXT("and the value"), Read.GetMap()[0].Value.GetInt(), 5);
+			}
+		}
+
+		Values.Add(FStoryFlowVariant::FromInt(9));
+		TestFalse(TEXT("mismatched key/value counts refuse the write rather than truncating"),
+			W.Component->SetDataAssetMapVariable(Base, TEXT("loot"), Keys, Values));
+		TestFalse(TEXT("an ARRAY declaration refuses a map write"),
+			W.Component->SetDataAssetMapVariable(Base, TEXT("tags"), Keys, Values));
+	}
+
 	// --- Finding an asset by id or by the name an author typed (design 2026-09-04) ---
 	{
 		TestEqual(TEXT("an id resolves to the asset object"), W.Subsystem->FindDataAsset(BaseId), Base);
