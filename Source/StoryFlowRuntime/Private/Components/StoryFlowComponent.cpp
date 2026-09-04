@@ -1905,6 +1905,23 @@ namespace
 	 * not be merged: doing it would either open enum writes to the string setter (above) or shut
 	 * the fixture comparator out of every enum value it checks.
 	 */
+	/**
+	 * The KEY twin of DataAssetAccessorTypeMatches, and deliberately not the same rule: the importer
+	 * types a map's keys as Int or String and nothing else (StoryFlowImporter's map parse - there is
+	 * no SetEnum for a key), so an ENUM-keyed map holds String-typed keys. The accessor rule keeps
+	 * Enum out of the string family on purpose - an enum VALUE carries its own tag - which is
+	 * exactly why it cannot be reused for keys: it would refuse every enum-keyed map write a
+	 * Blueprint could make, and the first cut of SetDataAssetMapVariable did.
+	 */
+	bool DataAssetKeyTypeMatches(EStoryFlowVariableType DeclaredKeyType, EStoryFlowVariableType OfferedType)
+	{
+		if (DeclaredKeyType == EStoryFlowVariableType::String || DeclaredKeyType == EStoryFlowVariableType::Enum)
+		{
+			return OfferedType == EStoryFlowVariableType::String;
+		}
+		return DeclaredKeyType == OfferedType;
+	}
+
 	bool DataAssetAccessorTypeMatches(EStoryFlowVariableType DeclaredType, EStoryFlowVariableType ExpectedType)
 	{
 		if (ExpectedType == EStoryFlowVariableType::String)
@@ -2297,7 +2314,7 @@ bool UStoryFlowComponent::SetDataAssetMapVariable(UStoryFlowDataAssetAsset* Data
 	Entries.Reserve(Keys.Num());
 	for (int32 Index = 0; Index < Keys.Num(); ++Index)
 	{
-		if (!DataAssetAccessorTypeMatches(DeclaredKeyType, Keys[Index].GetType())
+		if (!DataAssetKeyTypeMatches(DeclaredKeyType, Keys[Index].GetType())
 			|| !DataAssetAccessorTypeMatches(DeclaredValueType, Values[Index].GetType()))
 		{
 			UE_LOG(LogStoryFlow, Verbose,

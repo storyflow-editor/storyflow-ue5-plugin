@@ -1124,6 +1124,36 @@ bool FStoryFlowDataAssetBlueprintSurfaceTest::RunTest(const FString& Parameters)
 			W.Component->SetDataAssetMapVariable(Base, TEXT("loot"), Keys, Values));
 		TestFalse(TEXT("an ARRAY declaration refuses a map write"),
 			W.Component->SetDataAssetMapVariable(Base, TEXT("tags"), Keys, Values));
+
+		// AN ENUM-KEYED MAP. The importer types a map's keys as Int or String and nothing else, so
+		// an enum-keyed map holds STRING-typed keys - and the first cut gated keys with the
+		// accessor rule, which keeps Enum out of the string family, and refused every such write.
+		// The fixture carries only a string-keyed map, so one is injected onto the imported asset
+		// and the seed rebuilt.
+		{
+			FStoryFlowVariable EnumKeyed;
+			EnumKeyed.Id = TEXT("v-rewards-injected");
+			EnumKeyed.Name = TEXT("rewards");
+			EnumKeyed.Type = EStoryFlowVariableType::Map;
+			EnumKeyed.KeyType = EStoryFlowVariableType::Enum;
+			EnumKeyed.ValueType = EStoryFlowVariableType::Integer;
+			EnumKeyed.KeyEnumValues = { TEXT("gold"), TEXT("gem") };
+			Base->Variables.Add(EnumKeyed);
+			W.Subsystem->SetProject(Project);
+
+			TArray<FStoryFlowVariant> EnumKeys;
+			TArray<FStoryFlowVariant> EnumValues;
+			EnumKeys.Add(FStoryFlowVariant::FromString(TEXT("gem")));
+			EnumValues.Add(FStoryFlowVariant::FromInt(3));
+			TestTrue(TEXT("an enum-keyed map accepts the String-typed keys the importer stores"),
+				W.Component->SetDataAssetMapVariable(Base, TEXT("rewards"), EnumKeys, EnumValues));
+			const FStoryFlowVariant Read = W.Component->GetDataAssetVariantVariable(Base, TEXT("rewards"), bFound);
+			if (TestEqual(TEXT("and the entry reads back"), Read.GetMap().Num(), 1))
+			{
+				TestEqual(TEXT("under its key"), Read.GetMap()[0].Key.GetString(), FString(TEXT("gem")));
+			}
+			Base->Variables.Pop();
+		}
 	}
 
 	// --- Finding an asset by id or by the name an author typed (design 2026-09-04) ---
