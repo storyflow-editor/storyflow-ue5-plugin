@@ -174,12 +174,22 @@ void UStoryFlowLipsyncComponent::TickComponent(float DeltaTime, ELevelTick TickT
 
 	const EMouthDrive Drive = DecideDrive();
 
-	// One place decides whether the submix is being read, so the analysis lifetime follows the MOUTH rather
-	// than the last line start — which is what left a face analysing the music for the ten seconds after a
-	// two second line had finished.
-	if ((Drive == EMouthDrive::Analyse) != bAnalysing)
+	// READING the submix follows the mouth: the drive above stops asking for magnitudes the frame the line's
+	// sound ends, which is what used to leave a face mouthing the music for the ten seconds after a two
+	// second line had finished. The ANALYSIS itself outlives the line and stops with the dialogue: starting
+	// it is an audio-thread round trip, and every read that lands before it completes logs the engine's
+	// "call StartSpectrumAnalysis first" warning, so tearing it down and rebuilding it around every line
+	// would repeat that warning per line instead of once per conversation.
+	if (Drive == EMouthDrive::Analyse)
 	{
-		Drive == EMouthDrive::Analyse ? StartAnalysis() : StopAnalysis();
+		if (!bAnalysing)
+		{
+			StartAnalysis();
+		}
+	}
+	else if (bAnalysing && !(Source != nullptr && Source->IsDialogueActive()))
+	{
+		StopAnalysis();
 	}
 
 	switch (Drive)
