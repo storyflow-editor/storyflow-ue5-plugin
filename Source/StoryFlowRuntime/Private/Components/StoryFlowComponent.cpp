@@ -351,6 +351,11 @@ void UStoryFlowComponent::StopDialogue()
 
 	ExecutionContext.Reset();
 
+	// Nobody is speaking between dialogues, and GetCurrentSpeakerPath promises exactly that. Left set, it
+	// answers with whoever spoke last for as long as nothing else does — a stale speaker every consumer
+	// after lipsync would have to learn about the hard way.
+	CurrentSpeakerPath.Reset();
+
 	// The other half of the pair: decrement only what this component actually counted. The
 	// bIsExecuting early-out above already makes a second StopDialogue a no-op, but that flag is
 	// also cleared by ExecutionContext.Reset() from other paths, so the count needs a witness of
@@ -4990,6 +4995,11 @@ void UStoryFlowComponent::PlayDialogueAudio_Implementation(USoundBase* Sound, bo
 			bUse3DAudio ? TEXT("true") : TEXT("false"),
 			bLoop ? TEXT("true") : TEXT("false"));
 	}
+}
+
+bool UStoryFlowComponent::IsDialogueAudioPlaying() const
+{
+	return CurrentDialogueAudio != nullptr && CurrentDialogueAudio->IsPlaying();
 }
 
 void UStoryFlowComponent::StopDialogueAudio_Implementation()

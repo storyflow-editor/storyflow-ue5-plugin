@@ -266,6 +266,21 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")
 	FString GetCurrentSpeakerPath() const { return CurrentSpeakerPath; }
 
+	/**
+	 * True while the audio THIS component started for the current line is still playing.
+	 *
+	 * The cue lipsync closes a mouth on. A two second line sits on a screen the player reads for twelve, and
+	 * a face that keeps moving for the other ten is mouthing whatever else the mix is carrying. Answers
+	 * false — not "unknown" — when the game overrode PlayDialogueAudio, which is why the audio component
+	 * itself is exposed beside this: a caller that must tell "silent" from "not mine to know" can ask.
+	 */
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Audio")
+	bool IsDialogueAudioPlaying() const;
+
+	/** The audio component playing the current line, null when nothing is playing or the game plays its own. */
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Audio")
+	UAudioComponent* GetCurrentDialogueAudio() const { return CurrentDialogueAudio; }
+
 	/** Get the current dialogue's presentation tags (empty when untagged) */
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")
 	TArray<FString> GetCurrentDialogueTags() const;
