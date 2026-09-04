@@ -1,6 +1,7 @@
 // Copyright 2026 StoryFlow. All Rights Reserved.
 
 #include "Components/StoryFlowComponent.h"
+#include "Data/StoryFlowDataAssetAccess.h"
 #include "StoryFlowRuntime.h"
 #include "Data/StoryFlowProjectAsset.h"
 #include "Data/StoryFlowScriptAsset.h"
@@ -1886,310 +1887,28 @@ void UStoryFlowComponent::SetCharacterEnumVariable(UStoryFlowCharacterAsset* Cha
 // Data Asset Variable Access (typed, with asset picker)
 // ============================================================================
 
-namespace
-{
-	/**
-	 * Can a declaration of `DeclaredType` be reached through the `ExpectedType` accessor?
-	 *
-	 * Exact, except that the STRING accessor also serves image / character / audio: those three
-	 * are declared distinctly in the editor but hold a plain string at runtime (the importer
-	 * stores all three through FStoryFlowVariant::SetString), so reading one as a string is not a
-	 * coercion — it is the value. Enum is NOT in that set: it carries its own type tag, and
-	 * folding it in here would make a Blueprint write land in the overlay typed String while the
-	 * file value it shadows is typed Enum — invisible to a read, visible in the save key.
-	 *
-	 * NOT the same set as StoryFlowEngineContract::IsStringFamily (the test fixtures' helper),
-	 * which has FIVE members because it answers a different question: it asks what STORAGE a
-	 * value ended up in, where Enum does live in StringValue alongside the other four. This one
-	 * asks which DECLARATION an accessor may reach, and Enum has its own accessor. The two must
-	 * not be merged: doing it would either open enum writes to the string setter (above) or shut
-	 * the fixture comparator out of every enum value it checks.
-	 */
-	/**
-	 * The KEY twin of DataAssetAccessorTypeMatches, and deliberately not the same rule: the importer
-	 * types a map's keys as Int or String and nothing else (StoryFlowImporter's map parse - there is
-	 * no SetEnum for a key), so an ENUM-keyed map holds String-typed keys. The accessor rule keeps
-	 * Enum out of the string family on purpose - an enum VALUE carries its own tag - which is
-	 * exactly why it cannot be reused for keys: it would refuse every enum-keyed map write a
-	 * Blueprint could make, and the first cut of SetDataAssetMapVariable did.
-	 */
-	bool DataAssetKeyTypeMatches(EStoryFlowVariableType DeclaredKeyType, EStoryFlowVariableType OfferedType)
-	{
-		if (DeclaredKeyType == EStoryFlowVariableType::String || DeclaredKeyType == EStoryFlowVariableType::Enum)
-		{
-			return OfferedType == EStoryFlowVariableType::String;
-		}
-		return DeclaredKeyType == OfferedType;
-	}
-
-	bool DataAssetAccessorTypeMatches(EStoryFlowVariableType DeclaredType, EStoryFlowVariableType ExpectedType)
-	{
-		if (ExpectedType == EStoryFlowVariableType::String)
-		{
-			return DeclaredType == EStoryFlowVariableType::String
-				|| DeclaredType == EStoryFlowVariableType::Image
-				|| DeclaredType == EStoryFlowVariableType::Character
-				|| DeclaredType == EStoryFlowVariableType::Audio;
-		}
-		return DeclaredType == ExpectedType;
-	}
-}
-
-const FStoryFlowVariable* UStoryFlowComponent::FindDataAssetDeclaration(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, StoryFlowDataAssets::FStoreRef& OutStore) const
-{
-	OutStore = StoryFlowDataAssets::FStoreRef();
-
-	if (!DataAsset)
-	{
-		// Verbose, not Warning: these accessors report failure through their return value, and a
-		// Blueprint may well call one every tick (contract §6's warn-once ladder is keyed on a
-		// NODE id, which a Blueprint call does not have).
-		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Data Asset accessor called with no asset"));
-		return nullptr;
-	}
-
-	UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem();
-	if (!Subsystem)
-	{
-		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Data Asset accessor found no StoryFlow subsystem"));
-		return nullptr;
-	}
-
-	OutStore = Subsystem->GetDataAssetStore();
-	if (!OutStore.IsValid())
-	{
-		return nullptr;
-	}
-
-	// Names are resolved to ids exactly HERE, at the Blueprint boundary — everything downstream
-	// (the resolver, the overlay, the save key) is keyed by id, as the contract keys the system.
-	const FStoryFlowVariable* Declaration = StoryFlowDataAssets::FindDeclarationByName(*OutStore.Seed, DataAsset->AssetId, VariableName);
-	if (!Declaration)
-	{
-		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Data Asset '%s' declares no variable named '%s' on its chain"), *DataAsset->AssetId, *VariableName);
-	}
-	return Declaration;
-}
-
-const FStoryFlowVariable* UStoryFlowComponent::FindDataAssetScalarDeclaration(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
-	EStoryFlowVariableType ExpectedType, StoryFlowDataAssets::FStoreRef& OutStore) const
-{
-	const FStoryFlowVariable* Declaration = FindDataAssetDeclaration(DataAsset, VariableName, OutStore);
-	if (!Declaration)
-	{
-		return nullptr;
-	}
-
-	// NO SILENT COERCION (contract §6.1's rule, applied at this surface): an array read through a
-	// scalar accessor, or an integer read as a float, reports not-found rather than converting.
-	// Arrays and maps travel through GetDataAssetVariantVariable and the variant library.
-	if (Declaration->bIsArray || !DataAssetAccessorTypeMatches(Declaration->Type, ExpectedType))
-	{
-		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Data Asset variable '%s' is declared as a different type than the accessor reading it"), *VariableName);
-		return nullptr;
-	}
-	return Declaration;
-}
-
-FStoryFlowCharacterDef* UStoryFlowComponent::FindBridgedCharacter(const FString& AssetId) const
-{
-	UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem();
-	if (!Subsystem)
-	{
-		return nullptr;
-	}
-	const FString* RecordKey = Subsystem->GetCharacterIdToPath().Find(AssetId);
-	if (!RecordKey)
-	{
-		return nullptr;
-	}
-	// Null when the record is not loaded (post-LoadFromSlot: the bridge is project-derived,
-	// the runtime characters hold only what the save carried) — the branch then misses whole.
-	return Subsystem->GetRuntimeCharacters().Find(*RecordKey);
-}
-
-bool UStoryFlowComponent::TryGetCharacterScalarByName(const FStoryFlowCharacterDef& CharDef, const FString& VariableName,
-	EStoryFlowVariableType ExpectedType, FStoryFlowVariant& OutValue) const
-{
-	// The builtin rows are plain strings (cf_ aliases per amendment A1) and the surface never
-	// coerces, so they answer only the STRING accessor — same rule as the seed path's gate.
-	const bool bIsName = IsCharacterNameBuiltin(VariableName);
-	const bool bIsImage = IsCharacterImageBuiltin(VariableName);
-	if (bIsName || bIsImage)
-	{
-		if (ExpectedType != EStoryFlowVariableType::String)
-		{
-			return false;
-		}
-		// Name resolves through the string table, exactly like GetCharacterVariable.
-		OutValue.SetString(bIsName ? ResolveString(CharDef.Name) : CharDef.Image);
-		return true;
-	}
-
-	const FStoryFlowVariable* Variable = CharDef.Variables.Find(VariableName);
-	if (!Variable || Variable->bIsArray || !DataAssetAccessorTypeMatches(Variable->Type, ExpectedType))
-	{
-		return false;
-	}
-	OutValue = Variable->Value;
-	return true;
-}
-
-bool UStoryFlowComponent::TrySetCharacterScalarByName(FStoryFlowCharacterDef& CharDef, const FString& VariableName,
-	EStoryFlowVariableType ExpectedType, const FStoryFlowVariant& Value)
-{
-	const bool bIsName = IsCharacterNameBuiltin(VariableName);
-	const bool bIsImage = IsCharacterImageBuiltin(VariableName);
-	if (bIsName || bIsImage)
-	{
-		if (ExpectedType != EStoryFlowVariableType::String)
-		{
-			return false;
-		}
-		if (bIsName)
-		{
-			CharDef.Name = Value.ToString();
-		}
-		else
-		{
-			CharDef.Image = Value.ToString();
-		}
-		return true;
-	}
-
-	FStoryFlowVariable* Variable = CharDef.Variables.Find(VariableName);
-	if (!Variable || Variable->bIsArray || !DataAssetAccessorTypeMatches(Variable->Type, ExpectedType))
-	{
-		return false;
-	}
-	Variable->Value = Value;
-	return true;
-}
-
-bool UStoryFlowComponent::TryGetCharacterVariantByName(const FStoryFlowCharacterDef& CharDef, const FString& VariableName,
-	FStoryFlowVariant& OutValue) const
-{
-	if (IsCharacterNameBuiltin(VariableName))
-	{
-		OutValue.SetString(ResolveString(CharDef.Name));
-		return true;
-	}
-	if (IsCharacterImageBuiltin(VariableName))
-	{
-		OutValue.SetString(CharDef.Image);
-		return true;
-	}
-
-	const FStoryFlowVariable* Variable = CharDef.Variables.Find(VariableName);
-	if (!Variable)
-	{
-		return false;
-	}
-	if (Variable->Value.IsMap())
-	{
-		// DETACHED storage: SetMap copies the entries into fresh shared storage, so what the
-		// Blueprint holds can be mutated without reaching into the live character — the same
-		// promise the seed path's TryResolve makes.
-		OutValue.SetMap(Variable->Value.GetMap());
-	}
-	else
-	{
-		OutValue = Variable->Value;
-	}
-	return true;
-}
-
-bool UStoryFlowComponent::SetDataAssetScalar(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
-	EStoryFlowVariableType ExpectedType, const FStoryFlowVariant& Value)
-{
-	// Contract §3's character branch (Blueprint surface only): an id the seed cannot know may
-	// be a character FILE id — a bridge hit routes the write to the character system's state
-	// by NAME, with the surface's own bFound posture. The write never touches the .sfd
-	// overlay: the character system is the one runtime-state owner.
-	if (FStoryFlowCharacterDef* BridgedCharacter = DataAsset ? FindBridgedCharacter(DataAsset->AssetId) : nullptr)
-	{
-		const bool bWritten = TrySetCharacterScalarByName(*BridgedCharacter, VariableName, ExpectedType, Value);
-		// Same cache drop the seed write below makes, for the same reason: a memoized
-		// condition above a char-var read would otherwise survive the rebuild.
-		if (bWritten && Evaluator)
-		{
-			Evaluator->ClearCache();
-		}
-		return bWritten;
-	}
-
-	StoryFlowDataAssets::FStoreRef Store;
-	const FStoryFlowVariable* Declaration = FindDataAssetScalarDeclaration(DataAsset, VariableName, ExpectedType, Store);
-	if (!Declaration)
-	{
-		return false;
-	}
-
-	// The write lands at THE REFERENCED ASSET'S OWN LEVEL, always (contract §5) — the same store
-	// call the Set node makes, so a Blueprint write cascades to descendants exactly as a scripted
-	// one does and rides the next save the same way.
-	const bool bWritten = StoryFlowDataAssets::TrySet(*Store.Seed, *Store.Overlay, DataAsset->AssetId, Declaration->Id, Value);
-
-	// ...and it invalidates the same caches the Set node's arm does (contract §5). The accessor
-	// nodes are never memoized themselves, but the notBool / andBool / comparison ABOVE one is,
-	// and nothing else drops that memo for a write made from Blueprint: BuildDialogueState via
-	// NotifyVariableChanged rebuilds the dialogue WITHOUT clearing first, so a stale condition
-	// would survive the rebuild and keep an option hidden that the write just opened.
-	//
-	// Component-local, like every other clear here. A write is subsystem-wide, so another
-	// component mid-dialogue re-evaluates on its own next dialogue rebuild rather than instantly
-	// — the same asymmetry global variables have always had. See the note on FStoreRef.
-	if (bWritten && Evaluator)
-	{
-		Evaluator->ClearCache();
-	}
-	return bWritten;
-}
-
-bool UStoryFlowComponent::TryGetDataAssetScalar(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
-	EStoryFlowVariableType ExpectedType, FStoryFlowVariant& OutValue) const
-{
-	// Contract §3's character branch — see SetDataAssetScalar above. A read routes to the same
-	// character state a char-var node reads, so a value written on either surface is visible
-	// on the other by construction (one state).
-	if (const FStoryFlowCharacterDef* BridgedCharacter = DataAsset ? FindBridgedCharacter(DataAsset->AssetId) : nullptr)
-	{
-		return TryGetCharacterScalarByName(*BridgedCharacter, VariableName, ExpectedType, OutValue);
-	}
-
-	StoryFlowDataAssets::FStoreRef Store;
-	const FStoryFlowVariable* Declaration = FindDataAssetScalarDeclaration(DataAsset, VariableName, ExpectedType, Store);
-	if (!Declaration)
-	{
-		return false;
-	}
-
-	// Through the RESOLVER, never a cached copy: chain defaults, ancestor overrides and this
-	// session's writes all have to be visible here (contract §4). TryRead is the resolver plus the
-	// localization gate — the SAME door the script lane's accessor arms use, so a declared string
-	// value reads translated on both surfaces and a written one stays verbatim on both
-	// (localization spec §2's amendment; every rule lives on TryRead).
-	return StoryFlowDataAssets::TryRead(Store, GetProject(), ActiveLanguageCode(), DataAsset->AssetId, Declaration->Id, OutValue);
-}
 
 bool UStoryFlowComponent::GetDataAssetBoolVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound)
 {
 	FStoryFlowVariant Value;
-	bFound = TryGetDataAssetScalar(DataAsset, VariableName, EStoryFlowVariableType::Boolean, Value);
+	UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem();
+	bFound = Subsystem && StoryFlowDataAssetAccess::TryGetScalar(*Subsystem, DataAsset, VariableName, EStoryFlowVariableType::Boolean, ActiveLanguageCode(), Value);
 	return bFound ? Value.GetBool() : false;
 }
 
 bool UStoryFlowComponent::SetDataAssetBoolVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool bValue)
 {
-	FStoryFlowVariant Value;
-	Value.SetBool(bValue);
-	return SetDataAssetScalar(DataAsset, VariableName, EStoryFlowVariableType::Boolean, Value);
+	FStoryFlowVariant NewValue;
+	NewValue.SetBool(bValue);
+	UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem();
+	return DropCachesAfterDataAssetWrite(Subsystem && StoryFlowDataAssetAccess::SetScalar(*Subsystem, DataAsset, VariableName, EStoryFlowVariableType::Boolean, NewValue));
 }
 
 int32 UStoryFlowComponent::GetDataAssetIntVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound)
 {
 	FStoryFlowVariant Value;
-	bFound = TryGetDataAssetScalar(DataAsset, VariableName, EStoryFlowVariableType::Integer, Value);
+	UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem();
+	bFound = Subsystem && StoryFlowDataAssetAccess::TryGetScalar(*Subsystem, DataAsset, VariableName, EStoryFlowVariableType::Integer, ActiveLanguageCode(), Value);
 	return bFound ? Value.GetInt() : 0;
 }
 
@@ -2197,13 +1916,15 @@ bool UStoryFlowComponent::SetDataAssetIntVariable(UStoryFlowDataAssetAsset* Data
 {
 	FStoryFlowVariant NewValue;
 	NewValue.SetInt(Value);
-	return SetDataAssetScalar(DataAsset, VariableName, EStoryFlowVariableType::Integer, NewValue);
+	UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem();
+	return DropCachesAfterDataAssetWrite(Subsystem && StoryFlowDataAssetAccess::SetScalar(*Subsystem, DataAsset, VariableName, EStoryFlowVariableType::Integer, NewValue));
 }
 
 float UStoryFlowComponent::GetDataAssetFloatVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound)
 {
 	FStoryFlowVariant Value;
-	bFound = TryGetDataAssetScalar(DataAsset, VariableName, EStoryFlowVariableType::Float, Value);
+	UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem();
+	bFound = Subsystem && StoryFlowDataAssetAccess::TryGetScalar(*Subsystem, DataAsset, VariableName, EStoryFlowVariableType::Float, ActiveLanguageCode(), Value);
 	return bFound ? Value.GetFloat() : 0.0f;
 }
 
@@ -2211,13 +1932,15 @@ bool UStoryFlowComponent::SetDataAssetFloatVariable(UStoryFlowDataAssetAsset* Da
 {
 	FStoryFlowVariant NewValue;
 	NewValue.SetFloat(Value);
-	return SetDataAssetScalar(DataAsset, VariableName, EStoryFlowVariableType::Float, NewValue);
+	UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem();
+	return DropCachesAfterDataAssetWrite(Subsystem && StoryFlowDataAssetAccess::SetScalar(*Subsystem, DataAsset, VariableName, EStoryFlowVariableType::Float, NewValue));
 }
 
 FString UStoryFlowComponent::GetDataAssetStringVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound)
 {
 	FStoryFlowVariant Value;
-	bFound = TryGetDataAssetScalar(DataAsset, VariableName, EStoryFlowVariableType::String, Value);
+	UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem();
+	bFound = Subsystem && StoryFlowDataAssetAccess::TryGetScalar(*Subsystem, DataAsset, VariableName, EStoryFlowVariableType::String, ActiveLanguageCode(), Value);
 	return bFound ? Value.GetString() : FString();
 }
 
@@ -2225,13 +1948,15 @@ bool UStoryFlowComponent::SetDataAssetStringVariable(UStoryFlowDataAssetAsset* D
 {
 	FStoryFlowVariant NewValue;
 	NewValue.SetString(Value);
-	return SetDataAssetScalar(DataAsset, VariableName, EStoryFlowVariableType::String, NewValue);
+	UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem();
+	return DropCachesAfterDataAssetWrite(Subsystem && StoryFlowDataAssetAccess::SetScalar(*Subsystem, DataAsset, VariableName, EStoryFlowVariableType::String, NewValue));
 }
 
 FString UStoryFlowComponent::GetDataAssetEnumVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound)
 {
 	FStoryFlowVariant Value;
-	bFound = TryGetDataAssetScalar(DataAsset, VariableName, EStoryFlowVariableType::Enum, Value);
+	UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem();
+	bFound = Subsystem && StoryFlowDataAssetAccess::TryGetScalar(*Subsystem, DataAsset, VariableName, EStoryFlowVariableType::Enum, ActiveLanguageCode(), Value);
 	return bFound ? Value.GetString() : FString();
 }
 
@@ -2241,100 +1966,36 @@ bool UStoryFlowComponent::SetDataAssetEnumVariable(UStoryFlowDataAssetAsset* Dat
 	// SetEnum, not SetString: the seed types an enum declaration's value as Enum, and an overlay
 	// entry that differed would be invisible to a read and visible in the save key.
 	NewValue.SetEnum(Value);
-	return SetDataAssetScalar(DataAsset, VariableName, EStoryFlowVariableType::Enum, NewValue);
+	UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem();
+	return DropCachesAfterDataAssetWrite(Subsystem && StoryFlowDataAssetAccess::SetScalar(*Subsystem, DataAsset, VariableName, EStoryFlowVariableType::Enum, NewValue));
 }
 
 bool UStoryFlowComponent::SetDataAssetArrayVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
 	const TArray<FStoryFlowVariant>& Elements)
 {
-	StoryFlowDataAssets::FStoreRef Store;
-	const FStoryFlowVariable* Declaration = FindDataAssetDeclaration(DataAsset, VariableName, Store);
-	if (!Declaration)
-	{
-		return false;
-	}
-
-	// THE SHAPE GATE, the whole reason this is a container setter and not a variant one. A map is
-	// refused here rather than falling through: its entries are a different shape, and writing an
-	// array over one leaves a value nothing can read.
-	if (!Declaration->bIsArray || Declaration->Type == EStoryFlowVariableType::Map)
-	{
-		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: '%s.%s' is not an array"), *DataAsset->AssetId, *VariableName);
-		return false;
-	}
-
-	// EVERY element, checked BEFORE anything is written: a partial list is a shape no author
-	// declared, so a single mismatch refuses the whole write.
-	for (const FStoryFlowVariant& Element : Elements)
-	{
-		if (!DataAssetAccessorTypeMatches(Declaration->Type, Element.GetType()))
-		{
-			UE_LOG(LogStoryFlow, Verbose,
-				TEXT("StoryFlow: an element offered to '%s.%s' does not match its declared type"), *DataAsset->AssetId, *VariableName);
-			return false;
-		}
-	}
-
-	FStoryFlowVariant Value;
-	// The typed overload, so an EMPTY write still lands as an array of the declared type rather
-	// than as a type-less variant — SetArray's one-argument form infers from the first element and
-	// has nothing to infer from here.
-	Value.SetArray(Elements, Declaration->Type);
-	return WriteDataAssetContainer(DataAsset, Declaration, Store, Value);
+	UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem();
+	return DropCachesAfterDataAssetWrite(Subsystem && StoryFlowDataAssetAccess::SetArray(*Subsystem, DataAsset, VariableName, Elements));
 }
 
 bool UStoryFlowComponent::SetDataAssetMapVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
 	const TArray<FStoryFlowVariant>& Keys, const TArray<FStoryFlowVariant>& Values)
 {
-	StoryFlowDataAssets::FStoreRef Store;
-	const FStoryFlowVariable* Declaration = FindDataAssetDeclaration(DataAsset, VariableName, Store);
-	if (!Declaration)
-	{
-		return false;
-	}
-
-	if (Declaration->Type != EStoryFlowVariableType::Map)
-	{
-		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: '%s.%s' is not a map"), *DataAsset->AssetId, *VariableName);
-		return false;
-	}
-
-	// Refused rather than truncated to the shorter: truncating silently drops entries the caller
-	// listed, and a caller that mismatched these has a bug worth being told about.
-	if (Keys.Num() != Values.Num())
-	{
-		UE_LOG(LogStoryFlow, Verbose,
-			TEXT("StoryFlow: '%s.%s' was offered %d keys and %d values"), *DataAsset->AssetId, *VariableName, Keys.Num(), Values.Num());
-		return false;
-	}
-
-	const EStoryFlowVariableType DeclaredKeyType = Declaration->KeyType;
-	const EStoryFlowVariableType DeclaredValueType = Declaration->ValueType;
-	TArray<FStoryFlowMapEntry> Entries;
-	Entries.Reserve(Keys.Num());
-	for (int32 Index = 0; Index < Keys.Num(); ++Index)
-	{
-		if (!DataAssetKeyTypeMatches(DeclaredKeyType, Keys[Index].GetType())
-			|| !DataAssetAccessorTypeMatches(DeclaredValueType, Values[Index].GetType()))
-		{
-			UE_LOG(LogStoryFlow, Verbose,
-				TEXT("StoryFlow: an entry offered to '%s.%s' does not match its declared key/value types"), *DataAsset->AssetId, *VariableName);
-			return false;
-		}
-		Entries.Add(FStoryFlowMapEntry{ Keys[Index], Values[Index] });
-	}
-
-	FStoryFlowVariant Value;
-	Value.SetMap(Entries);
-	return WriteDataAssetContainer(DataAsset, Declaration, Store, Value);
+	UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem();
+	return DropCachesAfterDataAssetWrite(Subsystem && StoryFlowDataAssetAccess::SetMap(*Subsystem, DataAsset, VariableName, Keys, Values));
 }
 
-bool UStoryFlowComponent::WriteDataAssetContainer(UStoryFlowDataAssetAsset* DataAsset, const FStoryFlowVariable* Declaration,
-	StoryFlowDataAssets::FStoreRef& Store, const FStoryFlowVariant& Value)
+bool UStoryFlowComponent::DropCachesAfterDataAssetWrite(bool bWritten)
 {
-	// The same store call and the same cache drop the scalar setters make — see SetDataAssetScalar
-	// for why both are here. The write lands at the referenced asset's OWN level (contract §5).
-	const bool bWritten = StoryFlowDataAssets::TrySet(*Store.Seed, *Store.Overlay, DataAsset->AssetId, Declaration->Id, Value);
+	// THE ONE THING THIS SURFACE STILL DOES ITSELF after a Data Asset write (contract section 5).
+	// The accessor nodes are never memoized themselves, but the notBool / andBool / comparison
+	// ABOVE one is, and nothing else drops that memo for a host write: BuildDialogueState via
+	// NotifyVariableChanged rebuilds the dialogue WITHOUT clearing first, so a stale condition
+	// would survive the rebuild and keep an option hidden that the write just opened.
+	//
+	// Component-local, like every other clear here. A write is subsystem-wide, so another
+	// component mid-dialogue re-evaluates on its own next dialogue rebuild rather than instantly
+	// - the same asymmetry global variables have always had. The subsystem's own surface makes no
+	// such drop, for the same reason: it owns no evaluator.
 	if (bWritten && Evaluator)
 	{
 		Evaluator->ClearCache();
@@ -2344,54 +2005,15 @@ bool UStoryFlowComponent::WriteDataAssetContainer(UStoryFlowDataAssetAsset* Data
 
 TArray<FString> UStoryFlowComponent::GetDataAssetVariableNames(UStoryFlowDataAssetAsset* DataAsset)
 {
-	if (!DataAsset)
-	{
-		// Verbose for the same reason FindDataAssetDeclaration is: a Blueprint may call this every
-		// tick and it reports emptiness through its return value.
-		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: GetDataAssetVariableNames called with no asset"));
-		return TArray<FString>();
-	}
-
 	UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem();
-	if (!Subsystem)
-	{
-		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: GetDataAssetVariableNames found no StoryFlow subsystem"));
-		return TArray<FString>();
-	}
-
-	// Straight to the shared walk — no ladder, no warn-once latch. The graph node reaches the same
-	// function through the execution context, so the two surfaces cannot answer differently.
-	return StoryFlowDataAssets::VariableNames(Subsystem->GetDataAssetSeed(), DataAsset->AssetId);
+	return Subsystem ? StoryFlowDataAssetAccess::VariableNames(*Subsystem, DataAsset) : TArray<FString>();
 }
 
 FStoryFlowVariant UStoryFlowComponent::GetDataAssetVariantVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound)
 {
-	bFound = false;
-
-	// Contract §3's character branch — see SetDataAssetScalar. Untyped like the seed path
-	// below, so this is also the ARRAY and MAP route to a character's variables.
-	if (const FStoryFlowCharacterDef* BridgedCharacter = DataAsset ? FindBridgedCharacter(DataAsset->AssetId) : nullptr)
-	{
-		FStoryFlowVariant CharacterValue;
-		bFound = TryGetCharacterVariantByName(*BridgedCharacter, VariableName, CharacterValue);
-		return bFound ? CharacterValue : FStoryFlowVariant();
-	}
-
-	StoryFlowDataAssets::FStoreRef Store;
-	// No type gate here: this IS the untyped accessor, and the caller picks the value apart with
-	// UStoryFlowVariantLibrary. Arrays and maps have no other Blueprint path.
-	const FStoryFlowVariable* Declaration = FindDataAssetDeclaration(DataAsset, VariableName, Store);
-	if (!Declaration)
-	{
-		return FStoryFlowVariant();
-	}
-
 	FStoryFlowVariant Value;
-	// The SAME door the typed accessors use — this is the array and map route, and an array's
-	// elements and a string map's values localize exactly as a scalar does (see TryRead).
-	bFound = StoryFlowDataAssets::TryRead(Store, GetProject(), ActiveLanguageCode(), DataAsset->AssetId, Declaration->Id, Value);
-	// TryRead copies out with map storage detached, so what a Blueprint gets can be held or
-	// mutated without reaching into the store (contract §3).
+	UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem();
+	bFound = Subsystem && StoryFlowDataAssetAccess::TryGetVariant(*Subsystem, DataAsset, VariableName, ActiveLanguageCode(), Value);
 	return bFound ? Value : FStoryFlowVariant();
 }
 

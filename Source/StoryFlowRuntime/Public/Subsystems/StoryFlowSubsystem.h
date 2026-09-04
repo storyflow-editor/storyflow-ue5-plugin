@@ -10,6 +10,7 @@
 
 class UStoryFlowProjectAsset;
 class UStoryFlowScriptAsset;
+class UStoryFlowDataAssetAsset;
 
 /**
  * Fired when the language actually moves, carrying the NEW code.
@@ -92,6 +93,72 @@ public:
 	 */
 	UFUNCTION(BlueprintPure, Category = "StoryFlow|Variables|Data Assets")
 	UStoryFlowDataAssetAsset* FindDataAsset(const FString& IdOrName) const;
+
+	// ========================================================================
+	// Data Asset Variable Access - the subsystem's own door (typed, with asset picker)
+	// ========================================================================
+	//
+	// THE SAME ACCESSORS UStoryFlowComponent CARRIES, reachable with no component object: a pause
+	// menu, an inventory screen or a save-slot list gets the subsystem in one line and reads its
+	// data tables there. Both surfaces run ONE ladder (StoryFlowDataAssetAccess), so they cannot
+	// answer a question two ways - the rule the engine contract states for mirrored surfaces.
+	//
+	// Two deliberate differences from the component's copies. NO EVALUATOR CACHE DROP after a
+	// write, because this class owns no evaluator; a component with a live dialogue drops its own
+	// on its own writes, and a subsystem write reaches that dialogue's memo at its next rebuild -
+	// the asymmetry global-variable writes have always had. And reads run in THIS class's
+	// language, where a component on a project with no sidecar falls back to its own LanguageCode
+	// export; a localized project ignores the difference.
+
+	/** Get a Data Asset's boolean variable, resolved through its parent chain and this session's writes. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool GetDataAssetBoolVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound);
+
+	/** Set a Data Asset's boolean variable at the referenced asset's own level; cascades to descendants. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetBoolVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool bValue);
+
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	int32 GetDataAssetIntVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound);
+
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetIntVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, int32 Value);
+
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	float GetDataAssetFloatVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound);
+
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetFloatVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, float Value);
+
+	/** String-family read: string, image, audio or character. Enum is NOT reachable here. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	FString GetDataAssetStringVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound);
+
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetStringVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, const FString& Value);
+
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	FString GetDataAssetEnumVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound);
+
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetEnumVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, const FString& Value);
+
+	/** The untyped door: any declared type, the array and map route. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	FStoryFlowVariant GetDataAssetVariantVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound);
+
+	/** Every variable name the asset's chain declares, root-most first. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	TArray<FString> GetDataAssetVariableNames(UStoryFlowDataAssetAsset* DataAsset);
+
+	/** Replace an ARRAY variable's elements, shape-gated. See the component's twin for the rules. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetArrayVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, const TArray<FStoryFlowVariant>& Elements);
+
+	/** Replace a MAP variable's entries from parallel key/value lists, shape-gated. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetMapVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
+		const TArray<FStoryFlowVariant>& Keys, const TArray<FStoryFlowVariant>& Values);
 
 	// ========================================================================
 	// Localization (spec §9) — the player's language, game-wide

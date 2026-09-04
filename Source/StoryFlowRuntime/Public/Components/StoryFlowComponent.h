@@ -1019,83 +1019,12 @@ protected:
 	FStoryFlowCharacterDef* FindCharacterFromAsset(UStoryFlowCharacterAsset* CharacterAsset);
 
 	/**
-	 * Resolve a Blueprint (asset, variable NAME) pair to the chain declaration it names, handing
-	 * back the store to read or write it through. Null when there is no subsystem, no asset, or
-	 * no level of the chain declares that name.
-	 *
-	 * The store comes from the SUBSYSTEM, not from ExecutionContext: the context only points at
-	 * it once a dialogue has started, and a Blueprint may read or write a .sfd value at any time.
-	 * Both are the same subsystem-owned maps, so a Blueprint write is visible to the next graph
-	 * read and vice versa.
+	 * The one thing this surface still does itself after a Data Asset write: drop the evaluator's
+	 * memo so a condition above the written value re-evaluates. Returns what it was given, so the
+	 * setters can return it in one expression. The ladder itself lives in StoryFlowDataAssetAccess,
+	 * shared with the subsystem's mirror of these accessors.
 	 */
-	const FStoryFlowVariable* FindDataAssetDeclaration(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, StoryFlowDataAssets::FStoreRef& OutStore) const;
-
-	/**
-	 * FindDataAssetDeclaration plus the typed-accessor gate: the declaration must be a NON-ARRAY
-	 * of `ExpectedType` (the string accessor additionally taking image / character / audio, which
-	 * are stored as plain strings), because these accessors never coerce — contract §6.1's rule
-	 * at the Blueprint surface. Null also means "report not-found" to the caller.
-	 */
-	const FStoryFlowVariable* FindDataAssetScalarDeclaration(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
-		EStoryFlowVariableType ExpectedType, StoryFlowDataAssets::FStoreRef& OutStore) const;
-
-	/** The shared tail of every typed Data Asset setter: gate, then write at the asset's own level. */
-	/**
-	 * The store write and cache drop the two container setters share, once — the tail of
-	 * SetDataAssetScalar with the scalar gate already behind it.
-	 */
-	bool WriteDataAssetContainer(UStoryFlowDataAssetAsset* DataAsset, const FStoryFlowVariable* Declaration,
-		StoryFlowDataAssets::FStoreRef& Store, const FStoryFlowVariant& Value);
-
-	bool SetDataAssetScalar(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
-		EStoryFlowVariableType ExpectedType, const FStoryFlowVariant& Value);
-
-	/**
-	 * The shared tail of every typed Data Asset getter: gate, then resolve through the chain.
-	 * False leaves OutValue untouched and means "report not found" — each typed getter turns that
-	 * into its own zero. The VARIANT getter does not come through here: it has no type gate.
-	 */
-	bool TryGetDataAssetScalar(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
-		EStoryFlowVariableType ExpectedType, FStoryFlowVariant& OutValue) const;
-
-	/**
-	 * Contract §3's character branch, entry point: the runtime character a data-asset accessor's
-	 * id bridges to, or null when the id is no character (the normal .sfd case), there is no
-	 * subsystem, or the bridged record is not among the loaded runtime characters (the
-	 * post-LoadFromSlot shape — a miss of the whole branch, so the seed path answers as today).
-	 * Characters never enter the data-asset store, so a bridge hit and a seed hit are mutually
-	 * exclusive by construction — which is what makes consulting the bridge FIRST equivalent to
-	 * the contract's "misses the seed" ordering, one map probe cheaper.
-	 *
-	 * BLUEPRINT SURFACE ONLY. The script lane's ladder (TryResolveDataAssetBinding) grows no
-	 * such branch: editor scripts cannot bind characters through data-asset pins.
-	 */
-	FStoryFlowCharacterDef* FindBridgedCharacter(const FString& AssetId) const;
-
-	/**
-	 * The character-state route of a typed Data Asset getter (contract §3 one-state): read the
-	 * named variable off the bridged character with the surface's own no-coercion gate. The
-	 * builtin rows (Name/Image, cf_ aliases per amendment A1) are plain strings and answer only
-	 * the STRING accessor; Name resolves through the string table like GetCharacterVariable.
-	 */
-	bool TryGetCharacterScalarByName(const FStoryFlowCharacterDef& CharDef, const FString& VariableName,
-		EStoryFlowVariableType ExpectedType, FStoryFlowVariant& OutValue) const;
-
-	/**
-	 * Setter twin of TryGetCharacterScalarByName — the write lands directly on the runtime
-	 * character (the character system IS the state; nothing enters the .sfd overlay), so a
-	 * data-asset Set on a character and a char-var Set are the same write by construction.
-	 */
-	bool TrySetCharacterScalarByName(FStoryFlowCharacterDef& CharDef, const FString& VariableName,
-		EStoryFlowVariableType ExpectedType, const FStoryFlowVariant& Value);
-
-	/**
-	 * The character-state route of the VARIANT getter: any variable by name, untyped, plus the
-	 * builtin rows as strings. Map values are handed out with DETACHED storage, honoring the
-	 * surface's "can be held or mutated without reaching into the store" promise.
-	 */
-	bool TryGetCharacterVariantByName(const FStoryFlowCharacterDef& CharDef, const FString& VariableName,
-		FStoryFlowVariant& OutValue) const;
+	bool DropCachesAfterDataAssetWrite(bool bWritten);
 
 	/**
 	 * THE LANGUAGE every lookup on this component runs in (localization spec §9).

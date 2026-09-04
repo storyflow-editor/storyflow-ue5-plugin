@@ -1156,6 +1156,52 @@ bool FStoryFlowDataAssetBlueprintSurfaceTest::RunTest(const FString& Parameters)
 		}
 	}
 
+	// --- The subsystem mirror (design 2026-09-04) ---
+	//
+	// Reading a Data Asset never needed a running dialogue, but it did need a COMPONENT OBJECT,
+	// because the ladder lived on the component. It lives in StoryFlowDataAssetAccess now and the
+	// subsystem carries the same accessors. What is pinned here is AGREEMENT, not the ladder (the
+	// assertions above already drive it through the component): every subsystem answer is compared
+	// against the component's for the same input, and writes cross between the doors, so a future
+	// edit to one surface cannot quietly make them disagree.
+	{
+		bool bSubFound = false;
+		TestEqual(TEXT("mirror: int agrees"),
+			W.Subsystem->GetDataAssetIntVariable(Base, TEXT("hp"), bSubFound), W.Component->GetDataAssetIntVariable(Base, TEXT("hp"), bFound));
+		TestEqual(TEXT("mirror: and both report found"), bSubFound, bFound);
+		TestEqual(TEXT("mirror: bool agrees"),
+			W.Subsystem->GetDataAssetBoolVariable(Child, TEXT("alive"), bSubFound), W.Component->GetDataAssetBoolVariable(Child, TEXT("alive"), bFound));
+		TestEqual(TEXT("mirror: float agrees"),
+			W.Subsystem->GetDataAssetFloatVariable(Base, TEXT("speed"), bSubFound), W.Component->GetDataAssetFloatVariable(Base, TEXT("speed"), bFound));
+		TestEqual(TEXT("mirror: string agrees"),
+			W.Subsystem->GetDataAssetStringVariable(Base, TEXT("title"), bSubFound), W.Component->GetDataAssetStringVariable(Base, TEXT("title"), bFound));
+		TestEqual(TEXT("mirror: enum agrees"),
+			W.Subsystem->GetDataAssetEnumVariable(Child, TEXT("rank"), bSubFound), W.Component->GetDataAssetEnumVariable(Child, TEXT("rank"), bFound));
+		TestEqual(TEXT("mirror: the names door agrees"),
+			W.Subsystem->GetDataAssetVariableNames(Base), W.Component->GetDataAssetVariableNames(Base));
+		TestEqual(TEXT("mirror: the variant door agrees on an array's size"),
+			W.Subsystem->GetDataAssetVariantVariable(Base, TEXT("tags"), bSubFound).GetArray().Num(),
+			W.Component->GetDataAssetVariantVariable(Base, TEXT("tags"), bFound).GetArray().Num());
+
+		// ONE STORE, TWO DOORS: a subsystem write is read by the component and vice versa.
+		TestTrue(TEXT("mirror: a subsystem write lands"), W.Subsystem->SetDataAssetIntVariable(Child, TEXT("hp"), 42));
+		TestEqual(TEXT("mirror: and the component reads it back"), W.Component->GetDataAssetIntVariable(Child, TEXT("hp"), bFound), 42);
+		TestTrue(TEXT("mirror: a component write lands"), W.Component->SetDataAssetIntVariable(Child, TEXT("hp"), 7));
+		TestEqual(TEXT("mirror: and the subsystem reads it back"), W.Subsystem->GetDataAssetIntVariable(Child, TEXT("hp"), bSubFound), 7);
+
+		// The gates travel with the ladder rather than being re-implemented per surface.
+		W.Subsystem->GetDataAssetIntVariable(Base, TEXT("speed"), bSubFound);
+		TestFalse(TEXT("mirror: the subsystem refuses a mistyped read the same way"), bSubFound);
+		W.Subsystem->GetDataAssetIntVariable(nullptr, TEXT("hp"), bSubFound);
+		TestFalse(TEXT("mirror: and a null asset"), bSubFound);
+		TArray<FStoryFlowVariant> MirrorElements;
+		MirrorElements.Add(FStoryFlowVariant::FromString(TEXT("x")));
+		TestFalse(TEXT("mirror: the subsystem refuses an array write over a scalar"),
+			W.Subsystem->SetDataAssetArrayVariable(Base, TEXT("title"), MirrorElements));
+		TestEqual(TEXT("mirror: leaving the scalar intact"),
+			W.Subsystem->GetDataAssetStringVariable(Base, TEXT("title"), bSubFound), FString(TEXT("Grunt")));
+	}
+
 	// --- Finding an asset by id or by the name an author typed (design 2026-09-04) ---
 	{
 		TestEqual(TEXT("an id resolves to the asset object"), W.Subsystem->FindDataAsset(BaseId), Base);

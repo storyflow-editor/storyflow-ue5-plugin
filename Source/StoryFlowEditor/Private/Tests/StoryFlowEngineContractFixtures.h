@@ -111,7 +111,7 @@ namespace StoryFlowEngineContract
 	 *
 	 * FIVE members, Enum included, because this asks about STORAGE: a resolved variant is compared
 	 * against a fixture's bare JSON string, and an enum's value lives in StringValue like the rest.
-	 * Deliberately NOT the same set as DataAssetAccessorTypeMatches in StoryFlowComponent.cpp,
+	 * Deliberately NOT the same set as DataAssetAccessorTypeMatches in StoryFlowDataAssetAccess.cpp,
 	 * which has four and excludes Enum because it asks which DECLARATION a typed Blueprint
 	 * accessor may reach — and Enum has an accessor of its own there. Same-looking lists, opposite
 	 * questions; unifying them would break one side or the other.

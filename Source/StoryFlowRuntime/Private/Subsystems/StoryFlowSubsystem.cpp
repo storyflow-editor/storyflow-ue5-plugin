@@ -6,6 +6,7 @@
 #include "Data/StoryFlowScriptAsset.h"
 #include "Data/StoryFlowCharacterAsset.h"
 #include "Data/StoryFlowDataAssetAsset.h"
+#include "Data/StoryFlowDataAssetAccess.h"
 #include "Data/StoryFlowSaveGame.h"
 #include "Engine/AssetManager.h"
 #include "Kismet/GameplayStatics.h"
@@ -171,6 +172,106 @@ UStoryFlowDataAssetAsset* UStoryFlowSubsystem::FindDataAsset(const FString& IdOr
 	// No warning on a plain miss: "is there an asset called this" is a fair question to ask, and a
 	// Blueprint asking it every tick must not spam the log.
 	return Matched;
+}
+
+// ============================================================================
+// Data Asset Variable Access - the subsystem's door onto the shared ladder
+// ============================================================================
+
+bool UStoryFlowSubsystem::GetDataAssetBoolVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound)
+{
+	FStoryFlowVariant Value;
+	bFound = StoryFlowDataAssetAccess::TryGetScalar(*this, DataAsset, VariableName, EStoryFlowVariableType::Boolean, CurrentLanguage, Value);
+	return bFound ? Value.GetBool() : false;
+}
+
+bool UStoryFlowSubsystem::SetDataAssetBoolVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool bValue)
+{
+	FStoryFlowVariant NewValue;
+	NewValue.SetBool(bValue);
+	return StoryFlowDataAssetAccess::SetScalar(*this, DataAsset, VariableName, EStoryFlowVariableType::Boolean, NewValue);
+}
+
+int32 UStoryFlowSubsystem::GetDataAssetIntVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound)
+{
+	FStoryFlowVariant Value;
+	bFound = StoryFlowDataAssetAccess::TryGetScalar(*this, DataAsset, VariableName, EStoryFlowVariableType::Integer, CurrentLanguage, Value);
+	return bFound ? Value.GetInt() : 0;
+}
+
+bool UStoryFlowSubsystem::SetDataAssetIntVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, int32 Value)
+{
+	FStoryFlowVariant NewValue;
+	NewValue.SetInt(Value);
+	return StoryFlowDataAssetAccess::SetScalar(*this, DataAsset, VariableName, EStoryFlowVariableType::Integer, NewValue);
+}
+
+float UStoryFlowSubsystem::GetDataAssetFloatVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound)
+{
+	FStoryFlowVariant Value;
+	bFound = StoryFlowDataAssetAccess::TryGetScalar(*this, DataAsset, VariableName, EStoryFlowVariableType::Float, CurrentLanguage, Value);
+	return bFound ? Value.GetFloat() : 0.0f;
+}
+
+bool UStoryFlowSubsystem::SetDataAssetFloatVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, float Value)
+{
+	FStoryFlowVariant NewValue;
+	NewValue.SetFloat(Value);
+	return StoryFlowDataAssetAccess::SetScalar(*this, DataAsset, VariableName, EStoryFlowVariableType::Float, NewValue);
+}
+
+FString UStoryFlowSubsystem::GetDataAssetStringVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound)
+{
+	FStoryFlowVariant Value;
+	bFound = StoryFlowDataAssetAccess::TryGetScalar(*this, DataAsset, VariableName, EStoryFlowVariableType::String, CurrentLanguage, Value);
+	return bFound ? Value.GetString() : FString();
+}
+
+bool UStoryFlowSubsystem::SetDataAssetStringVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, const FString& Value)
+{
+	FStoryFlowVariant NewValue;
+	NewValue.SetString(Value);
+	return StoryFlowDataAssetAccess::SetScalar(*this, DataAsset, VariableName, EStoryFlowVariableType::String, NewValue);
+}
+
+FString UStoryFlowSubsystem::GetDataAssetEnumVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound)
+{
+	FStoryFlowVariant Value;
+	bFound = StoryFlowDataAssetAccess::TryGetScalar(*this, DataAsset, VariableName, EStoryFlowVariableType::Enum, CurrentLanguage, Value);
+	return bFound ? Value.GetString() : FString();
+}
+
+bool UStoryFlowSubsystem::SetDataAssetEnumVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, const FString& Value)
+{
+	FStoryFlowVariant NewValue;
+	// SetEnum, not SetString - the same reason the component gives: the seed types an enum
+	// declaration's value as Enum, and an overlay entry that differed would be invisible to a
+	// read and visible in the save key.
+	NewValue.SetEnum(Value);
+	return StoryFlowDataAssetAccess::SetScalar(*this, DataAsset, VariableName, EStoryFlowVariableType::Enum, NewValue);
+}
+
+FStoryFlowVariant UStoryFlowSubsystem::GetDataAssetVariantVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound)
+{
+	FStoryFlowVariant Value;
+	bFound = StoryFlowDataAssetAccess::TryGetVariant(*this, DataAsset, VariableName, CurrentLanguage, Value);
+	return bFound ? Value : FStoryFlowVariant();
+}
+
+TArray<FString> UStoryFlowSubsystem::GetDataAssetVariableNames(UStoryFlowDataAssetAsset* DataAsset)
+{
+	return StoryFlowDataAssetAccess::VariableNames(*this, DataAsset);
+}
+
+bool UStoryFlowSubsystem::SetDataAssetArrayVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, const TArray<FStoryFlowVariant>& Elements)
+{
+	return StoryFlowDataAssetAccess::SetArray(*this, DataAsset, VariableName, Elements);
+}
+
+bool UStoryFlowSubsystem::SetDataAssetMapVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
+	const TArray<FStoryFlowVariant>& Keys, const TArray<FStoryFlowVariant>& Values)
+{
+	return StoryFlowDataAssetAccess::SetMap(*this, DataAsset, VariableName, Keys, Values);
 }
 
 void UStoryFlowSubsystem::ResetGlobalVariables()
