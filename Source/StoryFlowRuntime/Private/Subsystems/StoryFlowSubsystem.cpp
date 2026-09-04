@@ -135,6 +135,44 @@ TArray<FString> UStoryFlowSubsystem::GetAllScriptPaths() const
 	return Paths;
 }
 
+UStoryFlowDataAssetAsset* UStoryFlowSubsystem::FindDataAsset(const FString& IdOrName) const
+{
+	if (!ProjectAsset || IdOrName.IsEmpty())
+	{
+		return nullptr;
+	}
+
+	// The id is the key, so try it first and answer without walking anything.
+	if (UStoryFlowDataAssetAsset* const* ById = ProjectAsset->DataAssets.Find(IdOrName))
+	{
+		return *ById;
+	}
+
+	// Then the display name, which is NOT unique — so the whole scan runs rather than stopping at
+	// the first hit. Stopping early would make the answer depend on map iteration order, which is
+	// the silent, per-import-order pick this exists to refuse.
+	UStoryFlowDataAssetAsset* Matched = nullptr;
+	for (const TPair<FString, UStoryFlowDataAssetAsset*>& Pair : ProjectAsset->DataAssets)
+	{
+		if (!Pair.Value || Pair.Value->Name != IdOrName)
+		{
+			continue;
+		}
+		if (Matched)
+		{
+			UE_LOG(LogStoryFlow, Warning,
+				TEXT("StoryFlow: Data Asset name '%s' is ambiguous - it matches at least '%s' and '%s'. Use the asset id."),
+				*IdOrName, *Matched->AssetId, *Pair.Value->AssetId);
+			return nullptr;
+		}
+		Matched = Pair.Value;
+	}
+
+	// No warning on a plain miss: "is there an asset called this" is a fair question to ask, and a
+	// Blueprint asking it every tick must not spam the log.
+	return Matched;
+}
+
 void UStoryFlowSubsystem::ResetGlobalVariables()
 {
 	if (ProjectAsset)

@@ -986,6 +986,35 @@ bool FStoryFlowDataAssetBlueprintSurfaceTest::RunTest(const FString& Parameters)
 			W.Component->GetDataAssetVariableNames(nullptr).Num(), 0);
 	}
 
+	// --- Finding an asset by id or by the name an author typed (design 2026-09-04) ---
+	{
+		TestEqual(TEXT("an id resolves to the asset object"), W.Subsystem->FindDataAsset(BaseId), Base);
+		TestEqual(TEXT("and so does its unambiguous display name"),
+			W.Subsystem->FindDataAsset(Base->Name), Base);
+		TestNull(TEXT("an unknown string resolves to nothing"), W.Subsystem->FindDataAsset(TEXT("NotAnAsset")));
+		TestNull(TEXT("an empty string resolves to nothing"), W.Subsystem->FindDataAsset(FString()));
+
+		// The found asset is usable, which is the whole point of handing one back.
+		TestEqual(TEXT("the found asset reads through the ordinary accessors"),
+			W.Component->GetDataAssetIntVariable(W.Subsystem->FindDataAsset(Base->Name), TEXT("hp"), bFound), 100);
+		TestTrue(TEXT("and reports found"), bFound);
+
+		// AMBIGUITY: two assets, one display name. Neither wins, and the log says why.
+		AddExpectedError(TEXT("is ambiguous"), EAutomationExpectedErrorFlags::Contains, 0);
+		const FString TwinName = TEXT("Twin");
+		const FString SavedBaseName = Base->Name;
+		const FString SavedChildName = Child->Name;
+		Base->Name = TwinName;
+		Child->Name = TwinName;
+		TestNull(TEXT("an ambiguous display name resolves to nothing rather than picking"),
+			W.Subsystem->FindDataAsset(TwinName));
+		TestEqual(TEXT("while each id still resolves"), W.Subsystem->FindDataAsset(ChildId), Child);
+		Base->Name = SavedBaseName;
+		Child->Name = SavedChildName;
+		TestEqual(TEXT("and the unambiguous name resolves again once the clash is gone"),
+			W.Subsystem->FindDataAsset(SavedBaseName), Base);
+	}
+
 	CleanUp();
 	return true;
 }

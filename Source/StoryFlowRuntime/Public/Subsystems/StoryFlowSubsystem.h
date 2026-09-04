@@ -69,6 +69,31 @@ public:
 	TArray<FString> GetAllScriptPaths() const;
 
 	// ========================================================================
+	// Data Assets — finding one by id or by the name an author typed
+	// ========================================================================
+
+	/**
+	 * The `.sfd` Data Asset with this id, or with this display NAME when the string is not an id.
+	 *
+	 * Every Data Asset accessor takes an asset REFERENCE, which a Blueprint gets by wiring the
+	 * asset into a variable or pin. That is the right shape when the asset is known at design
+	 * time and no shape at all when it is not — a save-slot screen, a data-driven inventory, or
+	 * anything picking an asset from a string. The alternative was reaching into
+	 * ProjectAsset->DataAssets with a raw `da_` id, which is the id-only half of this and asks a
+	 * designer to paste hex.
+	 *
+	 * AN AMBIGUOUS NAME RESOLVES TO NOTHING, deliberately, and warns: two assets can share a
+	 * display name, and picking one of them would be picking silently and differently per import
+	 * order. Ids are unique, so an id never has this problem — which is what the warning tells the
+	 * caller to use. Null for an unknown string, with no warning: asking whether an asset exists
+	 * is a legitimate question, and this is how a Blueprint asks it.
+	 *
+	 * Matches the Godot plugin, whose accessors have always taken an id-or-name string.
+	 */
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Variables|Data Assets")
+	UStoryFlowDataAssetAsset* FindDataAsset(const FString& IdOrName) const;
+
+	// ========================================================================
 	// Localization (spec §9) — the player's language, game-wide
 	// ========================================================================
 
