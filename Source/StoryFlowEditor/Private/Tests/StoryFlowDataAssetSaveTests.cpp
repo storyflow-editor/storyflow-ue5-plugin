@@ -837,6 +837,79 @@ bool FStoryFlowDataAssetSaveLoadRulesTest::RunTest(const FString& Parameters)
 }
 
 // ============================================================================
+// `.sfd` media (engine contract §2.1's amendment, 2026-09-04)
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetMediaTest,
+	"StoryFlow.DataAssets.Save.Media",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+/**
+ * A `.sfd` image value resolves to a real imported asset.
+ *
+ * The value ships as an asset KEY and `data-assets.json` carries its own `assets` registry; this
+ * pins the engine half of that bargain — the registry is imported into the PROJECT's resolved-asset
+ * pool, so the key an accessor hands back names something the build contains. Before the amendment
+ * a `.sfd` portrait was a path to a file nothing had copied.
+ *
+ * The fixture writes a REAL 1x1 PNG rather than a stub: `ImportMediaAssets` runs the engine's image
+ * import, and a few bytes of nonsense would fail that import and leave the pool empty — the test
+ * would then fail for a reason that has nothing to do with what it checks.
+ */
+bool FStoryFlowDataAssetMediaTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowDataAssetSaveTestHelpers;
+
+	UEditorAssetLibrary::DeleteDirectory(SaveTestRoot);
+	const FString Dir = FixtureBuildDir();
+	IFileManager::Get().MakeDirectory(*Dir, true);
+
+	// A 1x1 PNG, the smallest input the engine's importer actually accepts.
+	TArray<uint8> Png;
+	if (!TestTrue(TEXT("the 1x1 PNG fixture decodes"),
+			FBase64::Decode(TEXT("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="), Png)))
+	{
+		return false;
+	}
+
+	const FString MediaRelative = TEXT("images/items/icon.png");
+	const bool bWrote = FFileHelper::SaveArrayToFile(Png, *FPaths::Combine(Dir, MediaRelative))
+		&& FFileHelper::SaveStringToFile(TEXT(R"JSON({"version":"1.0.0","apiVersion":"1","startupScript":"main"})JSON"),
+			*FPaths::Combine(Dir, TEXT("project.json")))
+		&& FFileHelper::SaveStringToFile(
+			TEXT(R"JSON({"dataAssets":{"da_mediabase00000000000000000000":{"id":"da_mediabase00000000000000000000","name":"ItemBase","parent":null,"variables":[{"id":"v-icon","name":"Icon","type":"image","value":"asset_image_900"}],"overrides":{}}},"assets":{"asset_image_900":{"id":"asset_image_900","type":"image","path":"images/items/icon.png"}}})JSON"),
+			*FPaths::Combine(Dir, TEXT("data-assets.json")));
+	if (!TestTrue(TEXT("the media fixture build folder is writable"), bWrote))
+	{
+		CleanUp();
+		return false;
+	}
+
+	UStoryFlowProjectAsset* Project = UStoryFlowImporter::ImportProject(Dir, SaveTestRoot);
+	if (!TestNotNull(TEXT("the media fixture imports"), Project))
+	{
+		CleanUp();
+		return false;
+	}
+	FGCObjectScopeGuard ProjectGuard(Project);
+
+	// The value stays the KEY — the `.sfd` surface learns nothing about assets.
+	UStoryFlowDataAssetAsset* Base = Project->DataAssets.FindRef(TEXT("da_mediabase00000000000000000000"));
+	if (TestNotNull(TEXT("the seeded asset imported"), Base) && Base->Variables.Num() > 0)
+	{
+		TestEqual(TEXT("the image value is the asset key, not a path"),
+			Base->Variables[0].Value.GetString(), FString(TEXT("asset_image_900")));
+	}
+
+	// THE HALF THAT WAS BROKEN: the key has to resolve to something the build contains.
+	TestTrue(TEXT("the .sfd registry landed in the project's resolved-asset pool"),
+		Project->ResolvedAssets.Contains(TEXT("asset_image_900")));
+
+	CleanUp();
+	return true;
+}
+
+// ============================================================================
 // The Blueprint surface
 // ============================================================================
 

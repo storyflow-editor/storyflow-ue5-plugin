@@ -233,6 +233,22 @@ void UStoryFlowImporter::ImportDataAssets(const FString& BuildDirectory, const F
 				}
 			}
 
+			// .sfd MEDIA (engine contract §2.1's amendment of 2026-09-04): image and audio values
+			// ship as asset KEYS with their files beside them, so this artifact carries an
+			// `assets` registry of its own exactly as characters.json does above. Imported into
+			// the PROJECT's resolved-asset pool through the same call, which is what makes a key
+			// handed back by GetDataAssetStringVariable resolve to something the build contains —
+			// before the amendment a `.sfd` portrait was a path to a file that was never copied.
+			//
+			// ABSENT for a pre-amendment export, and then `.sfd` media is a bare path again with
+			// no branch for it, exactly like the strings table above.
+			if (DataAssetsJson->HasField(TEXT("assets")))
+			{
+				TMap<FString, FStoryFlowAsset> DataAssetMedia;
+				ParseAssets(DataAssetsJson->GetObjectField(TEXT("assets")), DataAssetMedia);
+				ImportMediaAssets(BuildDirectory, ContentPath, DataAssetMedia, ProjectAsset->ResolvedAssets);
+			}
+
 			if (DataAssetsJson->HasField(TEXT("dataAssets")))
 			{
 				TSharedPtr<FJsonObject> AssetsObject = DataAssetsJson->GetObjectField(TEXT("dataAssets"));
