@@ -62,4 +62,8 @@ public:
 	/** Fill the asset with the built-in table, so editing starts from the tuned numbers. */
 	UFUNCTION(CallInEditor, BlueprintCallable, Category = "StoryFlow|Lipsync")
 	void ResetToDefault();
+
+private:
+	/** ToTable's warn-once latch: every component referencing this asset builds the table for itself. */
+	mutable bool bValidated = false;
 };
