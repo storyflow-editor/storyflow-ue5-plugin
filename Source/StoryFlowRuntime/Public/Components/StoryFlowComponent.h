@@ -798,6 +798,22 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
 	FStoryFlowVariant GetDataAssetVariantVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound);
 
+	/**
+	 * Every variable name the asset's chain DECLARES, root-most ancestor first (contract §11.1).
+	 *
+	 * The accessors above all need a name the caller already knew. This is how a Blueprint learns
+	 * the names — driving an inventory row per variable, a debug readout, a data-driven UI — and
+	 * it is the SAME answer the Get Variable Names graph node gives, because both forward to
+	 * StoryFlowDataAssets::VariableNames, which owns every rule: root-first order, declarations
+	 * only (overrides shadow a name, they never add one), dedupe by id and then by name.
+	 *
+	 * Walking `Parent` yourself is the thing this exists to prevent: that walk re-implements those
+	 * rules, and a re-implementation that disagrees produces a plausible list nobody notices is
+	 * wrong. Empty when the asset is null, there is no store, or the seed does not carry it.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	TArray<FString> GetDataAssetVariableNames(UStoryFlowDataAssetAsset* DataAsset);
+
 	// ========================================================================
 	// Utility Functions
 	// ========================================================================

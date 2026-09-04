@@ -957,6 +957,35 @@ bool FStoryFlowDataAssetBlueprintSurfaceTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("and reports it"), bFound);
 	TestFalse(TEXT("a null asset write is refused"), W.Component->SetDataAssetBoolVariable(nullptr, TEXT("alive"), true));
 
+	// --- The enumeration door (design 2026-09-04) ---
+	//
+	// The WALK is pinned by StoryFlow.DataAssets.Resolution's own coverage; what belongs HERE is
+	// that the Blueprint door reaches that same walk, because until this existed a Blueprint could
+	// only enumerate by re-walking Parent itself.
+	{
+		const TArray<FString> Walk = StoryFlowDataAssets::VariableNames(W.Subsystem->GetDataAssetSeed(), BaseId);
+		const TArray<FString> Door = W.Component->GetDataAssetVariableNames(Base);
+		if (TestTrue(TEXT("the fixture chain declares something to list"), Walk.Num() > 0))
+		{
+			TestEqual(TEXT("the door answers the shared walk verbatim"), Door, Walk);
+		}
+
+		// Root-most FIRST, and an override adds no name: a child only shadows values.
+		const TArray<FString> ChildNames = W.Component->GetDataAssetVariableNames(Child);
+		if (ChildNames.Num() > 0 && Walk.Num() > 0)
+		{
+			TestEqual(TEXT("a child's list still opens with the root's first declaration"), ChildNames[0], Walk[0]);
+		}
+		TestTrue(TEXT("a child never loses an inherited name"), ChildNames.Num() >= Walk.Num());
+
+		// A category row is valueless and never enters the resolvable surface, so it cannot ride
+		// the list either — the same rule the read above pins from the other side.
+		TestFalse(TEXT("no category row rides the list"), Door.Contains(TEXT("lore")));
+
+		TestEqual(TEXT("a null asset enumerates to empty rather than crashing"),
+			W.Component->GetDataAssetVariableNames(nullptr).Num(), 0);
+	}
+
 	CleanUp();
 	return true;
 }

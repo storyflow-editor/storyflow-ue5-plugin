@@ -2227,6 +2227,28 @@ bool UStoryFlowComponent::SetDataAssetEnumVariable(UStoryFlowDataAssetAsset* Dat
 	return SetDataAssetScalar(DataAsset, VariableName, EStoryFlowVariableType::Enum, NewValue);
 }
 
+TArray<FString> UStoryFlowComponent::GetDataAssetVariableNames(UStoryFlowDataAssetAsset* DataAsset)
+{
+	if (!DataAsset)
+	{
+		// Verbose for the same reason FindDataAssetDeclaration is: a Blueprint may call this every
+		// tick and it reports emptiness through its return value.
+		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: GetDataAssetVariableNames called with no asset"));
+		return TArray<FString>();
+	}
+
+	UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem();
+	if (!Subsystem)
+	{
+		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: GetDataAssetVariableNames found no StoryFlow subsystem"));
+		return TArray<FString>();
+	}
+
+	// Straight to the shared walk — no ladder, no warn-once latch. The graph node reaches the same
+	// function through the execution context, so the two surfaces cannot answer differently.
+	return StoryFlowDataAssets::VariableNames(Subsystem->GetDataAssetSeed(), DataAsset->AssetId);
+}
+
 FStoryFlowVariant UStoryFlowComponent::GetDataAssetVariantVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound)
 {
 	bFound = false;
