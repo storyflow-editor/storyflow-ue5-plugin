@@ -37,6 +37,10 @@ void UStoryFlowSubsystem::Deinitialize()
 
 void UStoryFlowSubsystem::SetProject(UStoryFlowProjectAsset* NewProject)
 {
+	// The language can MOVE here (the snap branch below), and a game that swapped projects
+	// mid-session needs telling. Captured before anything changes; compared at the very end.
+	const FString LanguageOnEntry = CurrentLanguage;
+
 	ProjectAsset = NewProject;
 
 	if (ProjectAsset)
@@ -48,6 +52,11 @@ void UStoryFlowSubsystem::SetProject(UStoryFlowProjectAsset* NewProject)
 		// language, so a game can never be left reading a language nothing ships. For a project
 		// with no localization sidecar the only code that resolves is its source language, so
 		// this line is "en" -> "en" and changes nothing.
+		//
+		// THE SNAP BROADCAST DOES NOT HAPPEN HERE, deliberately — see the end of this block.
+		// Everything below resolves its strings in the language this line just set, so a handler
+		// running at this point would read the OUTGOING project's globals, characters and .sfd
+		// seed under the INCOMING project's language.
 		const FString Carried = ProjectAsset->ResolveLanguageCode(CurrentLanguage);
 		CurrentLanguage = Carried.IsEmpty() ? ProjectAsset->SourceLanguage : Carried;
 
@@ -79,6 +88,17 @@ void UStoryFlowSubsystem::SetProject(UStoryFlowProjectAsset* NewProject)
 			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow:   '%s' -> %s"),
 				*ScriptPair.Key,
 				ScriptPair.Value ? *ScriptPair.Value->GetName() : TEXT("NULL"));
+		}
+
+		// EVERYTHING IS SEEDED, so a handler can read the project it was told about. An install
+		// that carried the player's choice forward moves nothing and is silent; one that SNAPPED
+		// because this project cannot carry the old code fires, because that is a real change to
+		// what the player is reading. At boot this usually reaches nobody, which is fine — the
+		// case it exists for is a mid-session swap, and GetLanguage is how a handler learns the
+		// language it started in.
+		if (CurrentLanguage != LanguageOnEntry)
+		{
+			OnLanguageChanged.Broadcast(CurrentLanguage);
 		}
 	}
 	else
@@ -188,8 +208,12 @@ bool UStoryFlowSubsystem::SetLanguage(const FString& LanguageCode)
 
 	if (Next != CurrentLanguage)
 	{
+		// ASSIGN, THEN BROADCAST. A handler must never observe a half-applied switch: GetLanguage
+		// has to answer the new code inside the broadcast, and a handler that re-enters
+		// SetLanguage has to be measured against the new value so it no-ops instead of recursing.
 		CurrentLanguage = Next;
 		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Language set to '%s'"), *CurrentLanguage);
+		OnLanguageChanged.Broadcast(CurrentLanguage);
 	}
 	return true;
 }

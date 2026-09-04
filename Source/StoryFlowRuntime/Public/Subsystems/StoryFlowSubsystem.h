@@ -12,6 +12,14 @@ class UStoryFlowProjectAsset;
 class UStoryFlowScriptAsset;
 
 /**
+ * Fired when the language actually moves, carrying the NEW code.
+ *
+ * Unprefixed like the component's delegates (FOnDialogueStarted and its siblings), because a
+ * second naming convention in one plugin costs more than the collision risk it avoids.
+ */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnLanguageChanged, const FString&, LanguageCode);
+
+/**
  * Game Instance Subsystem for StoryFlow
  *
  * Manages the global project asset and shared state across all dialogue components.
@@ -130,6 +138,30 @@ public:
 	 */
 	UFUNCTION(BlueprintPure, Category = "StoryFlow|Localization")
 	TArray<FStoryFlowLanguage> GetLanguages() const;
+
+	/**
+	 * Fired when the language MOVES, with the code it moved to. The one signal a game's own
+	 * language menu needs: nothing in this plugin repaints text that is already on screen, so a
+	 * switch reaches a read at the next read and everything else is the game's to refresh.
+	 *
+	 * IT FIRES WHEN THE LANGUAGE ACTUALLY MOVES, AND NEVER OTHERWISE. A refused code broadcasts
+	 * nothing (it changed nothing) and neither does re-setting the language already active.
+	 * SetProject broadcasts only when the install MOVED the language — which happens when the
+	 * incoming project cannot carry the code the player was on, so it snaps to that project's
+	 * source language.
+	 *
+	 * ORDERING: whatever a handler can observe is already the new state. The language is assigned
+	 * before the broadcast, so GetLanguage answers the new code; and from SetProject the WHOLE
+	 * install has run first, so a handler reading a .sfd value, a global or a character sees the
+	 * project it was just told about. A handler that re-enters SetLanguage is measured against
+	 * the new value, so it either no-ops or changes again and fires again.
+	 *
+	 * It lives here rather than on StoryFlowComponent, where every other event lives, for the
+	 * same reason SetLanguage does: the language is one game-wide value, and a component-side
+	 * event would fire once per component for one change.
+	 */
+	UPROPERTY(BlueprintAssignable, Category = "StoryFlow|Localization")
+	FOnLanguageChanged OnLanguageChanged;
 
 	// ========================================================================
 	// Global Variables (shared across all components)

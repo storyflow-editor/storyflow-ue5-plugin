@@ -26,6 +26,7 @@
 #include "Serialization/JsonWriter.h"
 #include "StoryFlowCharacterIndexFixture.h"
 #include "StoryFlowEngineContractFixtures.h"
+#include "StoryFlowLanguageAccumulator.h"
 #include "StoryFlowRuntime.h"
 #include "StoryFlowScopedWorld.h"
 #include "Subsystems/StoryFlowSubsystem.h"
@@ -1750,6 +1751,125 @@ bool FStoryFlowLocalizationApiTest::RunTest(const FString& Parameters)
 		}
 	}
 
+	ContractCleanUp();
+	return true;
+}
+
+// ============================================================================
+// The language-changed event (design doc 2026-09-04)
+// ============================================================================
+
+void UStoryFlowLanguageAccumulator::OnLanguageChanged(const FString& LanguageCode)
+{
+	Codes.Add(LanguageCode);
+	Observed.Add(Subsystem ? Subsystem->GetLanguage() : FString());
+	RosterSizes.Add(Subsystem ? Subsystem->GetLanguages().Num() : -1);
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowLanguageChangedEventTest,
+	"StoryFlow.CharacterContract.LanguageChangedEvent",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+/**
+ * The event fires when the language ACTUALLY MOVES and never otherwise.
+ *
+ * The silent cases are a refused code, a no-op re-set, and an install that carries the player's
+ * choice forward. The loud one is the install that SNAPS — the incoming project cannot carry the
+ * code the player was on, so the language falls back to that project's source language, which is
+ * a real change to what they are reading.
+ *
+ * That arm also pins WHERE the broadcast sits. The install sets the language FIRST, because
+ * everything seeded below resolves its strings in it, so a broadcast at that line would hand a
+ * handler the new language over the outgoing project's data. The roster check is what observes
+ * the difference: an unlocalized project answers an empty GetLanguages(), the outgoing localized
+ * one answered three rows.
+ */
+bool FStoryFlowLanguageChangedEventTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowCharacterContractTestHelpers;
+
+	AddExpectedError(TEXT("SetLanguage - unknown language"), EAutomationExpectedErrorFlags::Contains, 0);
+	AddExpectedError(TEXT("Source file not found"), EAutomationExpectedErrorFlags::Contains, 0);
+
+	FScopedWorld W;
+	if (!TestTrue(TEXT("world initializes"), W.Init()))
+	{
+		return false;
+	}
+
+	UStoryFlowLanguageAccumulator* Spy = NewObject<UStoryFlowLanguageAccumulator>(GetTransientPackage());
+	FGCObjectScopeGuard SpyGuard(Spy);
+	Spy->Subsystem = W.Subsystem;
+	W.Subsystem->OnLanguageChanged.AddDynamic(Spy, &UStoryFlowLanguageAccumulator::OnLanguageChanged);
+
+	UEditorAssetLibrary::DeleteDirectory(ContractTestRoot);
+	if (!TestTrue(TEXT("the contract build folder is writable"), WriteContractBuildDir(ContractBuildDir(), /*bWithLocalization=*/ true)))
+	{
+		ContractCleanUp();
+		return false;
+	}
+	UStoryFlowProjectAsset* Project = UStoryFlowImporter::ImportProject(ContractBuildDir(), ContractTestRoot);
+	if (!TestNotNull(TEXT("the golden package imports"), Project))
+	{
+		ContractCleanUp();
+		return false;
+	}
+	FGCObjectScopeGuard ProjectGuard(Project);
+
+	// CASE 5: an install that MOVES NOTHING is silent. The subsystem starts on "en" and this
+	// project's source language is "en", so nothing changed and nothing should broadcast.
+	W.Subsystem->SetProject(Project);
+	TestEqual(TEXT("an install that moves nothing broadcasts nothing"), Spy->Codes.Num(), 0);
+	TestEqual(TEXT("and it left the game in the project's source language"), W.Subsystem->GetLanguage(), FString(TEXT("en")));
+
+	// CASE 1: a real change fires exactly once, with the new code.
+	TestTrue(TEXT("the engine accepts fr"), W.Subsystem->SetLanguage(TEXT("fr")));
+	if (TestEqual(TEXT("a real change broadcasts once"), Spy->Codes.Num(), 1))
+	{
+		TestEqual(TEXT("carrying the new code"), Spy->Codes[0], FString(TEXT("fr")));
+		// CASE 4: the field is assigned BEFORE the broadcast.
+		TestEqual(TEXT("and GetLanguage already answers it during the broadcast"), Spy->Observed[0], FString(TEXT("fr")));
+	}
+
+	// CASE 3: a no-op is not a change.
+	TestTrue(TEXT("re-setting the active language still returns true"), W.Subsystem->SetLanguage(TEXT("fr")));
+	TestEqual(TEXT("but broadcasts nothing"), Spy->Codes.Num(), 1);
+
+	// CASE 2: a refusal is not a change.
+	TestFalse(TEXT("an unknown code is refused"), W.Subsystem->SetLanguage(TEXT("de")));
+	TestFalse(TEXT("an empty code is refused"), W.Subsystem->SetLanguage(TEXT("")));
+	TestEqual(TEXT("and neither broadcasts"), Spy->Codes.Num(), 1);
+	TestEqual(TEXT("the player is still in the language they picked"), W.Subsystem->GetLanguage(), FString(TEXT("fr")));
+
+	// CASE 6: THE SNAP. An unlocalized project cannot carry "fr", so the install moves the
+	// language to that project's source language — and THAT one broadcasts, because it is a real
+	// change to what the player is reading.
+	//
+	// It gets its OWN build dir and asset root, the way FStoryFlowLocalizationApiTest's
+	// source-only arm does: importing a second project over the first one's root would have the
+	// two packages' assets share a folder.
+	if (TestTrue(TEXT("the source-only build folder is writable"), WriteContractBuildDir(SourceOnlyBuildDir(), /*bWithLocalization=*/ false)))
+	{
+		UStoryFlowProjectAsset* Plain = UStoryFlowImporter::ImportProject(SourceOnlyBuildDir(), SourceOnlyTestRoot);
+		if (TestNotNull(TEXT("the unlocalized package imports"), Plain))
+		{
+			FGCObjectScopeGuard PlainGuard(Plain);
+			W.Subsystem->SetProject(Plain);
+			TestNotEqual(TEXT("the install really did snap the language, so the case has teeth"),
+				W.Subsystem->GetLanguage(), FString(TEXT("fr")));
+			if (TestEqual(TEXT("an install that snaps the language broadcasts once"), Spy->Codes.Num(), 2))
+			{
+				TestEqual(TEXT("carrying the code it snapped to"), Spy->Codes[1], W.Subsystem->GetLanguage());
+				TestEqual(TEXT("and GetLanguage already answers it during the broadcast"),
+					Spy->Observed[1], W.Subsystem->GetLanguage());
+				// The INCOMING project is installed by the time the broadcast lands: an
+				// unlocalized project has an empty roster, the outgoing one had three rows.
+				TestEqual(TEXT("and the incoming project is the one installed"), Spy->RosterSizes[1], 0);
+			}
+		}
+	}
+
+	W.Subsystem->OnLanguageChanged.RemoveDynamic(Spy, &UStoryFlowLanguageAccumulator::OnLanguageChanged);
 	ContractCleanUp();
 	return true;
 }
