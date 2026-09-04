@@ -4,10 +4,12 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "Engine/EngineTypes.h"
 #include "Lipsync/StoryFlowLipsyncDriver.h"
 #include "StoryFlowLipsyncComponent.generated.h"
 
 class UAudioComponent;
+class USkeletalMesh;
 class USkeletalMeshComponent;
 class USoundSubmix;
 class UStoryFlowComponent;
@@ -43,8 +45,18 @@ class STORYFLOWRUNTIME_API UStoryFlowLipsyncComponent : public UActorComponent
 public:
 	UStoryFlowLipsyncComponent();
 
-	/** The dialogue component to listen to. Empty: the first one found in the world on begin play. */
+	/**
+	 * The actor carrying the dialogue component to listen to. Empty: the first one found in the world.
+	 *
+	 * An actor rather than the component, because a component on ANOTHER actor cannot be picked in a details
+	 * panel — Source below is settable from Blueprint and from code and from nothing else, which made
+	 * discovery the only path anyone ever took.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Lipsync")
+	TObjectPtr<AActor> SourceActor;
+
+	/** The dialogue component to listen to. Resolved from SourceActor, then by search, on begin play. */
+	UPROPERTY(BlueprintReadWrite, Category = "StoryFlow|Lipsync")
 	TObjectPtr<UStoryFlowComponent> Source;
 
 	/** This face's StoryFlow character id. Empty: move on EVERY line, which is right for a one-character scene. */
@@ -52,11 +64,18 @@ public:
 	FString CharacterId;
 
 	/**
-	 * Where the face meshes live. Empty: the owning actor. Every USkeletalMeshComponent beneath it carrying
-	 * ARKit-named morph targets is driven — see THE FAN-OUT above.
+	 * The character's MESH COMPONENT — the parent the Sidekick parts attach under — or empty for the actor
+	 * root. Every skeletal mesh beneath it carrying ARKit-named morph targets is driven.
+	 *
+	 * NEVER a single part. Parts are attached as SIBLINGS under the leader mesh, so pointing this at the
+	 * head drives the head alone and leaves the teeth and the tongue behind, which reads as a jaw that opens
+	 * onto a closed mouth. See THE FAN-OUT above.
+	 *
+	 * No AllowAnyActor: the picker reads that key by PRESENCE, not by value, so writing it as false would
+	 * turn cross-actor picking ON. Omitting it is what restricts the list to this actor's own components.
 	 */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Lipsync")
-	TObjectPtr<USceneComponent> FaceRoot;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Lipsync", meta = (UseComponentPicker))
+	FComponentReference FaceRoot;
 
 	/** Optional per-rig mapping. Empty: the built-in ARKit table, tuned on Synty Sidekick. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Lipsync")
@@ -69,6 +88,10 @@ public:
 	 * so a loud score would move the mouth. Unreal has no per-AudioComponent live spectrum: UAudioComponent's
 	 * FFT and envelope readers are COOKED, needing per-asset analysis ticked on every dialogue wave, which is
 	 * exactly the per-asset chore Tier 2's editor-side baking exists to avoid.
+	 *
+	 * A submix the mixer has not registered analyses the MASTER instead, silently — the engine falls back
+	 * rather than failing — so a mouth that hears the music when this is set is a submix routing problem,
+	 * not a lipsync one.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Lipsync")
 	TObjectPtr<USoundSubmix> AnalysisSubmix;
@@ -90,9 +113,24 @@ public:
 	bool bIdleMouthWithoutAudio = true;
 
 	/**
+	 * The raw magnitude a full-scale sine produces at its own bin, which is what the driver divides by to
+	 * put the mixer's spectrum back on the decibel scale its constants were tuned on.
+	 *
+	 * 5.66 is ALGEBRA, not measurement: a Hann window over 512 samples with the mixer's sqrt-of-FFT-size
+	 * scaling gives A * sqrt(512) / 4. Nobody has measured it. To set it properly, play the loudest line in
+	 * the game, read GetRawPeak(), and put that number here — too low and every line saturates the mouth
+	 * wide open, too high and quiet lines never pass the gate.
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, AdvancedDisplay, Category = "StoryFlow|Lipsync", meta = (ClampMin = "0.001"))
+	float AnalysisFullScale = 5.66f;
+
+	/**
 	 * Drive the mouth from any playing audio: a cutscene line, a bark, a radio. Nothing to bake and nothing
 	 * to author. The analysis is submix-wide, so this only says "start moving"; what it hears is whatever
 	 * AnalysisSubmix is carrying.
+	 *
+	 * Game-code entry, and it keeps game-code semantics: it runs until StopLipsync, because the plugin has
+	 * no sound of its own to follow here. The dialogue path closes the mouth on its own audio instead.
 	 */
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Lipsync")
 	void StartLipsync();
@@ -105,10 +143,31 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StoryFlow|Lipsync")
 	float GetLevel() const;
 
+	/** The largest raw magnitude seen since this line started — the number AnalysisFullScale wants. */
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Lipsync")
+	float GetRawPeak() const;
+
+	/**
+	 * Do two character paths name the same character?
+	 *
+	 * Both sides go through NormalizeCharacterPath because they come from different places and disagree
+	 * about shape: GetCharacterPathById answers the normalized bridge key, while a node whose id fails to
+	 * resolve falls back to the AUTHORED path verbatim, slashes and casing and all.
+	 */
+	static bool SpeakerPathsMatch(const FString& APath, const FString& BPath);
+
+	/**
+	 * How many dialogue updates this component has treated as the START of a line — a TEST SEAM for the
+	 * re-render rule, which turns on this count staying at one across a re-broadcast of the same node.
+	 */
+	int32 GetLineStarts() const { return LineStarts; }
+
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* ThisTickFunction) override;
+	virtual void Activate(bool bReset = false) override;
+	virtual void Deactivate() override;
 
 private:
 	UFUNCTION()
@@ -117,18 +176,36 @@ private:
 	UFUNCTION()
 	void HandleDialogueEnded();
 
+	/** What the mouth is following this frame. */
+	enum class EMouthDrive : uint8
+	{
+		/** Audio we can hear: the spectrum decides the pose. */
+		Analyse,
+		/** A line we cannot hear — no audio, or no analysis available. Keep the face alive. */
+		Idle,
+		/** Nothing, or a line whose sound has ended. Close. */
+		Silent
+	};
+	EMouthDrive DecideDrive() const;
+
+	/** Is the plugin's own audio for this line still sounding? False when the game plays its own. */
+	bool SourceAudioIsPlaying() const;
+
 	bool SpeakerIsMine() const;
+	void ResolveSource();
 	void ResolveFace(const StoryFlowVisemeTable::FTable& Table);
 
 	/**
-	 * Re-resolve the face when the meshes we cached are gone.
+	 * Re-resolve the face when the meshes we cached are gone OR have been replaced.
 	 *
-	 * Sidekick assembles a character from part components and REBUILDS them whenever the outfit changes at
-	 * runtime: the old components are destroyed and new ones created. Targets resolved once at BeginPlay then
-	 * point at nothing, and the mouth quietly stops moving — no error, just a face that used to work.
+	 * Sidekick assembles a character from part components and rebuilds them whenever the outfit changes at
+	 * runtime — sometimes by destroying the components, sometimes by calling SetSkeletalMesh on the ones
+	 * already there. A weak pointer only catches the first, so the mesh ASSET is cached too: the second
+	 * leaves live components whose morphs are new and undriven, which is a mouth that quietly stops moving.
 	 */
 	bool RefreshFaceIfStale(float DeltaSeconds);
 	void ApplyWeights();
+	void ZeroOwnedMorphs();
 	void StartAnalysis();
 	void StopAnalysis();
 
@@ -136,6 +213,7 @@ private:
 	struct FFaceTarget
 	{
 		TWeakObjectPtr<USkeletalMeshComponent> Mesh;
+		TWeakObjectPtr<USkeletalMesh> Asset;
 		TArray<FName> Morphs;
 	};
 
@@ -144,14 +222,36 @@ private:
 	/** Kept so a re-resolve costs nothing but the component walk. */
 	StoryFlowVisemeTable::FTable ResolvedTable;
 
-	/** Throttles the "still no face" retry, and keeps its warning to one. */
+	/** Throttles the "still no face" retry and the "still no source" retry, and keeps their warnings to one. */
 	float SinceFaceCheck = 0.0f;
+	float SinceSourceCheck = 0.0f;
 	bool bWarnedNoFace = false;
+	bool bWarnedNoSource = false;
+	bool bNotedEveryLine = false;
+
+	/** Bound to the source's delegates. Separate from Source being set: a designer-set Source needs binding too. */
+	bool bSubscribed = false;
+
+	/** Latched inside SpeakerIsMine, which is const because asking who is speaking changes nothing. */
+	mutable bool bWarnedUnknownCharacter = false;
 	TArray<float> AnalysisFrequencies;
 	TArray<float> Magnitudes;
 	TUniquePtr<FStoryFlowLipsyncDriver> Driver;
 
-	bool bSpeaking = false;
+	/** The node id of the line being followed. The re-render rule keys on it: only a NEW id starts a line. */
+	FString LineNodeId;
+	int32 LineStarts = 0;
+
 	bool bLineIsMine = false;
+	bool bLineHasAudio = false;
+
+	/** The plugin holds this line's audio component, so it can hear when the line stops sounding. */
+	bool bFollowSourceAudio = false;
+
+	/** StartLipsync was called by game code: no line to follow, so it runs until StopLipsync. */
+	bool bManualLipsync = false;
+
+	/** There is an audio mixer to ask. Decided once: without one every read logs an engine error. */
+	bool bAnalysisAvailable = false;
 	bool bAnalysing = false;
 };

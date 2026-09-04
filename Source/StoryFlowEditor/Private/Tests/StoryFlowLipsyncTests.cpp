@@ -4,11 +4,22 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "Components/StoryFlowComponent.h"
+#include "Data/StoryFlowHandles.h"
+#include "Data/StoryFlowProjectAsset.h"
+#include "Data/StoryFlowScriptAsset.h"
+#include "Data/StoryFlowTypes.h"
+#include "GameFramework/Actor.h"
+#include "Lipsync/StoryFlowLipsyncComponent.h"
 #include "Lipsync/StoryFlowLipsyncDriver.h"
 #include "Lipsync/StoryFlowVisemeTable.h"
+#include "Subsystems/StoryFlowSubsystem.h"
+#include "UObject/Package.h"
+
+#include "StoryFlowScopedWorld.h"
 
 /**
- * The Tier 1 lipsync driver.
+ * The Tier 1 lipsync driver, and the component contract around it.
  *
  * Whether a mouth reads as speech is not testable — only eyes judge a face. What IS testable is everything a
  * wrong number breaks first: that loudness opens the mouth AT THE LEVEL AN ENGINE ACTUALLY PRODUCES, that
@@ -95,6 +106,27 @@ namespace StoryFlowLipsyncTestHelpers
 			Custom.Add(Pose, StoryFlowVisemeTable::FPose{ { TEXT("jawOpen"), 0.6f }, { Pose, 1.0f } });
 		}
 		return Custom;
+	}
+
+	FStoryFlowNode MakeNode(const FString& Id, EStoryFlowNodeType Type, const TCHAR* TypeString)
+	{
+		FStoryFlowNode N;
+		N.Id = Id;
+		N.Type = Type;
+		N.TypeString = TypeString;
+		return N;
+	}
+
+	FStoryFlowConnection MakeEdge(const TCHAR* Id, const TCHAR* Source, const TCHAR* Target,
+		const FString& SourceHandle, const FString& TargetHandle)
+	{
+		FStoryFlowConnection C;
+		C.Id = Id;
+		C.Source = Source;
+		C.Target = Target;
+		C.SourceHandle = SourceHandle;
+		C.TargetHandle = TargetHandle;
+		return C;
 	}
 }
 
@@ -452,6 +484,118 @@ bool FStoryFlowLipsyncLevelTest::RunTest(const FString& Parameters)
 	Settle(Driver, RealisticSpeechBands());
 	Driver.AdvanceSilent(1.0f / 60.0f);
 	TestEqual(TEXT("silence reports no level"), Driver.Level(), 0.0f);
+	return true;
+}
+
+// ============================================================================
+// The component contract
+// ============================================================================
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowLipsyncSpeakerPathTest,
+	"StoryFlow.Lipsync.SpeakerPathsMatchThroughNormalization",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowLipsyncSpeakerPathTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowLipsyncTestHelpers;
+
+	// The two sides are built by different code and disagree about shape. GetCharacterPathById answers the
+	// bridge's normalized key; a node whose character id fails to resolve falls back to the AUTHORED path,
+	// verbatim, forward slashes and mixed case and all. Same character, two spellings, a face that never
+	// moves and nothing anywhere saying why.
+	TestTrue(TEXT("slashes do not decide who is speaking"),
+		UStoryFlowLipsyncComponent::SpeakerPathsMatch(TEXT("Characters/Hero.json"), TEXT("characters\\hero.json")));
+	TestTrue(TEXT("case does not decide who is speaking"),
+		UStoryFlowLipsyncComponent::SpeakerPathsMatch(TEXT("Characters\\Hero.json"), TEXT("characters\\hero.json")));
+	TestTrue(TEXT("identical paths match"),
+		UStoryFlowLipsyncComponent::SpeakerPathsMatch(TEXT("characters\\hero.json"), TEXT("characters\\hero.json")));
+
+	TestFalse(TEXT("different characters do not match"),
+		UStoryFlowLipsyncComponent::SpeakerPathsMatch(TEXT("characters\\hero.json"), TEXT("characters\\villain.json")));
+	TestFalse(TEXT("a narrator line (no speaker) matches nobody"),
+		UStoryFlowLipsyncComponent::SpeakerPathsMatch(TEXT("characters\\hero.json"), TEXT("")));
+	TestFalse(TEXT("an unresolved id matches nobody"),
+		UStoryFlowLipsyncComponent::SpeakerPathsMatch(TEXT(""), TEXT("characters\\hero.json")));
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowLipsyncAudioFollowTest,
+	"StoryFlow.Lipsync.DialogueAudioPlayingIsFalseWithoutAudio",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowLipsyncAudioFollowTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowLipsyncTestHelpers;
+
+	// The audio-follow rule's whole cue. A line with no sound must read as not sounding, or a face keeps
+	// mouthing the music for as long as the text sits on screen.
+	StoryFlowTestWorld::FScopedWorld W;
+	if (!TestTrue(TEXT("fixture initialized"), W.Init())) { return false; }
+
+	TestFalse(TEXT("nothing is playing before a line starts"), W.Component->IsDialogueAudioPlaying());
+	TestNull(TEXT("and there is no audio component to follow"), W.Component->GetCurrentDialogueAudio());
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowLipsyncRerenderTest,
+	"StoryFlow.Lipsync.ARerenderDoesNotStartTheLineAgain",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowLipsyncRerenderTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowLipsyncTestHelpers;
+
+	// The same node comes round again for reasons that have nothing to do with speech: a variable changed
+	// and the text was re-interpolated, the dialogue resumed, a dead-end branch re-broadcast the line it is
+	// still sitting on. Each one used to re-arm the loudness history, and a game writing a variable per
+	// frame pinned the peak to its initial value and held the mouth wide open for the whole line.
+	StoryFlowTestWorld::FScopedWorld W;
+	if (!TestTrue(TEXT("fixture initialized"), W.Init())) { return false; }
+
+	UStoryFlowScriptAsset* Script = NewObject<UStoryFlowScriptAsset>(GetTransientPackage());
+	Script->StartNode = TEXT("0");
+	Script->Nodes.Add(TEXT("0"), MakeNode(TEXT("0"), EStoryFlowNodeType::Start, TEXT("start")));
+	for (const TCHAR* Id : { TEXT("1"), TEXT("2") })
+	{
+		FStoryFlowNode Line = MakeNode(Id, EStoryFlowNodeType::Dialogue, TEXT("dialogue"));
+		Line.Data.Text = TEXT("a line");
+		Script->Nodes.Add(Line.Id, Line);
+	}
+	Script->Nodes.Add(TEXT("3"), MakeNode(TEXT("3"), EStoryFlowNodeType::End, TEXT("end")));
+	Script->Connections.Add(MakeEdge(TEXT("e1"), TEXT("0"), TEXT("1"),
+		StoryFlowHandles::Source(TEXT("0")), StoryFlowHandles::Target(TEXT("1"))));
+	Script->Connections.Add(MakeEdge(TEXT("e2"), TEXT("1"), TEXT("2"),
+		StoryFlowHandles::Source(TEXT("1")), StoryFlowHandles::Target(TEXT("2"))));
+	Script->Connections.Add(MakeEdge(TEXT("e3"), TEXT("2"), TEXT("3"),
+		StoryFlowHandles::Source(TEXT("2")), StoryFlowHandles::Target(TEXT("3"))));
+	Script->BuildConnectionIndices();
+
+	UStoryFlowProjectAsset* Project = NewObject<UStoryFlowProjectAsset>(GetTransientPackage());
+	Project->Scripts.Add(TEXT("lipsync"), Script);
+	W.Subsystem->SetProject(Project);
+
+	// No CharacterId, so every line is this face's, and no mesh, so nothing is written anywhere.
+	AActor* Owner = W.Component->GetOwner();
+	UStoryFlowLipsyncComponent* Lipsync = NewObject<UStoryFlowLipsyncComponent>(Owner);
+	Lipsync->Source = W.Component;
+	Lipsync->RegisterComponent();
+	Owner->DispatchBeginPlay();
+
+	W.Component->StartDialogueWithScript(TEXT("lipsync"));
+	TestEqual(TEXT("entering a line starts it"), Lipsync->GetLineStarts(), 1);
+
+	// ResumeDialogue re-broadcasts the state it is already showing — the cheapest of the re-render paths.
+	W.Component->PauseDialogue();
+	W.Component->ResumeDialogue();
+	TestEqual(TEXT("a re-render of the same node does not start the line again"), Lipsync->GetLineStarts(), 1);
+
+	W.Component->PauseDialogue();
+	W.Component->ResumeDialogue();
+	TestEqual(TEXT("nor does a second one"), Lipsync->GetLineStarts(), 1);
+
+	// A DIFFERENT node is a different line, and must arm the mouth again.
+	W.Component->AdvanceDialogue();
+	TestEqual(TEXT("the next line does start"), Lipsync->GetLineStarts(), 2);
 	return true;
 }
 
