@@ -54,8 +54,8 @@ StoryFlowVisemeTable::FTable UStoryFlowVisemeMap::ToTable() const
 		if (Unknown.Num() > 0)
 		{
 			UE_LOG(LogStoryFlow, Warning,
-				TEXT("StoryFlow: viseme map '%s' names %s, which no pose in the table is called. ")
-				TEXT("Those entries drive nothing; the pose names are %s."),
+				TEXT("StoryFlow: viseme map '%s' names %s, which no pose on the vowel axis is called. ")
+				TEXT("Speech never reaches those entries; only the idle mouth does. The pose names are %s."),
 				*GetName(), *FString::Join(Unknown, TEXT(", ")),
 				*FString::JoinBy(StoryFlowVisemeTable::PoseNames(), TEXT(", "), [](const FName& Name) { return Name.ToString(); }));
 		}

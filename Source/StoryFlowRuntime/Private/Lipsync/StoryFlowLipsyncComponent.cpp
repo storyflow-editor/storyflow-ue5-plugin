@@ -2,6 +2,7 @@
 
 #include "Lipsync/StoryFlowLipsyncComponent.h"
 
+#include "AudioDeviceHandle.h"
 #include "AudioDeviceManager.h"
 #include "AudioMixerBlueprintLibrary.h"
 #include "Components/AudioComponent.h"
@@ -24,21 +25,35 @@ namespace
 	/** How often to look again when no face — or no dialogue component — was found at all. */
 	constexpr float FaceRecheckSeconds = 1.0f;
 
-	/** One live analysis per world and submix, however many faces are listening to it. */
+	/**
+	 * One live analysis per AUDIO DEVICE and submix, however many faces are listening to it.
+	 *
+	 * The device, not the world: several PIE worlds share one audio device unless the user opts out, and the
+	 * engine's start/stop act on the device's submix. Counted per world, the last face in one world would
+	 * stop the analysis every face in the other was still reading.
+	 */
 	struct FAnalysisKey
 	{
-		FObjectKey World;
+		uint32 DeviceId = 0;
 		FObjectKey Submix;
 
 		bool operator==(const FAnalysisKey& Other) const
 		{
-			return World == Other.World && Submix == Other.Submix;
+			return DeviceId == Other.DeviceId && Submix == Other.Submix;
+		}
+
+		// A hidden friend, found by argument lookup only, so it cannot hide the integer and FObjectKey
+		// overloads it is built from the way a namespace-level overload would.
+		friend uint32 GetTypeHash(const FAnalysisKey& Key)
+		{
+			return HashCombine(GetTypeHash(Key.DeviceId), GetTypeHash(Key.Submix));
 		}
 	};
 
-	FORCEINLINE uint32 GetTypeHash(const FAnalysisKey& Key)
+	uint32 AudioDeviceIdOf(const UWorld* World)
 	{
-		return HashCombine(GetTypeHash(Key.World), GetTypeHash(Key.Submix));
+		const FAudioDeviceHandle Handle = World != nullptr ? World->GetAudioDevice() : FAudioDeviceHandle();
+		return Handle.IsValid() ? Handle.GetDeviceID() : 0;
 	}
 
 	/**
@@ -70,6 +85,14 @@ void UStoryFlowLipsyncComponent::BeginPlay()
 {
 	Super::BeginPlay();
 
+	// No faces on a server: no driver, no analysis and no tick, rather than an idle mouth writing morph
+	// targets nobody renders on every server frame.
+	if (const UWorld* ServerCheck = GetWorld(); ServerCheck != nullptr && ServerCheck->GetNetMode() == NM_DedicatedServer)
+	{
+		SetComponentTickEnabled(false);
+		return;
+	}
+
 	ResolvedTable = VisemeMap != nullptr ? VisemeMap->ToTable() : StoryFlowVisemeTable::Default();
 	Driver = MakeUnique<FStoryFlowLipsyncDriver>(ResolvedTable);
 	ResolveFace(ResolvedTable);
@@ -84,10 +107,8 @@ void UStoryFlowLipsyncComponent::BeginPlay()
 	}
 
 	// Decided once, here, rather than discovered per tick: without a mixer every magnitude read logs an
-	// engine ERROR, so a dedicated server or a -nosound run would fill the log at frame rate.
-	const UWorld* World = GetWorld();
-	const bool bDedicatedServer = World != nullptr && World->GetNetMode() == NM_DedicatedServer;
-	bAnalysisAvailable = !bDedicatedServer && FAudioDeviceManager::GetAudioMixerDeviceFromWorldContext(this) != nullptr;
+	// engine ERROR, so a -nosound run would fill the log at frame rate.
+	bAnalysisAvailable = FAudioDeviceManager::GetAudioMixerDeviceFromWorldContext(this) != nullptr;
 
 	ResolveSource();
 
@@ -121,6 +142,17 @@ void UStoryFlowLipsyncComponent::Activate(bool bReset)
 	if (Driver.IsValid())
 	{
 		Driver->ResetLevel();
+
+		// And catches up: the update that started the line on screen went by while this was off, and the
+		// next one may be a while coming.
+		if (bSubscribed && Source != nullptr && Source->IsDialogueActive())
+		{
+			const FStoryFlowDialogueState Current = Source->GetCurrentDialogue();
+			if (Current.bIsValid)
+			{
+				HandleDialogueUpdated(Current);
+			}
+		}
 	}
 }
 
@@ -158,9 +190,18 @@ void UStoryFlowLipsyncComponent::TickComponent(float DeltaTime, ELevelTick TickT
 	Driver->Sensitivity = Sensitivity;
 	Driver->JawBias = JawBias;
 	Driver->Smooth = Smoothing;
-	Driver->FullScale = AnalysisFullScale;
+	// The details panel clamps this; a Blueprint write does not, and 0 would put every bin at full scale
+	// and hold the mouth wide open.
+	Driver->FullScale = FMath::Max(AnalysisFullScale, 0.001f);
 
 	RefreshFaceIfStale(RealDelta);
+
+	// The dialogue actor can go away and come back (streaming, a respawn). Its delegates died with it, so
+	// discovery has to be re-armed, or this face is deaf for the rest of the session with nothing said.
+	if (bSubscribed && Source == nullptr)
+	{
+		bSubscribed = false;
+	}
 
 	if (!bSubscribed)
 	{
@@ -215,14 +256,15 @@ void UStoryFlowLipsyncComponent::TickComponent(float DeltaTime, ELevelTick TickT
  *
  * A line with audio drives the mouth only while that audio is SOUNDING, and closes when it stops — it does
  * not fall through to the idle mouth, because the line is not silent, it is over. Idle is for a line the arm
- * cannot hear at all: no audio on the node, or no mixer to ask.
+ * cannot hear at all: no audio on the node, or no mixer to ask. A text-only line that arrived while the
+ * previous line's sound was still playing keeps following that sound, and idles only once it has stopped.
  */
 UStoryFlowLipsyncComponent::EMouthDrive UStoryFlowLipsyncComponent::DecideDrive() const
 {
 	if (bManualLipsync)
 	{
 		// Game-code lipsync has no sound of its own to follow, so it runs until StopLipsync.
-		return bAnalysisAvailable ? EMouthDrive::Analyse : (bIdleMouthWithoutAudio ? EMouthDrive::Idle : EMouthDrive::Silent);
+		return HearOrIdle();
 	}
 
 	if (!bLineIsMine)
@@ -230,25 +272,36 @@ UStoryFlowLipsyncComponent::EMouthDrive UStoryFlowLipsyncComponent::DecideDrive(
 		return EMouthDrive::Silent;
 	}
 
-	if (bLineHasAudio)
+	if (LineAudio.IsValid())
 	{
-		if (bFollowSourceAudio && !SourceAudioIsPlaying())
+		if (SourceAudioIsPlaying())
 		{
-			return EMouthDrive::Silent;
+			return HearOrIdle();
 		}
-		if (bAnalysisAvailable)
-		{
-			return EMouthDrive::Analyse;
-		}
+		// The sound the mouth was following has stopped: a line with audio of its own is over, a text-only
+		// line riding the previous line's tail goes on being read.
+		return bLineCarriesAudio ? EMouthDrive::Silent : (bIdleMouthWithoutAudio ? EMouthDrive::Idle : EMouthDrive::Silent);
 	}
 
-	// No audio on this line, or audio nothing here can hear: the idle mouth carries it while the text is read.
+	if (bLineCarriesAudio)
+	{
+		// The game plays its own audio and the plugin holds nothing to follow: the mouth follows the LINE.
+		return HearOrIdle();
+	}
+
+	// No audio on this line: the idle mouth carries it while the text is read.
 	return bIdleMouthWithoutAudio ? EMouthDrive::Idle : EMouthDrive::Silent;
+}
+
+UStoryFlowLipsyncComponent::EMouthDrive UStoryFlowLipsyncComponent::HearOrIdle() const
+{
+	return bAnalysisAvailable ? EMouthDrive::Analyse : (bIdleMouthWithoutAudio ? EMouthDrive::Idle : EMouthDrive::Silent);
 }
 
 bool UStoryFlowLipsyncComponent::SourceAudioIsPlaying() const
 {
-	return Source != nullptr && Source->IsDialogueAudioPlaying();
+	const UAudioComponent* Audio = LineAudio.Get();
+	return Audio != nullptr && Audio->IsPlaying();
 }
 
 void UStoryFlowLipsyncComponent::StartLipsync()
@@ -256,7 +309,8 @@ void UStoryFlowLipsyncComponent::StartLipsync()
 	bManualLipsync = true;
 	bLineIsMine = false;
 	bLineHasAudio = false;
-	bFollowSourceAudio = false;
+	bLineCarriesAudio = false;
+	LineAudio.Reset();
 	LineNodeId.Reset();
 	if (Driver.IsValid())
 	{
@@ -269,7 +323,8 @@ void UStoryFlowLipsyncComponent::StopLipsync()
 	bManualLipsync = false;
 	bLineIsMine = false;
 	bLineHasAudio = false;
-	bFollowSourceAudio = false;
+	bLineCarriesAudio = false;
+	LineAudio.Reset();
 	LineNodeId.Reset();
 }
 
@@ -281,6 +336,11 @@ float UStoryFlowLipsyncComponent::GetLevel() const
 float UStoryFlowLipsyncComponent::GetRawPeak() const
 {
 	return Driver.IsValid() ? Driver->RawPeak() : 0.0f;
+}
+
+float UStoryFlowLipsyncComponent::GetCentroid() const
+{
+	return Driver.IsValid() ? Driver->Centroid() : 0.0f;
 }
 
 /**
@@ -295,7 +355,12 @@ void UStoryFlowLipsyncComponent::HandleDialogueUpdated(const FStoryFlowDialogueS
 {
 	if (!SpeakerIsMine())
 	{
-		StopLipsync();
+		// Someone else's line. Game-code lipsync (StartLipsync) promised to run until StopLipsync, and
+		// another character talking is not that.
+		if (!bManualLipsync)
+		{
+			StopLipsync();
+		}
 		return;
 	}
 
@@ -308,16 +373,30 @@ void UStoryFlowLipsyncComponent::HandleDialogueUpdated(const FStoryFlowDialogueS
 	++LineStarts;
 	bManualLipsync = false;
 	bLineIsMine = true;
-	bLineHasAudio = DialogueState.Audio != nullptr;
+	bLineCarriesAudio = DialogueState.Audio != nullptr;
 
-	// PlayDialogueAudio runs before this broadcast, so whether the plugin holds the sound is knowable now.
-	// It does not when a game overrode playback — and then there is nothing to follow, so the mouth follows
-	// the LINE instead, exactly as it did before the audio-follow rule existed.
-	bFollowSourceAudio = bLineHasAudio && Source != nullptr && Source->GetCurrentDialogueAudio() != nullptr;
-
-	if (bLineHasAudio && Driver.IsValid())
+	if (bLineCarriesAudio)
 	{
-		Driver->ResetLevel();
+		// PlayDialogueAudio runs before this broadcast, so whether the plugin holds the sound is knowable now.
+		// It does not when a game overrode playback — and then there is nothing to follow, so the mouth
+		// follows the LINE instead, exactly as it did before the audio-follow rule existed.
+		LineAudio = Source != nullptr ? Source->GetCurrentDialogueAudio() : nullptr;
+		bLineHasAudio = true;
+		if (Driver.IsValid())
+		{
+			Driver->ResetLevel();
+		}
+	}
+	else if (LineAudio.IsValid() && SourceAudioIsPlaying())
+	{
+		// A text-only line, but the previous line's sound is still playing (bAudioReset is off by default):
+		// keep following it. Idling over audible speech is the one thing the idle mouth must never do.
+		bLineHasAudio = true;
+	}
+	else
+	{
+		LineAudio.Reset();
+		bLineHasAudio = false;
 	}
 }
 
@@ -326,13 +405,16 @@ void UStoryFlowLipsyncComponent::HandleDialogueEnded()
 	// A line's audio can outlive its dialogue (bStopAudioOnDialogueEnd false), and cutting the mouth here
 	// would clip the audible tail. The promise is that the mouth closes when the SOUND stops, not when the
 	// text does — so keep following, and let the audio-follow rule close it.
-	if (bFollowSourceAudio && SourceAudioIsPlaying())
+	if (LineAudio.IsValid() && SourceAudioIsPlaying())
 	{
 		// Whatever comes next is a new line, whatever its node id.
 		LineNodeId.Reset();
 		return;
 	}
-	StopLipsync();
+	if (!bManualLipsync)
+	{
+		StopLipsync();
+	}
 }
 
 /**
@@ -513,11 +595,14 @@ void UStoryFlowLipsyncComponent::ResolveFace(const StoryFlowVisemeTable::FTable&
 
 	// A face was found, so the next disappearance is worth reporting again.
 	bWarnedNoFace = bWarnedNoFace && Targets.Num() == 0;
+	bWarnedMissingMorphs = bWarnedMissingMorphs && Targets.Num() > 0;
 
 	if (Targets.Num() == 0)
 	{
-		// Once, not once per retry: RefreshFaceIfStale comes back every second while a face is missing.
-		if (!bWarnedNoFace)
+		// Once, not once per retry: RefreshFaceIfStale comes back every second while a face is missing. And
+		// not on the FIRST look: that is BeginPlay, and a character assembled at runtime may not have its
+		// parts yet, so a warning there tells a correctly configured user to fix something that works.
+		if (!bWarnedNoFace && bFaceResolvedBefore)
 		{
 			bWarnedNoFace = true;
 			UE_LOG(LogStoryFlow, Warning,
@@ -528,8 +613,11 @@ void UStoryFlowLipsyncComponent::ResolveFace(const StoryFlowVisemeTable::FTable&
 				*GetNameSafe(GetOwner()));
 		}
 	}
-	else if (Missing.Num() > 0)
+	else if (Missing.Num() > 0 && !bWarnedMissingMorphs)
 	{
+		// Once: on a plain ARKit rig this names the tongue morphs, and a re-resolve happens on every part
+		// swap, which is the ordinary outfit-change case rather than a reason to say it again.
+		bWarnedMissingMorphs = true;
 		TArray<FString> Names;
 		for (const FName& Morph : Missing)
 		{
@@ -539,6 +627,8 @@ void UStoryFlowLipsyncComponent::ResolveFace(const StoryFlowVisemeTable::FTable&
 			TEXT("StoryFlow: Lipsync on '%s': the rig has no %s. Those parts of each pose are skipped; the rest still plays."),
 			*GetNameSafe(GetOwner()), *FString::Join(Names, TEXT(", ")));
 	}
+
+	bFaceResolvedBefore = true;
 }
 
 
@@ -624,15 +714,22 @@ void UStoryFlowLipsyncComponent::StartAnalysis()
 		return;
 	}
 
-	if (AnalysisSubmix == nullptr)
+	if (AnalysisSubmix == nullptr && !bWarnedMasterSubmix)
 	{
+		// Once per component: analysis now starts with every conversation, not once per session.
+		bWarnedMasterSubmix = true;
 		UE_LOG(LogStoryFlow, Warning,
 			TEXT("StoryFlow: Lipsync on '%s' is analysing the MASTER output because no AnalysisSubmix is set. ")
 			TEXT("It will hear music and effects as well as speech. Route dialogue to its own submix and name it here."),
 			*GetNameSafe(GetOwner()));
 	}
 
-	const FAnalysisKey Key{ FObjectKey(GetWorld()), FObjectKey(AnalysisSubmix) };
+	// Remembered for StopAnalysis: the reference must be released on the key it was taken on, whatever
+	// AnalysisSubmix says by then.
+	AnalysingDeviceId = AudioDeviceIdOf(GetWorld());
+	AnalysingSubmix = FObjectKey(AnalysisSubmix);
+
+	const FAnalysisKey Key{ AnalysingDeviceId, AnalysingSubmix };
 	int32& Count = AnalysisRefCounts().FindOrAdd(Key);
 	if (Count++ == 0)
 	{
@@ -649,13 +746,13 @@ void UStoryFlowLipsyncComponent::StopAnalysis()
 	}
 	bAnalysing = false;
 
-	const FAnalysisKey Key{ FObjectKey(GetWorld()), FObjectKey(AnalysisSubmix) };
+	const FAnalysisKey Key{ AnalysingDeviceId, AnalysingSubmix };
 	if (int32* Count = AnalysisRefCounts().Find(Key))
 	{
 		if (--(*Count) <= 0)
 		{
 			AnalysisRefCounts().Remove(Key);
-			UAudioMixerBlueprintLibrary::StopAnalyzingOutput(this, AnalysisSubmix);
+			UAudioMixerBlueprintLibrary::StopAnalyzingOutput(this, Cast<USoundSubmix>(AnalysingSubmix.ResolveObjectPtr()));
 		}
 	}
 }

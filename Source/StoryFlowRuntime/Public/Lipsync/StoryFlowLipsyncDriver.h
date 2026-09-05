@@ -43,6 +43,12 @@ public:
 	float Level() const { return LevelValue; }
 
 	/**
+	 * Where the last analysed frame sat on the vowel axis, 0 (OO) to 1 (EE). The second meter: a mouth that
+	 * opens but looks wrong is usually a centroid pinned at one end, and this says which.
+	 */
+	float Centroid() const { return CentroidValue; }
+
+	/**
 	 * The largest RAW magnitude seen since the last ResetLevel, before the reference-domain transform.
 	 *
 	 * This is the calibration instrument for FullScale, which is algebra rather than measurement on Unreal:
@@ -110,6 +116,7 @@ private:
 
 	float Peak = 0.12f;
 	float LevelValue = 0.0f;
+	float CentroidValue = 0.0f;
 	float RawPeakValue = 0.0f;
 
 	// Idle mouth state.

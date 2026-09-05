@@ -181,7 +181,18 @@ bool FStoryFlowLipsyncLoudOpensAndSilenceClosesTest::RunTest(const FString& Para
 
 	FStoryFlowLipsyncDriver Driver(StoryFlowVisemeTable::Default());
 	Settle(Driver, BandsPeakingAt(0.25f));
-	TestTrue(TEXT("loud audio opens the jaw"), WeightOf(Driver, TEXT("jawOpen")) > 0.05f);
+	// Settles near 0.46; anything under 0.3 means a constant is off by more than the eye would forgive.
+	TestTrue(TEXT("loud audio opens the jaw"), WeightOf(Driver, TEXT("jawOpen")) > 0.3f);
+
+	// One bad sample must not poison the line: a NaN in the smoothing state or the peak would turn every
+	// weight after it into NaN until the next ResetLevel.
+	TArray<float> Poisoned = BandsPeakingAt(0.25f);
+	Poisoned[3] = NAN;
+	Driver.AdvanceFromMagnitudes(Poisoned, 1.0f / 60.0f);
+	Settle(Driver, BandsPeakingAt(0.25f), 30);
+	const float AfterNaN = WeightOf(Driver, TEXT("jawOpen"));
+	TestTrue(FString::Printf(TEXT("a NaN sample reads as silence and the mouth recovers (jawOpen %.3f)"), AfterNaN),
+		FMath::IsFinite(AfterNaN) && AfterNaN > 0.3f);
 
 	// Closing matters as much as opening: a mouth that freezes mid-vowel when a line ends is worse than one
 	// that never moved at all.
@@ -596,6 +607,62 @@ bool FStoryFlowLipsyncRerenderTest::RunTest(const FString& Parameters)
 	// A DIFFERENT node is a different line, and must arm the mouth again.
 	W.Component->AdvanceDialogue();
 	TestEqual(TEXT("the next line does start"), Lipsync->GetLineStarts(), 2);
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowLipsyncManualSurvivesDialogueTest,
+	"StoryFlow.Lipsync.GameCodeLipsyncSurvivesOtherSpeakers",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FStoryFlowLipsyncManualSurvivesDialogueTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowLipsyncTestHelpers;
+
+	// StartLipsync promises to run until StopLipsync: a bark, a radio, a cutscene line the game plays
+	// itself. Other characters talking, and the dialogue ending, are not StopLipsync — and both used to
+	// cancel it mid-word, because the "not my line" and "dialogue over" paths cleared everything.
+	StoryFlowTestWorld::FScopedWorld W;
+	if (!TestTrue(TEXT("fixture initialized"), W.Init())) { return false; }
+
+	UStoryFlowScriptAsset* Script = NewObject<UStoryFlowScriptAsset>(GetTransientPackage());
+	Script->StartNode = TEXT("0");
+	Script->Nodes.Add(TEXT("0"), MakeNode(TEXT("0"), EStoryFlowNodeType::Start, TEXT("start")));
+	FStoryFlowNode Line = MakeNode(TEXT("1"), EStoryFlowNodeType::Dialogue, TEXT("dialogue"));
+	Line.Data.Text = TEXT("someone else's line");
+	Script->Nodes.Add(Line.Id, Line);
+	Script->Nodes.Add(TEXT("2"), MakeNode(TEXT("2"), EStoryFlowNodeType::End, TEXT("end")));
+	Script->Connections.Add(MakeEdge(TEXT("e1"), TEXT("0"), TEXT("1"),
+		StoryFlowHandles::Source(TEXT("0")), StoryFlowHandles::Target(TEXT("1"))));
+	Script->Connections.Add(MakeEdge(TEXT("e2"), TEXT("1"), TEXT("2"),
+		StoryFlowHandles::Source(TEXT("1")), StoryFlowHandles::Target(TEXT("2"))));
+	Script->BuildConnectionIndices();
+
+	UStoryFlowProjectAsset* Project = NewObject<UStoryFlowProjectAsset>(GetTransientPackage());
+	Project->Scripts.Add(TEXT("other"), Script);
+	W.Subsystem->SetProject(Project);
+
+	// A character id the project does not have: every line is somebody else's.
+	AActor* Owner = W.Component->GetOwner();
+	UStoryFlowLipsyncComponent* Lipsync = NewObject<UStoryFlowLipsyncComponent>(Owner);
+	Lipsync->Source = W.Component;
+	Lipsync->CharacterId = TEXT("da_nobody_in_this_project");
+	Lipsync->RegisterComponent();
+	Owner->DispatchBeginPlay();
+
+	TestFalse(TEXT("nothing is driving the face yet"), Lipsync->IsLipsyncActive());
+	Lipsync->StartLipsync();
+	TestTrue(TEXT("game code started it"), Lipsync->IsLipsyncActive());
+
+	AddExpectedError(TEXT("which this project has no character for"), EAutomationExpectedErrorFlags::Contains, 1);
+	W.Component->StartDialogueWithScript(TEXT("other"));
+	TestTrue(TEXT("another speaker's line does not cancel it"), Lipsync->IsLipsyncActive());
+	TestEqual(TEXT("and it is not a line of this face's"), Lipsync->GetLineStarts(), 0);
+
+	W.Component->StopDialogue();
+	TestTrue(TEXT("nor does the dialogue ending"), Lipsync->IsLipsyncActive());
+
+	Lipsync->StopLipsync();
+	TestFalse(TEXT("StopLipsync is what ends it"), Lipsync->IsLipsyncActive());
 	return true;
 }
 

@@ -6,6 +6,7 @@
 #include "Components/ActorComponent.h"
 #include "Engine/EngineTypes.h"
 #include "Lipsync/StoryFlowLipsyncDriver.h"
+#include "UObject/ObjectKey.h"
 #include "StoryFlowLipsyncComponent.generated.h"
 
 class UAudioComponent;
@@ -148,6 +149,17 @@ public:
 	float GetRawPeak() const;
 
 	/**
+	 * Where the analysed audio sits on the vowel axis, 0 (OO) to 1 (EE). Read it with GetLevel when a mouth
+	 * opens but looks wrong: a centroid pinned at 1 is a stretched grin, pinned at 0 a permanent pucker.
+	 */
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Lipsync")
+	float GetCentroid() const;
+
+	/** Is this face being driven right now — by a line of its own, or by StartLipsync from game code? */
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Lipsync")
+	bool IsLipsyncActive() const { return bManualLipsync || bLineIsMine; }
+
+	/**
 	 * Do two character paths name the same character?
 	 *
 	 * Both sides go through NormalizeCharacterPath because they come from different places and disagree
@@ -188,8 +200,11 @@ private:
 	};
 	EMouthDrive DecideDrive() const;
 
-	/** Is the plugin's own audio for this line still sounding? False when the game plays its own. */
+	/** Is the audio component the mouth is following still sounding? False when the game plays its own. */
 	bool SourceAudioIsPlaying() const;
+
+	/** Analyse when there is a mixer to ask, else the idle mouth if allowed, else close. */
+	EMouthDrive HearOrIdle() const;
 
 	bool SpeakerIsMine() const;
 	void ResolveSource();
@@ -227,7 +242,15 @@ private:
 	float SinceSourceCheck = 0.0f;
 	bool bWarnedNoFace = false;
 	bool bWarnedNoSource = false;
+	bool bWarnedMissingMorphs = false;
+	bool bWarnedMasterSubmix = false;
 	bool bNotedEveryLine = false;
+
+	/**
+	 * ResolveFace has run at least once. The first resolve is at BeginPlay, before a runtime-assembled
+	 * character may have its parts, so "no face" is only worth saying once the retry has looked too.
+	 */
+	bool bFaceResolvedBefore = false;
 
 	/** Bound to the source's delegates. Separate from Source being set: a designer-set Source needs binding too. */
 	bool bSubscribed = false;
@@ -243,10 +266,18 @@ private:
 	int32 LineStarts = 0;
 
 	bool bLineIsMine = false;
+
+	/** The line has audio to follow: its own, or the previous line's still sounding under a text-only one. */
 	bool bLineHasAudio = false;
 
-	/** The plugin holds this line's audio component, so it can hear when the line stops sounding. */
-	bool bFollowSourceAudio = false;
+	/** The line carries audio of its OWN, as opposed to riding the previous line's tail. */
+	bool bLineCarriesAudio = false;
+
+	/**
+	 * The audio component the plugin started for the audio being followed, so the mouth closes when THAT
+	 * stops rather than when the dialogue component starts something else. Empty when the game plays its own.
+	 */
+	TWeakObjectPtr<UAudioComponent> LineAudio;
 
 	/** StartLipsync was called by game code: no line to follow, so it runs until StopLipsync. */
 	bool bManualLipsync = false;
@@ -254,4 +285,8 @@ private:
 	/** There is an audio mixer to ask. Decided once: without one every read logs an engine error. */
 	bool bAnalysisAvailable = false;
 	bool bAnalysing = false;
+
+	/** The analysis reference this component holds, so Stop releases what Start took even if AnalysisSubmix changed since. */
+	uint32 AnalysingDeviceId = 0;
+	FObjectKey AnalysingSubmix;
 };

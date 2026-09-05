@@ -41,7 +41,8 @@ FStoryFlowLipsyncDriver::FStoryFlowLipsyncDriver(const StoryFlowVisemeTable::FTa
 	bOwnsMouthClose = CurrentWeights.Contains(TEXT("mouthClose"));
 
 	// The idle pool is the ACTIVE table's poses, not the built-in names: a rig-specific map with four poses
-	// has to idle on its four. Sorted so both engine arms pick the same pose from the same random draw.
+	// has to idle on its four. Sorted so the pool's order is deterministic on both engine arms; the seeds
+	// differ, the walk does not.
 	for (const TPair<FName, StoryFlowVisemeTable::FPose>& Pose : Table)
 	{
 		if (Pose.Key != TEXT("rest"))
@@ -75,11 +76,19 @@ void FStoryFlowLipsyncDriver::AdvanceFromMagnitudes(const TArray<float>& Magnitu
 	}
 
 	const float Divisor = FMath::Max(FullScale, 1e-9f);
+
+	// 2's coefficient, PER SECOND at the reference's ~60 Hz like the peak follower below, so the analyser's
+	// lag does not double at 30 fps and halve at 120. A zero or negative delta keeps every bin as it was.
+	const float Keep = DeltaSeconds > 0.0f ? FMath::Pow(SpectralSmoothing, DeltaSeconds * 60.0f) : 1.0f;
+
 	float Sum = 0.0f;
 	float Weighted = 0.0f;
 	for (int32 Index = 0; Index < Magnitudes.Num(); ++Index)
 	{
-		const float Magnitude = FMath::Max(0.0f, Magnitudes[Index]);
+		// A NaN or infinite sample would sit in the smoothing state and in the peak and turn every weight
+		// after it into NaN for the rest of the line. Read it as silence instead.
+		const float Raw = Magnitudes[Index];
+		const float Magnitude = FMath::IsFinite(Raw) ? FMath::Max(0.0f, Raw) : 0.0f;
 		RawPeakValue = FMath::Max(RawPeakValue, Magnitude);
 
 		// 1. reference domain, per bin.
@@ -88,7 +97,7 @@ void FStoryFlowLipsyncDriver::AdvanceFromMagnitudes(const TArray<float>& Magnitu
 
 		// 2. spectral smoothing, per bin.
 		float& Bin = Smoothed[Index];
-		Bin = SpectralSmoothing * Bin + (1.0f - SpectralSmoothing) * Referenced;
+		Bin = Keep * Bin + (1.0f - Keep) * Referenced;
 
 		Sum += Bin;
 		Weighted += Bin * Index;
@@ -101,6 +110,7 @@ void FStoryFlowLipsyncDriver::AdvanceFromMagnitudes(const TArray<float>& Magnitu
 	{
 		Centroid = FMath::Clamp((Weighted / Sum) / (Magnitudes.Num() - 1) * CentroidScale, 0.0f, 1.0f);
 	}
+	CentroidValue = Centroid;
 
 	// 4. peak follower, per second.
 	Peak = FMath::Max(Energy, Peak * FMath::Pow(PeakDecay, DeltaSeconds * 60.0f));
@@ -118,9 +128,10 @@ void FStoryFlowLipsyncDriver::AdvanceFromMagnitudes(const TArray<float>& Magnitu
 
 void FStoryFlowLipsyncDriver::AdvanceIdle(float DeltaSeconds)
 {
-	// The meter reports ANALYSED loudness and nothing else. An idle mouth is moving on a coin flip, not on
+	// The meters report ANALYSED audio and nothing else. An idle mouth is moving on a coin flip, not on
 	// anything it heard, and a level that stayed stale while it did would be a lying instrument.
 	LevelValue = 0.0f;
+	CentroidValue = 0.0f;
 
 	IdleHold -= DeltaSeconds;
 	if (IdleHold <= 0.0f)
@@ -157,6 +168,7 @@ void FStoryFlowLipsyncDriver::AdvanceIdle(float DeltaSeconds)
 void FStoryFlowLipsyncDriver::AdvanceSilent(float DeltaSeconds)
 {
 	LevelValue = 0.0f;
+	CentroidValue = 0.0f;
 	ClearTarget();
 	Ease(DeltaSeconds);
 }
