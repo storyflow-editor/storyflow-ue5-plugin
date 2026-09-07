@@ -2570,6 +2570,10 @@ void UStoryFlowComponent::HandleDialogue(FStoryFlowNode* Node)
 	// When returning from Set*, we only update text/options but don't re-trigger audio
 	const bool bIsFreshEntry = ExecutionContext.bEnteringDialogueViaEdge;
 	ExecutionContext.bEnteringDialogueViaEdge = false; // Reset the flag
+	if (bIsFreshEntry)
+	{
+		++DialogueEntrySerial;
+	}
 
 	// Clear evaluation cache to ensure fresh evaluation of option visibility conditions
 	// This is important when returning to dialogue after a Set* node changes a variable

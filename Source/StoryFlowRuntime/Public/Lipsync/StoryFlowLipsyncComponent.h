@@ -155,9 +155,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StoryFlow|Lipsync")
 	float GetCentroid() const;
 
-	/** Is this face being driven right now — by a line of its own, or by StartLipsync from game code? */
+	/** Is this face driven by its line, a retained audio tail, or StartLipsync from game code? */
 	UFUNCTION(BlueprintPure, Category = "StoryFlow|Lipsync")
-	bool IsLipsyncActive() const { return bManualLipsync || bLineIsMine; }
+	bool IsLipsyncActive() const { return bManualLipsync || bLineIsMine || SourceAudioIsPlaying(); }
 
 	/**
 	 * Do two character paths name the same character?
@@ -261,14 +261,15 @@ private:
 	TArray<float> Magnitudes;
 	TUniquePtr<FStoryFlowLipsyncDriver> Driver;
 
-	/** The node id of the line being followed. The re-render rule keys on it: only a NEW id starts a line. */
+	/** Both the node and its execution identity, so repeated nodes can start new audio. */
 	FString LineNodeId;
+	uint64 LineEntrySerial = 0;
 	int32 LineStarts = 0;
 
 	bool bLineIsMine = false;
 
-	/** The line has audio to follow: its own, or the previous line's still sounding under a text-only one. */
-	bool bLineHasAudio = false;
+	/** A missing weak pointer can mean a tracked sound was destroyed, rather than external playback. */
+	bool bHadTrackedAudio = false;
 
 	/** The line carries audio of its OWN, as opposed to riding the previous line's tail. */
 	bool bLineCarriesAudio = false;

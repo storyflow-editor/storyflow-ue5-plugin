@@ -254,6 +254,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")
 	FStoryFlowDialogueState GetCurrentDialogue() const;
 
+	/** Changes on each fresh line entry, including repeated nodes and script calls; stable on redraws. */
+	uint64 GetDialogueEntrySerial() const { return DialogueEntrySerial; }
+
 	/**
 	 * The character PATH the current line's speaker was resolved to, empty when the line has no speaker.
 	 *
@@ -1097,6 +1100,9 @@ private:
 	 * disagree about who is talking.
 	 */
 	FString CurrentSpeakerPath;
+
+	/** Component-lifetime identity; not restored from saves or reset between conversations. */
+	uint64 DialogueEntrySerial = 0;
 	/** Member function pointer type for node handlers */
 	using FNodeHandler = void (UStoryFlowComponent::*)(FStoryFlowNode*);
 

@@ -22,7 +22,7 @@ namespace
 	/** How many frequencies to ask the mixer for across the band. Ample for a mouth, cheap to sample. */
 	constexpr int32 AnalysisBands = 24;
 
-	/** How often to look again when no face — or no dialogue component — was found at all. */
+	/** How often to reconcile face parts or retry a missing dialogue component. */
 	constexpr float FaceRecheckSeconds = 1.0f;
 
 	/**
@@ -129,7 +129,9 @@ void UStoryFlowLipsyncComponent::EndPlay(const EEndPlayReason::Type EndPlayReaso
 		Source->OnDialogueUpdated.RemoveDynamic(this, &UStoryFlowLipsyncComponent::HandleDialogueUpdated);
 		Source->OnDialogueEnded.RemoveDynamic(this, &UStoryFlowLipsyncComponent::HandleDialogueEnded);
 	}
+	StopLipsync();
 	StopAnalysis();
+	ZeroOwnedMorphs();
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -245,6 +247,11 @@ void UStoryFlowLipsyncComponent::TickComponent(float DeltaTime, ELevelTick TickT
 		break;
 	default:
 		Driver->AdvanceSilent(RealDelta);
+		if (!bLineIsMine && !bManualLipsync)
+		{
+			// A completed tail cannot adopt a later replay of the same audio component.
+			StopLipsync();
+		}
 		break;
 	}
 
@@ -267,11 +274,6 @@ UStoryFlowLipsyncComponent::EMouthDrive UStoryFlowLipsyncComponent::DecideDrive(
 		return HearOrIdle();
 	}
 
-	if (!bLineIsMine)
-	{
-		return EMouthDrive::Silent;
-	}
-
 	if (LineAudio.IsValid())
 	{
 		if (SourceAudioIsPlaying())
@@ -280,13 +282,18 @@ UStoryFlowLipsyncComponent::EMouthDrive UStoryFlowLipsyncComponent::DecideDrive(
 		}
 		// The sound the mouth was following has stopped: a line with audio of its own is over, a text-only
 		// line riding the previous line's tail goes on being read.
-		return bLineCarriesAudio ? EMouthDrive::Silent : (bIdleMouthWithoutAudio ? EMouthDrive::Idle : EMouthDrive::Silent);
+		return bLineIsMine && !bLineCarriesAudio && bIdleMouthWithoutAudio ? EMouthDrive::Idle : EMouthDrive::Silent;
+	}
+
+	if (!bLineIsMine)
+	{
+		return EMouthDrive::Silent;
 	}
 
 	if (bLineCarriesAudio)
 	{
-		// The game plays its own audio and the plugin holds nothing to follow: the mouth follows the LINE.
-		return HearOrIdle();
+		// Only never-tracked external playback follows the line. A destroyed tracked sound is over.
+		return bHadTrackedAudio ? EMouthDrive::Silent : HearOrIdle();
 	}
 
 	// No audio on this line: the idle mouth carries it while the text is read.
@@ -308,10 +315,11 @@ void UStoryFlowLipsyncComponent::StartLipsync()
 {
 	bManualLipsync = true;
 	bLineIsMine = false;
-	bLineHasAudio = false;
+	bHadTrackedAudio = false;
 	bLineCarriesAudio = false;
 	LineAudio.Reset();
 	LineNodeId.Reset();
+	LineEntrySerial = 0;
 	if (Driver.IsValid())
 	{
 		Driver->ResetLevel();
@@ -322,10 +330,11 @@ void UStoryFlowLipsyncComponent::StopLipsync()
 {
 	bManualLipsync = false;
 	bLineIsMine = false;
-	bLineHasAudio = false;
+	bHadTrackedAudio = false;
 	bLineCarriesAudio = false;
 	LineAudio.Reset();
 	LineNodeId.Reset();
+	LineEntrySerial = 0;
 }
 
 float UStoryFlowLipsyncComponent::GetLevel() const
@@ -364,12 +373,14 @@ void UStoryFlowLipsyncComponent::HandleDialogueUpdated(const FStoryFlowDialogueS
 		return;
 	}
 
-	if (bLineIsMine && !LineNodeId.IsEmpty() && LineNodeId == DialogueState.NodeId)
+	const uint64 EntrySerial = Source != nullptr ? Source->GetDialogueEntrySerial() : 0;
+	if (bLineIsMine && !LineNodeId.IsEmpty() && LineNodeId == DialogueState.NodeId && LineEntrySerial == EntrySerial)
 	{
 		return;
 	}
 
 	LineNodeId = DialogueState.NodeId;
+	LineEntrySerial = EntrySerial;
 	++LineStarts;
 	bManualLipsync = false;
 	bLineIsMine = true;
@@ -381,7 +392,7 @@ void UStoryFlowLipsyncComponent::HandleDialogueUpdated(const FStoryFlowDialogueS
 		// It does not when a game overrode playback — and then there is nothing to follow, so the mouth
 		// follows the LINE instead, exactly as it did before the audio-follow rule existed.
 		LineAudio = Source != nullptr ? Source->GetCurrentDialogueAudio() : nullptr;
-		bLineHasAudio = true;
+		bHadTrackedAudio = LineAudio.IsValid();
 		if (Driver.IsValid())
 		{
 			Driver->ResetLevel();
@@ -391,30 +402,35 @@ void UStoryFlowLipsyncComponent::HandleDialogueUpdated(const FStoryFlowDialogueS
 	{
 		// A text-only line, but the previous line's sound is still playing (bAudioReset is off by default):
 		// keep following it. Idling over audible speech is the one thing the idle mouth must never do.
-		bLineHasAudio = true;
+		bHadTrackedAudio = true;
 	}
 	else
 	{
 		LineAudio.Reset();
-		bLineHasAudio = false;
+		bHadTrackedAudio = false;
 	}
 }
 
 void UStoryFlowLipsyncComponent::HandleDialogueEnded()
 {
+	if (bManualLipsync)
+	{
+		return;
+	}
+
+	// The text is over even when the sound is not. Retain only the tail, never an idle text-line owner.
+	bLineIsMine = false;
+	LineNodeId.Reset();
+	LineEntrySerial = 0;
+
 	// A line's audio can outlive its dialogue (bStopAudioOnDialogueEnd false), and cutting the mouth here
 	// would clip the audible tail. The promise is that the mouth closes when the SOUND stops, not when the
 	// text does — so keep following, and let the audio-follow rule close it.
 	if (LineAudio.IsValid() && SourceAudioIsPlaying())
 	{
-		// Whatever comes next is a new line, whatever its node id.
-		LineNodeId.Reset();
 		return;
 	}
-	if (!bManualLipsync)
-	{
-		StopLipsync();
-	}
+	StopLipsync();
 }
 
 /**
@@ -534,6 +550,8 @@ void UStoryFlowLipsyncComponent::ResolveSource()
  */
 void UStoryFlowLipsyncComponent::ResolveFace(const StoryFlowVisemeTable::FTable& Table)
 {
+	// Detached live parts must release the last pose. Current parts get their weights later this tick.
+	ZeroOwnedMorphs();
 	Targets.Reset();
 
 	USceneComponent* Root = Cast<USceneComponent>(FaceRoot.GetComponent(GetOwner()));
@@ -641,10 +659,9 @@ void UStoryFlowLipsyncComponent::ResolveFace(const StoryFlowVisemeTable::FTable&
  * morphs the target was resolved against no longer exist, and the mouth quietly stops moving. No error, no
  * warning, just a face that used to work, which is the worst way for a feature to fail.
  *
- * Both checks are free (a handful of weak pointers and asset pointers) so they run every frame. Having found
- * NOTHING is different: re-walking the component tree every frame to see whether a face has appeared would
- * cost something on every character that legitimately has no face, so that retry is throttled, and its
- * warning is kept to one rather than one per second.
+ * Both checks run every frame. New parts do not invalidate existing targets, so also reconcile the subtree
+ * once a second: a late head, teeth or tongue must be discovered without a hierarchy walk every frame.
+ * Missing-face warnings remain limited to one rather than one per reconciliation.
  */
 bool UStoryFlowLipsyncComponent::RefreshFaceIfStale(float DeltaSeconds)
 {
@@ -653,12 +670,6 @@ bool UStoryFlowLipsyncComponent::RefreshFaceIfStale(float DeltaSeconds)
 		const USkeletalMeshComponent* Mesh = Target.Mesh.Get();
 		return Mesh == nullptr || Mesh->GetSkeletalMeshAsset() != Target.Asset.Get();
 	});
-
-	if (!bAnyStale && Targets.Num() > 0)
-	{
-		SinceFaceCheck = 0.0f;
-		return false;
-	}
 
 	SinceFaceCheck += DeltaSeconds;
 	if (!bAnyStale && SinceFaceCheck < FaceRecheckSeconds)

@@ -395,24 +395,28 @@ Level is 0 after AdvanceIdle. The old tone tests stay but at realistic amplitude
 
 ### Component contract (both arms, 2026-09-05)
 
-1. **Re-render rule.** A dialogue update carrying the NodeId already being handled, from a speaker that is
-   still mine, is a re-render (variable change, resume, dead-end): no ResetLevel, no re-arm, no audio
-   re-search, no repeated warning. Only a NEW NodeId starts a line.
+1. **Re-render rule (amended 2026-09-08).** Each fresh dialogue entry advances a component-lifetime
+   `DialogueEntrySerial`. Redraws (variable change, resume, dead-end) retain that serial: no ResetLevel,
+   re-arm or audio re-search. Repeated execution of the same node and matching node IDs in different
+   scripts are fresh entries. The serial is not restored from saves or reset between conversations.
 2. **Audio-follow rule.** A line with audio drives the mouth only while that audio is playing; when the plugin
    knows it has stopped, the mouth goes SILENT (closes), never idle. Idle is for lines that have NO audio.
    Unreal learns it from `UStoryFlowComponent::IsDialogueAudioPlaying()` (new, additive); when the game
    overrode playback and the plugin holds no audio component, the mouth follows the line as before.
    After dialogue end the mouth may keep following audio that is still playing (`bStopAudioOnDialogueEnd`
-   false), and closes when it stops.
+   false), and closes when it stops. An inherited tail does not retain ownership of an ended text line;
+   finishing it must not start idle speech. A destroyed tracked sound is over, distinct from external
+   playback that was never tracked. `IsLipsyncActive` includes a still-playing post-dialogue tail.
 3. **Warn once, by name:** a non-empty CharacterId that the project's character index does not contain;
    no Source found (and retry the search every second, catching up on a line already on screen);
    the face missing (existing). Log once, at Log level, when CharacterId is empty: this face moves on every line.
 4. **Time source:** real / unscaled delta, per the driver.
 5. **Stale face:** a target is stale when its component/renderer is gone OR its mesh asset changed
    (Sidekick swaps parts by `SetSkeletalMesh` on the same component; Unity swaps `sharedMesh` on the same
-   renderer). Cache the asset per target.
+   renderer). Cache the asset per target. Also reconcile the full subtree once a second while targets
+   remain valid, so later-added parts join the face. Release owned writes on removed live parts.
 6. **Deactivate cleanly:** disabling/deactivating the component stops lipsync AND zeroes the owned morphs it
-   drives, so a face is never left mid-vowel.
+   drives, so a face is never left mid-vowel. Unreal component teardown releases the same owned morphs.
 7. **Unity writes in LateUpdate** (the Animator runs after Update and would win); skips the write once at rest.
    **Unreal fan-out:** FaceRoot is the parts' PARENT (the character's mesh) or empty for the actor root -
    never a single part; the tooltip and the warning say so.
