@@ -147,6 +147,13 @@ FString UStoryFlowProjectAsset::GetGlobalString(const FString& Key, const FStrin
 		return *Value;
 	}
 
+	// Older localized exports used en for the source bucket even with another source label.
+	const FString LegacySourceKey = FString::Printf(TEXT("en.%s"), *Key);
+	if (const FString* Value = GlobalStrings.Find(LegacySourceKey))
+	{
+		return *Value;
+	}
+
 	// Fallback to key without prefix
 	if (const FString* Value = GlobalStrings.Find(Key))
 	{

@@ -522,8 +522,11 @@ public:
 
 	// === String Resolution ===
 
-	/** Get localized string from current script or project */
-	FString GetString(const FString& Key, const FString& LanguageCode = TEXT("en")) const;
+	/** Resolve graph content in the active language, or the component's seed language without localization. */
+	FString GetString(const FString& Key) const;
+
+	/** Get localized string from current script or project in an explicitly requested language. */
+	FString GetString(const FString& Key, const FString& LanguageCode) const;
 
 	/** Interpolate variables in text */
 	FString InterpolateVariables(const FString& Text) const;

@@ -2197,10 +2197,13 @@ FStoryFlowVariant FStoryFlowEvaluator::EvaluateMapOpValueInput(FStoryFlowNode* N
 	{
 		Value.SetEnum(EvaluateEnumInput(Node, HandleSuffix, Node->Data.MapInlineValue.GetString()));
 	}
+	else if (ValueType == TEXT("string"))
+	{
+		Value.SetString(EvaluateStringInput(Node, HandleSuffix, Context->GetString(Node->Data.MapInlineValue.GetString())));
+	}
 	else
 	{
-		// string, image, character, and audio values all flow through the string
-		// evaluator (matches the scalar Set* handler precedent)
+		// Asset identifiers remain raw; only authored string literals resolve through localization.
 		Value.SetString(EvaluateStringInput(Node, HandleSuffix, Node->Data.MapInlineValue.GetString()));
 	}
 	return Value;

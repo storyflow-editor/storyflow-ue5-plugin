@@ -386,9 +386,10 @@ namespace StoryFlowCharacterContractTestHelpers
 			Script->BuildConnectionIndices();
 
 			FStoryFlowExecutionContext Context;
-			Context.CurrentScript = Script;
-			Context.ExternalCharacters = &W.Subsystem->GetRuntimeCharacters();
-			Context.CharacterIdToPath = &W.Subsystem->GetCharacterIdToPath();
+			Context.SeedLanguageCode = W.Subsystem->GetLanguage();
+			Context.InitializeWithSubsystem(Project, Script, &W.Subsystem->GetGlobalVariables(),
+				&W.Subsystem->GetRuntimeCharacters(), &W.Subsystem->GetUsedOnceOnlyOptions(),
+				W.Subsystem->GetDataAssetStore(), &W.Subsystem->GetCharacterIdToPath(), &W.Subsystem->GetLanguageRef());
 			if (!WiredCharacterRef.IsEmpty())
 			{
 				FStoryFlowVariable Wired;
@@ -577,10 +578,9 @@ namespace StoryFlowCharacterContractTestHelpers
 			}
 			else if (IsCharacterNameBuiltin(Name))
 			{
-				// The component door RESOLVES the builtin Name; the node lane and the raw record
-				// answer the stored string-table key verbatim (A5 seats for this engine).
+				// Host and graph consumers receive display text; the record retains its authored key.
 				Test.TestEqual(CaseName + TEXT(": resolving door answers the resolved Name"), Door.GetString(), ExpectedValue->AsString());
-				Test.TestEqual(CaseName + TEXT(": node lane answers the stored Name key"), NodeLane.GetString(), ExpectedStored->AsString());
+				Test.TestEqual(CaseName + TEXT(": node lane answers the resolved Name"), NodeLane.GetString(), ExpectedValue->AsString());
 				Test.TestEqual(CaseName + TEXT(": raw record Name is the stored key"), RawStored(RecordKey, Name).GetString(), ExpectedStored->AsString());
 			}
 			else
@@ -698,10 +698,6 @@ namespace StoryFlowCharacterContractTestHelpers
 
 				VariantMatchesJson(Test, Label + TEXT(" (host)"), HostRead(Id, TEXT(""), Name), Expected);
 				FStoryFlowVariant NodeLane = NodeLaneRead(Id, TEXT(""), VariableObj);
-				if (IsCharacterNameBuiltin(Name))
-				{
-					NodeLane.SetString(Project->GetGlobalString(NodeLane.GetString()));
-				}
 				VariantMatchesJson(Test, Label + TEXT(" (node)"), NodeLane, Expected);
 			}
 		}

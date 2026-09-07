@@ -1436,7 +1436,7 @@ FStoryFlowVariant UStoryFlowComponent::GetCharacterVariable(const FString& Chara
 	if (IsCharacterNameBuiltin(VariableName))
 	{
 		FStoryFlowVariant Result;
-		Result.SetString(ResolveString(CharDef->Name));
+		Result.SetString(CharDef->bNameIsLiteral ? CharDef->Name : ResolveString(CharDef->Name));
 		return Result;
 	}
 
@@ -1472,6 +1472,7 @@ void UStoryFlowComponent::SetCharacterVariable(const FString& CharacterPath, con
 	if (IsCharacterNameBuiltin(VariableName))
 	{
 		CharDef->Name = Value.ToString();
+		CharDef->bNameIsLiteral = true;
 		return;
 	}
 
@@ -1820,7 +1821,7 @@ FString UStoryFlowComponent::GetCharacterStringVariable(UStoryFlowCharacterAsset
 	// Handle built-in "Name" field (stored as string table key; cf_name alias — amendment A2a)
 	if (IsCharacterNameBuiltin(VariableName))
 	{
-		return ResolveString(CharDef->Name);
+		return CharDef->bNameIsLiteral ? CharDef->Name : ResolveString(CharDef->Name);
 	}
 	// Handle built-in "Image" field (or cf_image — amendment A2a)
 	if (IsCharacterImageBuiltin(VariableName))
@@ -1845,6 +1846,7 @@ void UStoryFlowComponent::SetCharacterStringVariable(UStoryFlowCharacterAsset* C
 	if (IsCharacterNameBuiltin(VariableName))
 	{
 		CharDef->Name = Value;
+		CharDef->bNameIsLiteral = true;
 		return;
 	}
 	// Handle built-in "Image" field (or cf_image — amendment A2a)
@@ -4690,7 +4692,7 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 		if (FStoryFlowCharacterDef* CharDef = ExecutionContext.FindCharacter(SpeakerRef))
 		{
 			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: BuildDialogueState - Found character, raw Name='%s'"), *CharDef->Name);
-			State.Character.Name = ExecutionContext.GetString(CharDef->Name, ActiveLanguageCode());
+			State.Character.Name = CharDef->bNameIsLiteral ? CharDef->Name : ExecutionContext.GetString(CharDef->Name, ActiveLanguageCode());
 			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: BuildDialogueState - Resolved Name='%s'"), *State.Character.Name);
 
 			// Load character image from the runtime character data (CharDef->Image).

@@ -402,6 +402,7 @@ void FStoryFlowExecutionContext::SetCharacterVariable(const FString& CharacterPa
 	if (IsCharacterNameBuiltin(VariableName))
 	{
 		CharDef->Name = Value.ToString();
+		CharDef->bNameIsLiteral = true;
 		return;
 	}
 
@@ -436,7 +437,7 @@ FStoryFlowVariant FStoryFlowExecutionContext::GetCharacterVariableValue(const FS
 	if (IsCharacterNameBuiltin(VariableName))
 	{
 		FStoryFlowVariant Result;
-		Result.SetString(CharDef->Name);
+		Result.SetString(CharDef->bNameIsLiteral ? CharDef->Name : GetString(CharDef->Name));
 		return Result;
 	}
 
@@ -580,6 +581,12 @@ bool FStoryFlowExecutionContext::PopScript()
 	return true;
 }
 
+FString FStoryFlowExecutionContext::GetString(const FString& Key) const
+{
+	const UStoryFlowProjectAsset* Proj = Project.Get();
+	return GetString(Key, Proj && Proj->bHasLocalization && ActiveLanguage ? *ActiveLanguage : SeedLanguageCode);
+}
+
 FString FStoryFlowExecutionContext::GetString(const FString& Key, const FString& LanguageCode) const
 {
 	UStoryFlowProjectAsset* Proj = Project.Get();
@@ -617,6 +624,8 @@ FString FStoryFlowExecutionContext::GetString(const FString& Key, const FString&
 	// language alone. The two probes are the same key whenever the codes agree.
 	const FString FullKey = FString::Printf(TEXT("%s.%s"), *LanguageCode, *Key);
 	const FString SourceKey = Proj ? FString::Printf(TEXT("%s.%s"), *Proj->SourceLanguage, *Key) : FullKey;
+	// Older localized exports stored source text under en, regardless of their source label.
+	const FString LegacySourceKey = FString::Printf(TEXT("en.%s"), *Key);
 
 	if (UStoryFlowScriptAsset* Script = CurrentScript.Get())
 	{
@@ -625,6 +634,10 @@ FString FStoryFlowExecutionContext::GetString(const FString& Key, const FString&
 			return *Value;
 		}
 		if (const FString* Value = Script->Strings.Find(SourceKey))
+		{
+			return *Value;
+		}
+		if (const FString* Value = Script->Strings.Find(LegacySourceKey))
 		{
 			return *Value;
 		}
@@ -642,6 +655,10 @@ FString FStoryFlowExecutionContext::GetString(const FString& Key, const FString&
 			return *Value;
 		}
 		if (const FString* Value = Proj->GlobalStrings.Find(SourceKey))
+		{
+			return *Value;
+		}
+		if (const FString* Value = Proj->GlobalStrings.Find(LegacySourceKey))
 		{
 			return *Value;
 		}
@@ -765,7 +782,7 @@ FString FStoryFlowExecutionContext::InterpolateVariables(const FString& Text) co
 						// into the builtins.
 						if (IsCharacterNameBuiltin(InnerVarName))
 						{
-							Replacement = GetString(CharDef->Name);
+							Replacement = CharDef->bNameIsLiteral ? CharDef->Name : GetString(CharDef->Name);
 						}
 						// Handle built-in "Image" property (or cf_image — amendment A2a)
 						else if (IsCharacterImageBuiltin(InnerVarName))

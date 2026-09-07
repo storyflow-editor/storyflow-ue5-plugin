@@ -359,6 +359,7 @@ TSharedPtr<FJsonObject> CharacterDefToJson(const FStoryFlowCharacterDef& CharDef
 	TSharedPtr<FJsonObject> Obj = MakeShared<FJsonObject>();
 
 	Obj->SetStringField(TEXT("name"), CharDef.Name);
+	Obj->SetBoolField(TEXT("nameIsLiteral"), CharDef.bNameIsLiteral);
 	Obj->SetStringField(TEXT("image"), CharDef.Image);
 
 	if (CharDef.Variables.Num() > 0)
@@ -384,6 +385,9 @@ FStoryFlowCharacterDef CharacterDefFromJson(const TSharedPtr<FJsonObject>& Obj)
 	}
 
 	CharDef.Name = Obj->GetStringField(TEXT("name"));
+	// Legacy saves cannot distinguish an authored key from an identical player-written name.
+	CharDef.bNameIsLiteral = true;
+	Obj->TryGetBoolField(TEXT("nameIsLiteral"), CharDef.bNameIsLiteral);
 	CharDef.Image = Obj->GetStringField(TEXT("image"));
 
 	const TSharedPtr<FJsonObject>* VarsObj;

@@ -1245,9 +1245,13 @@ struct STORYFLOWRUNTIME_API FStoryFlowCharacterDef
 {
 	GENERATED_BODY()
 
-	/** String table key for name */
+	/** Authored string table key or runtime-written display name. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Name;
+
+	/** Runtime writes stay literal even when their text equals an authored string key. */
+	UPROPERTY()
+	bool bNameIsLiteral = false;
 
 	/** Asset key for default image */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")

@@ -58,8 +58,9 @@ void UStoryFlowSubsystem::SetProject(UStoryFlowProjectAsset* NewProject)
 		// Everything below resolves its strings in the language this line just set, so a handler
 		// running at this point would read the OUTGOING project's globals, characters and .sfd
 		// seed under the INCOMING project's language.
-		const FString Carried = ProjectAsset->ResolveLanguageCode(CurrentLanguage);
+		const FString Carried = bHasInitializedLanguage ? ProjectAsset->ResolveLanguageCode(CurrentLanguage) : FString();
 		CurrentLanguage = Carried.IsEmpty() ? ProjectAsset->SourceLanguage : Carried;
+		bHasInitializedLanguage = true;
 
 		// Initialize global variables from project. Detach shared map storage so
 		// runtime map mutations never write into the project asset (HTML inflates

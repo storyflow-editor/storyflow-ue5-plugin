@@ -438,6 +438,9 @@ private:
 	UPROPERTY()
 	FString CurrentLanguage = TEXT("en");
 
+	/** Before the first install, the default code does not represent a language choice. */
+	bool bHasInitializedLanguage = false;
+
 	/** Runtime copy of global variables (shared across all dialogues) */
 	UPROPERTY()
 	TMap<FString, FStoryFlowVariable> GlobalVariables;

@@ -55,13 +55,13 @@ namespace StoryFlowCharacterSaveTestHelpers
 	 * values, or leaked a write to the decoy fails the structural compare.
 	 */
 	const TCHAR* ExpectedCharactersSection = TEXT(R"JSON({
-		"chars\\hero.sfc":{"name":"Hero","image":"","variables":{
+		"chars\\hero.sfc":{"name":"Hero","nameIsLiteral":false,"image":"","variables":{
 			"IsBrave":{"id":"var_b1","name":"IsBrave","type":"Boolean","isArray":false,"value":true},
 			"Title":{"id":"var_s1","name":"Title","type":"String","isArray":false,"value":"id wrote"},
 			"Coins":{"id":"var_i1","name":"Coins","type":"Integer","isArray":false,"value":21},
 			"Inventory":{"id":"var_a1","name":"Inventory","type":"String","isArray":true,"value":["sword","shield"]},
 			"Reputation":{"id":"var_m1","name":"Reputation","type":"Map","isArray":false,"keyType":"String","valueType":"Integer","value":[{"key":"guards","value":3},{"key":"thieves","value":5}]}}},
-		"chars\\villain.sfc":{"name":"Villain","image":"","variables":{
+		"chars\\villain.sfc":{"name":"Villain","nameIsLiteral":false,"image":"","variables":{
 			"IsBrave":{"id":"var_b1","name":"IsBrave","type":"Boolean","isArray":false,"value":false},
 			"Title":{"id":"var_s1","name":"Title","type":"String","isArray":false,"value":"the cruel"},
 			"Coins":{"id":"var_i1","name":"Coins","type":"Integer","isArray":false,"value":1},
