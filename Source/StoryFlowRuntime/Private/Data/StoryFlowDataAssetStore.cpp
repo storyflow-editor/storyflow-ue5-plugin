@@ -285,6 +285,7 @@ namespace StoryFlowDataAssets
 		// behind as inert data. An override counts only when the chain still declares the id.
 		const FStoryFlowVariant* Nearest = nullptr;
 		const FStoryFlowVariant* Declared = nullptr;
+		bool bDeclaredArray = false;
 		// WHICH of Nearest's two sources hit. Recorded where the branch already is rather than
 		// re-derived afterwards: an overlay entry and an override are indistinguishable once both
 		// are just a variant pointer, and the localization gate needs them apart (EResolvedFrom).
@@ -314,6 +315,7 @@ namespace StoryFlowDataAssets
 			if (const FStoryFlowVariable* Decl = FindDeclaredOnLevel(Level, VariableId))
 			{
 				Declared = &Decl->Value;
+				bDeclaredArray = Decl->bIsArray;
 			}
 			return true;
 		});
@@ -327,6 +329,8 @@ namespace StoryFlowDataAssets
 			*OutResolvedFrom = Nearest ? NearestFrom : EResolvedFrom::Declaration;
 		}
 		OutValue = CopyOut(Nearest ? *Nearest : *Declared);
+		// Legacy empty array overrides have no serialized element blob from which to infer shape.
+		OutValue.SetArrayShape(bDeclaredArray);
 		return true;
 	}
 

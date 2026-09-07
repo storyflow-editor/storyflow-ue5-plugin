@@ -35,6 +35,8 @@ struct FNodeRuntimeState
 	/** Cached output value (for evaluators) */
 	FStoryFlowVariant CachedOutput;
 	bool bHasCachedOutput = false;
+	/** Completed operations cannot be reconstructed by evaluating their input again. */
+	bool bIsExecutionOutput = false;
 
 	/** Loop state (for forEach nodes) */
 	int32 LoopIndex = -1;
@@ -95,6 +97,10 @@ struct FNodeRuntimeState
 	 * observable no-op in BOTH runtimes (EMapSourceKind::DataAsset flags it read-only).
 	 */
 	FStoryFlowVariable DataAssetMapSnapshot;
+
+	/** Detached map mutation output, retained until this execution context is reset. */
+	FStoryFlowVariable MapExecutionOutput;
+	bool bHasMapExecutionOutput = false;
 };
 
 /**
@@ -120,9 +126,9 @@ public:
 	 * dialogue reports a still-broken accessor again instead of staying quiet forever. It runs at
 	 * dialogue stop and at the start of a fresh dialogue.
 	 *
-	 * The subsystem's ResetAllState and ResetDataAssetOverlay are BETWEEN-DIALOGUE calls on a
-	 * different object: they drop state (globals, characters, the .sfd overlay) but re-arm no
-	 * latch and clear no cache, because the subsystem holds neither.
+	 * Subsystem resets advance the shared read generation, invalidating derived caches on the
+	 * next evaluation. They do not re-arm warning latches; only a context Reset does that.
+
 	 */
 	void Reset();
 
@@ -239,6 +245,9 @@ public:
 	 * Prefer the TryResolveDataAsset / TrySetDataAsset accessors below over touching this.
 	 */
 	StoryFlowDataAssets::FStoreRef DataAssetStore;
+	uint64 SeenSharedRevision = 0;
+	void RefreshSharedState();
+	void NotifyStateChanged();
 
 	/**
 	 * Non-owning pointer to the subsystem's LIVE language code — the ExternalGlobalVariables
@@ -283,6 +292,10 @@ public:
 
 	/** Current evaluation depth (for recursion protection) */
 	int32 EvaluationDepth = 0;
+	/** A Set captures failures only along the input evaluation it actually performs. */
+	bool bCaptureReadFailures = false;
+	uint64 ReadFailures = 0;
+	void MarkReadFailure() { if (bCaptureReadFailures) { ++ReadFailures; } }
 
 	/** Current processing depth (for ProcessNode/ProcessNextNode recursion protection) */
 	int32 ProcessingDepth = 0;
@@ -549,7 +562,7 @@ public:
 	bool IsAtMaxProcessingDepth() const { return ProcessingDepth >= STORYFLOW_MAX_PROCESSING_DEPTH; }
 
 	/** Get per-node runtime state (lazily created) */
-	FNodeRuntimeState& GetNodeState(const FString& NodeId) { return NodeRuntimeStates.FindOrAdd(NodeId); }
+	FNodeRuntimeState& GetNodeState(const FString& NodeId) { RefreshSharedState(); return NodeRuntimeStates.FindOrAdd(NodeId); }
 
 	// === Cache Management ===
 

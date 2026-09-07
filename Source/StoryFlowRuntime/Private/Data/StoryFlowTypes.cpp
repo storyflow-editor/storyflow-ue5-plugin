@@ -243,6 +243,7 @@ void FStoryFlowVariant::UnpackArrayFromSerialization()
 		// Corrupt or forward-format blob — degrade to an empty array instead of crashing
 		return;
 	}
+	if (ValueShape == 0) { ValueShape = 2; }
 	ArrayValue.SetNum(Num);
 	for (int32 i = 0; i < Num; ++i)
 	{
@@ -263,6 +264,7 @@ void UnpackVariablesFromSerialization(TMap<FString, FStoryFlowVariable>& Variabl
 	for (auto& Pair : Variables)
 	{
 		Pair.Value.Value.UnpackArrayFromSerialization();
+		Pair.Value.Value.SetArrayShape(Pair.Value.bIsArray);
 	}
 }
 
@@ -279,6 +281,7 @@ void UnpackVariablesFromSerialization(TArray<FStoryFlowVariable>& Variables)
 	for (FStoryFlowVariable& Variable : Variables)
 	{
 		Variable.Value.UnpackArrayFromSerialization();
+		Variable.Value.SetArrayShape(Variable.bIsArray);
 	}
 }
 

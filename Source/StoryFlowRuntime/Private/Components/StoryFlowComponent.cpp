@@ -1473,6 +1473,7 @@ void UStoryFlowComponent::SetCharacterVariable(const FString& CharacterPath, con
 	{
 		CharDef->Name = Value.ToString();
 		CharDef->bNameIsLiteral = true;
+		InvalidateVariableReads();
 		return;
 	}
 
@@ -1480,6 +1481,7 @@ void UStoryFlowComponent::SetCharacterVariable(const FString& CharacterPath, con
 	if (IsCharacterImageBuiltin(VariableName))
 	{
 		CharDef->Image = Value.ToString();
+		InvalidateVariableReads();
 		return;
 	}
 
@@ -1487,6 +1489,7 @@ void UStoryFlowComponent::SetCharacterVariable(const FString& CharacterPath, con
 	if (FStoryFlowVariable* Variable = CharDef->Variables.Find(VariableName))
 	{
 		Variable->Value = Value;
+		InvalidateVariableReads();
 	}
 	else
 	{
@@ -1711,6 +1714,7 @@ void UStoryFlowComponent::SetCharacterBoolVariable(UStoryFlowCharacterAsset* Cha
 		FStoryFlowVariant NewValue;
 		NewValue.SetBool(bValue);
 		Var->Value = NewValue;
+		InvalidateVariableReads();
 	}
 	else
 	{
@@ -1741,6 +1745,7 @@ void UStoryFlowComponent::SetCharacterIntVariable(UStoryFlowCharacterAsset* Char
 		FStoryFlowVariant NewValue;
 		NewValue.SetInt(Value);
 		Var->Value = NewValue;
+		InvalidateVariableReads();
 	}
 	else
 	{
@@ -1771,6 +1776,7 @@ void UStoryFlowComponent::SetCharacterFloatVariable(UStoryFlowCharacterAsset* Ch
 		FStoryFlowVariant NewValue;
 		NewValue.SetFloat(Value);
 		Var->Value = NewValue;
+		InvalidateVariableReads();
 	}
 	else
 	{
@@ -1847,12 +1853,14 @@ void UStoryFlowComponent::SetCharacterStringVariable(UStoryFlowCharacterAsset* C
 	{
 		CharDef->Name = Value;
 		CharDef->bNameIsLiteral = true;
+		InvalidateVariableReads();
 		return;
 	}
 	// Handle built-in "Image" field (or cf_image — amendment A2a)
 	if (IsCharacterImageBuiltin(VariableName))
 	{
 		CharDef->Image = Value;
+		InvalidateVariableReads();
 		return;
 	}
 
@@ -1861,6 +1869,7 @@ void UStoryFlowComponent::SetCharacterStringVariable(UStoryFlowCharacterAsset* C
 		FStoryFlowVariant NewValue;
 		NewValue.SetString(Value);
 		Var->Value = NewValue;
+		InvalidateVariableReads();
 	}
 	else
 	{
@@ -1883,6 +1892,7 @@ void UStoryFlowComponent::SetCharacterEnumVariable(UStoryFlowCharacterAsset* Cha
 		FStoryFlowVariant NewValue;
 		NewValue.SetEnum(Value);
 		Var->Value = NewValue;
+		InvalidateVariableReads();
 	}
 	else
 	{
@@ -1993,21 +2003,21 @@ bool UStoryFlowComponent::SetDataAssetMapVariable(UStoryFlowDataAssetAsset* Data
 
 bool UStoryFlowComponent::DropCachesAfterDataAssetWrite(bool bWritten)
 {
-	// THE ONE THING THIS SURFACE STILL DOES ITSELF after a Data Asset write (contract section 5).
-	// The accessor nodes are never memoized themselves, but the notBool / andBool / comparison
-	// ABOVE one is, and nothing else drops that memo for a host write: BuildDialogueState via
-	// NotifyVariableChanged rebuilds the dialogue WITHOUT clearing first, so a stale condition
-	// would survive the rebuild and keep an option hidden that the write just opened.
-	//
-	// Component-local, like every other clear here. A write is subsystem-wide, so another
-	// component mid-dialogue re-evaluates on its own next dialogue rebuild rather than instantly
-	// - the same asymmetry global variables have always had. The subsystem's own surface makes no
-	// such drop, for the same reason: it owns no evaluator.
+	// Shared writes already advance the store generation. Drop this component's derived
+	// memos immediately too, preserving completed execution outputs.
+
 	if (bWritten && Evaluator)
 	{
 		Evaluator->ClearCache();
 	}
 	return bWritten;
+}
+
+void UStoryFlowComponent::InvalidateVariableReads()
+{
+	// Host APIs can write before this component has ever initialized an execution context.
+	if (UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem()) { Subsystem->NotifySharedStateChanged(); }
+	ExecutionContext.ClearEvaluationCache();
 }
 
 TArray<FString> UStoryFlowComponent::GetDataAssetVariableNames(UStoryFlowDataAssetAsset* DataAsset)
@@ -3506,6 +3516,7 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 	FNodeRuntimeState& ArrayNodeState = ExecutionContext.GetNodeState(Node->Id);
 	ArrayNodeState.CachedOutput.SetArray(Arr);
 	ArrayNodeState.bHasCachedOutput = true;
+	ArrayNodeState.bIsExecutionOutput = true;
 
 	if (DataAssetAccessor)
 	{
@@ -3545,7 +3556,7 @@ void UStoryFlowComponent::HandleSetMap(FStoryFlowNode* Node)
 			if (FStoryFlowVariable* SourceVar = Evaluator->ResolveMapInputVariable(Node, TEXT("2"), &SourceKind))
 			{
 				if (SourceKind == EMapSourceKind::CharacterVariable || SourceKind == EMapSourceKind::RunScriptOutput ||
-					SourceKind == EMapSourceKind::DataAsset)
+					SourceKind == EMapSourceKind::DataAsset || SourceKind == EMapSourceKind::ExecutionOutput)
 				{
 					// Read-only-terminal chain (charvar, runScript output or `.sfd`
 					// accessor): HTML's setMap SNAPSHOTS the entries into fresh
@@ -3625,18 +3636,18 @@ void UStoryFlowComponent::HandleMapModify(FStoryFlowNode* Node)
 		return;
 	}
 
-	if (SourceKind == EMapSourceKind::CharacterVariable || SourceKind == EMapSourceKind::RunScriptOutput ||
-		SourceKind == EMapSourceKind::DataAsset)
+	const bool bDetached = SourceKind == EMapSourceKind::CharacterVariable || SourceKind == EMapSourceKind::RunScriptOutput
+		|| SourceKind == EMapSourceKind::DataAsset || SourceKind == EMapSourceKind::ExecutionOutput;
+	if (bDetached)
 	{
-		// Read-only-terminal chain (charvar, runScript output or `.sfd` accessor): HTML hands the
-		// mutator a THROWAWAY fresh Map — the charvar's stored variable / the
-		// dead invocation's output is observably unchanged and no variable-change
-		// dispatch fires. Skip the mutation AND the notify (observable no-op):
-		// these sources are read-only per contract — use setCharacterVar to
-		// write charvars; runScript outputs are a snapshot of a dead invocation.
-		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Map mutator node %s resolves to a read-only map source (character variable, runScript output or Data Asset) - mutation skipped"), *Node->Id);
-		HandleSetNodeEnd(Node, FlowHandle);
-		return;
+		// Copy before GetNodeState can rehash the source snapshot's storage.
+		FStoryFlowVariable Snapshot = *Var;
+		Snapshot.Value.DeepCopyMap();
+		FNodeRuntimeState& State = ExecutionContext.GetNodeState(Node->Id);
+		State.MapExecutionOutput = MoveTemp(Snapshot);
+		State.bHasMapExecutionOutput = true;
+		Var = &State.MapExecutionOutput;
+		ExecutionContext.ClearEvaluationCache();
 	}
 
 	TArray<FStoryFlowMapEntry>& Map = Var->Value.GetMapMutable();
@@ -3680,7 +3691,7 @@ void UStoryFlowComponent::HandleMapModify(FStoryFlowNode* Node)
 		break;
 	}
 
-	NotifyVariableChanged(*Var, SourceKind == EMapSourceKind::GlobalVariable);
+	if (!bDetached) { NotifyVariableChanged(*Var, SourceKind == EMapSourceKind::GlobalVariable); }
 	HandleSetNodeEnd(Node, FlowHandle);
 }
 
@@ -4294,6 +4305,7 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 		if (CharVar && CharVar->Type == EStoryFlowVariableType::Map)
 		{
 			CharVar->Value.SetMap(NewEntries); // fresh storage — never aliases the source
+			InvalidateVariableReads();
 			OnCharacterVariableChanged.Broadcast(CharacterPath, VariableName, CharVar->Value);
 		}
 		else
@@ -4504,7 +4516,14 @@ bool UStoryFlowComponent::TryReadDataAssetSetInput(FStoryFlowNode* Node, FStoryF
 		// FStoryFlowVariant::SetArray to read one off, and this node is the LAST writer before the
 		// store, so an untyped value here is what U3's save key would serialize. The ladder has
 		// already proved DeclMatches, so the snapshot type IS the chain's declared type.
-		OutValue.SetArray(EvaluateTypedArrayInput(Node, Data.VariableType, ArraySuffix), ParseVariableType(Data.VariableType));
+		const EStoryFlowVariableType ElementType = ParseVariableType(Data.VariableType);
+		const EStoryFlowVariableType StorageType = (ElementType == EStoryFlowVariableType::Image || ElementType == EStoryFlowVariableType::Audio || ElementType == EStoryFlowVariableType::Character) ? EStoryFlowVariableType::String : ElementType;
+		const TArray<FStoryFlowVariant> Elements = EvaluateTypedArrayInput(Node, Data.VariableType, ArraySuffix);
+		for (const FStoryFlowVariant& Element : Elements)
+		{
+			if (Element.IsArray() || Element.GetType() != StorageType) { return false; }
+		}
+		OutValue.SetArray(Elements, ElementType);
 		return true;
 	}
 
@@ -4572,7 +4591,13 @@ void UStoryFlowComponent::HandleSetDataAssetVariable(FStoryFlowNode* Node)
 	// false for an unwired pin, which is why TryReadDataAssetSetInput checks the edge itself on
 	// every branch instead of trusting an evaluator's fallback.
 	FStoryFlowVariant NewValue;
-	if (!TryReadDataAssetSetInput(Node, NewValue))
+	bool bResolvedInput;
+	{
+		TGuardValue<bool> Capture(ExecutionContext.bCaptureReadFailures, true);
+		const uint64 FailuresBefore = ExecutionContext.ReadFailures;
+		bResolvedInput = TryReadDataAssetSetInput(Node, NewValue) && ExecutionContext.ReadFailures == FailuresBefore;
+	}
+	if (!bResolvedInput)
 	{
 		// NOT latched, unlike the ladder's reasons: this names a wiring mistake on an EXEC node
 		// the author just ran, and an exec node fires far less often than a condition
@@ -4825,6 +4850,7 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 
 void UStoryFlowComponent::NotifyVariableChanged(const FStoryFlowVariable& Variable, bool bIsGlobal)
 {
+	InvalidateVariableReads();
 	OnVariableChanged.Broadcast(Variable, bIsGlobal);
 
 	// Live variable interpolation: If dialogue is active, re-interpolate text and update UI

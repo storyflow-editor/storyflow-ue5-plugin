@@ -1040,6 +1040,7 @@ protected:
 	 * shared with the subsystem's mirror of these accessors.
 	 */
 	bool DropCachesAfterDataAssetWrite(bool bWritten);
+	void InvalidateVariableReads();
 
 	/**
 	 * THE LANGUAGE every lookup on this component runs in (localization spec §9).

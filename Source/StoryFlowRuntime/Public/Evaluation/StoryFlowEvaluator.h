@@ -10,16 +10,10 @@ struct FStoryFlowNode;
 class UStoryFlowScriptAsset;
 
 /**
- * Where a resolved map input chain terminated (see ResolveMapInputVariable).
- * CharacterVariable, RunScriptOutput and DataAsset sources are READ-ONLY per the
- * cross-runtime contract: the HTML runtime hands mutators a throwaway/converted
- * Map for both (mutations never persist), and setMap SNAPSHOTS rather than
- * aliases. ScriptVariable vs GlobalVariable carries the terminal node's scope
- * flag for variable-change notifications. DataAsset is read-only for the same
- * reason: the HTML runtime builds a FRESH Map off a `.sfd` read (never a live
- * reference into the store), so a map mutator wired to one observably changes
- * nothing — and the store's copy-on-read contract (§3) forbids handing graph
- * code a pointer it could write the seed through.
+ * Terminal storage for a resolved map input. Ordinary script/global maps stay live and alias
+ * through SetMap. Character, RunScript, Data Asset, and completed detached outputs are copied
+ * by mutators: execution retains the produced map for downstream reads, without implicitly
+ * writing back to the source. Explicit SetDataAssetVariable/SetCharacterVar performs writeback.
  */
 enum class EMapSourceKind : uint8
 {
@@ -28,7 +22,8 @@ enum class EMapSourceKind : uint8
 	GlobalVariable,
 	CharacterVariable,
 	RunScriptOutput,
-	DataAsset
+	DataAsset,
+	ExecutionOutput
 };
 
 /**

@@ -500,7 +500,7 @@ FStoryFlowVariant BareValueFromJson(const TSharedPtr<FJsonValue>& JsonValue, con
 					continue;
 				}
 				FStoryFlowMapEntry Entry;
-				Entry.Key = VariantFromJson(KeyField, Declaration.KeyType);
+				Entry.Key = VariantFromJson(KeyField, Declaration.KeyType == EStoryFlowVariableType::Enum ? EStoryFlowVariableType::String : Declaration.KeyType);
 				Entry.Value = VariantFromJson((*EntryObj)->TryGetField(TEXT("value")), Declaration.ValueType);
 				Entries.Add(Entry);
 			}
@@ -551,6 +551,58 @@ TSharedPtr<FJsonObject> DataAssetOverlayToJson(
 	return Root;
 }
 
+namespace
+{
+bool SavedScalarMatches(const TSharedPtr<FJsonValue>& Value, EStoryFlowVariableType Type, const TArray<FString>& EnumValues)
+{
+	if (!Value.IsValid()) { return false; }
+	switch (Type)
+	{
+	case EStoryFlowVariableType::Boolean:
+		return Value->Type == EJson::Boolean;
+	case EStoryFlowVariableType::Integer:
+	case EStoryFlowVariableType::Float:
+	{
+		double Number;
+		if (Value->Type != EJson::Number || !Value->TryGetNumber(Number) || !FMath::IsFinite(Number)) { return false; }
+		return Type == EStoryFlowVariableType::Integer
+			? Number >= MIN_int32 && Number <= MAX_int32 && FMath::FloorToDouble(Number) == Number
+			: FMath::IsFinite(static_cast<float>(Number));
+	}
+	case EStoryFlowVariableType::String:
+	case EStoryFlowVariableType::Image:
+	case EStoryFlowVariableType::Audio:
+	case EStoryFlowVariableType::Character:
+	case EStoryFlowVariableType::Enum:
+		return Value->Type == EJson::String && (Type != EStoryFlowVariableType::Enum || EnumValues.IsEmpty() || EnumValues.ContainsByPredicate([&Value](const FString& Option) { return Option.Equals(Value->AsString(), ESearchCase::CaseSensitive); }));
+	default:
+		return false;
+	}
+}
+
+bool SavedSlotMatches(const TSharedPtr<FJsonValue>& Value, const FStoryFlowVariable& Declaration)
+{
+	if (Declaration.Type == EStoryFlowVariableType::Map || Declaration.bIsArray)
+	{
+		const TArray<TSharedPtr<FJsonValue>>* Entries;
+		if (!Value.IsValid() || !Value->TryGetArray(Entries)) { return false; }
+		for (const auto& Entry : *Entries)
+		{
+			if (Declaration.Type == EStoryFlowVariableType::Map)
+			{
+				const TSharedPtr<FJsonObject>* Object;
+				if (!Entry.IsValid() || !Entry->TryGetObject(Object)
+					|| !SavedScalarMatches((*Object)->TryGetField(TEXT("key")), Declaration.KeyType, Declaration.KeyEnumValues)
+					|| !SavedScalarMatches((*Object)->TryGetField(TEXT("value")), Declaration.ValueType, Declaration.ValueEnumValues)) { return false; }
+			}
+			else if (!SavedScalarMatches(Entry, Declaration.Type, Declaration.EnumValues)) { return false; }
+		}
+		return true;
+	}
+	return SavedScalarMatches(Value, Declaration.Type, Declaration.EnumValues);
+}
+}
+
 /**
  * REPLACE the overlay with the saved table (contract §7). Clears FIRST and unconditionally: an
  * absent or malformed key clears, which is seed state, which is exactly the state such a save was
@@ -566,8 +618,8 @@ TSharedPtr<FJsonObject> DataAssetOverlayToJson(
  *    declares the id) already makes it dead data. Dropping it is the typed-language shape of the
  *    same "it can never be read" argument.
  *
- * Values are NOT otherwise re-validated: a stale-typed entry degrades at the accessor via §6.1,
- * exactly as a stale session write does.
+ * Validate raw JSON before typed conversion. An incompatible slot is dropped as a whole,
+ * revealing its current inherited/default value; compatible sibling slots survive.
  */
 void DataAssetOverlayFromJson(
 	const TSharedPtr<FJsonObject>& Root,
@@ -613,6 +665,11 @@ void DataAssetOverlayFromJson(
 			if (!Declaration)
 			{
 				UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Save load dropped Data Asset value '%s.%s' - the chain no longer declares it"), *AssetId, *VariableId);
+				continue;
+			}
+			if (!SavedSlotMatches(ValuePair.Value, *Declaration))
+			{
+				UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Save load dropped incompatible Data Asset value '%s.%s'"), *AssetId, *VariableId);
 				continue;
 			}
 			Values.Add(VariableId, BareValueFromJson(ValuePair.Value, *Declaration));

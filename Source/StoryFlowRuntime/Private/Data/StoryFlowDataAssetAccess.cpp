@@ -91,7 +91,7 @@ namespace
 			{
 				return false;
 			}
-			OutValue.SetString(bIsName ? ResolveName(Subsystem, CharDef.Name, LanguageCode) : CharDef.Image);
+			OutValue.SetString(bIsName ? (CharDef.bNameIsLiteral ? CharDef.Name : ResolveName(Subsystem, CharDef.Name, LanguageCode)) : CharDef.Image);
 			return true;
 		}
 
@@ -118,6 +118,7 @@ namespace
 			if (bIsName)
 			{
 				CharDef.Name = Value.ToString();
+				CharDef.bNameIsLiteral = true;
 			}
 			else
 			{
@@ -140,7 +141,7 @@ namespace
 	{
 		if (IsCharacterNameBuiltin(VariableName))
 		{
-			OutValue.SetString(ResolveName(Subsystem, CharDef.Name, LanguageCode));
+			OutValue.SetString(CharDef.bNameIsLiteral ? CharDef.Name : ResolveName(Subsystem, CharDef.Name, LanguageCode));
 			return true;
 		}
 		if (IsCharacterImageBuiltin(VariableName))
@@ -224,7 +225,7 @@ namespace
 	{
 		// The write lands at the referenced asset's OWN level (contract section 5). The cache drop
 		// that used to sit beside this belongs to the caller now - see the header.
-		return StoryFlowDataAssets::TrySet(*Store.Seed, *Store.Overlay, DataAsset->AssetId, Declaration->Id, Value);
+		return StoryFlowDataAssets::TrySet(Store, DataAsset->AssetId, Declaration->Id, Value);
 	}
 }
 
@@ -265,7 +266,9 @@ namespace StoryFlowDataAssetAccess
 		// overlay: the character system is the one runtime-state owner.
 		if (FStoryFlowCharacterDef* BridgedCharacter = DataAsset ? FindBridgedCharacter(Subsystem, DataAsset->AssetId) : nullptr)
 		{
-			return TrySetCharacterScalarByName(*BridgedCharacter, VariableName, ExpectedType, Value);
+			const bool bWritten = TrySetCharacterScalarByName(*BridgedCharacter, VariableName, ExpectedType, Value);
+			if (bWritten) { Subsystem.NotifySharedStateChanged(); }
+			return bWritten;
 		}
 
 		StoryFlowDataAssets::FStoreRef Store;
@@ -278,7 +281,7 @@ namespace StoryFlowDataAssetAccess
 		// The write lands at THE REFERENCED ASSET'S OWN LEVEL, always (contract section 5) - the
 		// same store call the Set node makes, so a host write cascades to descendants exactly as
 		// a scripted one does and rides the next save the same way.
-		return StoryFlowDataAssets::TrySet(*Store.Seed, *Store.Overlay, DataAsset->AssetId, Declaration->Id, Value);
+		return StoryFlowDataAssets::TrySet(Store, DataAsset->AssetId, Declaration->Id, Value);
 	}
 
 	bool TryGetVariant(UStoryFlowSubsystem& Subsystem, UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
@@ -344,7 +347,7 @@ namespace StoryFlowDataAssetAccess
 		// declared, so a single mismatch refuses the whole write.
 		for (const FStoryFlowVariant& Element : Elements)
 		{
-			if (!DataAssetAccessorTypeMatches(Declaration->Type, Element.GetType()))
+			if (Element.IsArray() || !DataAssetAccessorTypeMatches(Declaration->Type, Element.GetType()))
 			{
 				UE_LOG(LogStoryFlow, Verbose,
 					TEXT("StoryFlow: an element offered to '%s.%s' does not match its declared type"), *DataAsset->AssetId, *VariableName);
@@ -391,7 +394,8 @@ namespace StoryFlowDataAssetAccess
 		Entries.Reserve(Keys.Num());
 		for (int32 Index = 0; Index < Keys.Num(); ++Index)
 		{
-			if (!DataAssetKeyTypeMatches(DeclaredKeyType, Keys[Index].GetType())
+			if (Keys[Index].IsArray() || Values[Index].IsArray()
+				|| !DataAssetKeyTypeMatches(DeclaredKeyType, Keys[Index].GetType())
 				|| !DataAssetAccessorTypeMatches(DeclaredValueType, Values[Index].GetType()))
 			{
 				UE_LOG(LogStoryFlow, Verbose,

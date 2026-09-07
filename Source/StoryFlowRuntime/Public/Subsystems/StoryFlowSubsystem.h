@@ -103,12 +103,9 @@ public:
 	// data tables there. Both surfaces run ONE ladder (StoryFlowDataAssetAccess), so they cannot
 	// answer a question two ways - the rule the engine contract states for mirrored surfaces.
 	//
-	// Two deliberate differences from the component's copies. NO EVALUATOR CACHE DROP after a
-	// write, because this class owns no evaluator; a component with a live dialogue drops its own
-	// on its own writes, and a subsystem write reaches that dialogue's memo at its next rebuild -
-	// the asymmetry global-variable writes have always had. And reads run in THIS class's
-	// language, where a component on a project with no sidecar falls back to its own LanguageCode
-	// export; a localized project ignores the difference.
+	// Component and subsystem writes advance the shared read generation. Each context drops
+	// derived memos at its next evaluation while retaining completed execution outputs.
+	// A component without a localization sidecar retains its legacy LanguageCode setting.
 
 	/** Get a Data Asset's boolean variable, resolved through its parent chain and this session's writes. */
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
@@ -315,17 +312,14 @@ public:
 	 *
 	 * WRITES ARE SUBSYSTEM-WIDE, CACHE INVALIDATION IS COMPONENT-LOCAL. Every component shares
 	 * these two maps, so a write through one is immediately visible to a read through any other.
-	 * The evaluation cache is not shared: the component that made the write clears its own, and
-	 * a different component already mid-dialogue keeps whatever its notBool / andBool memo held
-	 * until its next dialogue rebuild clears it. Data Asset reads are never memoized themselves,
-	 * so this only reaches conditions built ON one.
-	 *
-	 * This is the same asymmetry global variables have always had, not something the .sfd system
-	 * introduced, and it is documented rather than fixed: the subsystem holds no evaluator
-	 * handles, and a cross-component sweep would be new machinery for a case (two components in
-	 * simultaneous dialogues sharing one condition) no shipping project has.
+	 * Store writes advance the shared generation. Every context invalidates derived memos on
+	 * its next evaluation; completed operation outputs and active loop/call state survive.
+
 	 */
-	StoryFlowDataAssets::FStoreRef GetDataAssetStore() { return { &DataAssetSeed, &DataAssetOverlay }; }
+	StoryFlowDataAssets::FStoreRef GetDataAssetStore() { return { &DataAssetSeed, &DataAssetOverlay, &SharedState }; }
+
+	/** Invalidate derived reads in every live context on its next evaluation. */
+	void NotifySharedStateChanged() { ++SharedState.Revision; }
 
 	/**
 	 * Rebuild the seed from the project's imported Data Assets and clear the overlay
@@ -337,10 +331,9 @@ public:
 	 * Drop every session Data Asset write, leaving the seed alone (contract §3 reset).
 	 * This is the game-restart semantic; the seed only changes when the project does.
 	 *
-	 * A BETWEEN-DIALOGUE call. It clears no evaluation cache (the subsystem holds no evaluator)
-	 * and re-arms no warning latch (that is FStoryFlowExecutionContext::Reset, which runs at
-	 * dialogue stop). Called mid-dialogue it still drops the writes, but a condition already
-	 * memoized above a Data Asset accessor keeps its old answer until the next dialogue rebuild.
+	 * Clears session writes and advances the shared read generation. Live contexts re-evaluate
+	 * derived conditions at their next read; the game owns presentation refresh timing.
+
 	 */
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|DataAssets")
 	void ResetDataAssetOverlay();
@@ -422,6 +415,7 @@ public:
 	void ResolveStringVariableValues(TMap<FString, FStoryFlowVariable>& Variables);
 
 private:
+	StoryFlowDataAssets::FSharedState SharedState;
 	/** Try to auto-load project from default location */
 	void TryAutoLoadProject();
 

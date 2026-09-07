@@ -43,6 +43,8 @@ void UStoryFlowSubsystem::SetProject(UStoryFlowProjectAsset* NewProject)
 	const FString LanguageOnEntry = CurrentLanguage;
 
 	ProjectAsset = NewProject;
+	SharedState.Project = NewProject;
+	NotifySharedStateChanged();
 
 	if (ProjectAsset)
 	{
@@ -277,6 +279,7 @@ bool UStoryFlowSubsystem::SetDataAssetMapVariable(UStoryFlowDataAssetAsset* Data
 
 void UStoryFlowSubsystem::ResetGlobalVariables()
 {
+	NotifySharedStateChanged();
 	if (ProjectAsset)
 	{
 		GlobalVariables = ProjectAsset->GlobalVariables;
@@ -288,6 +291,7 @@ void UStoryFlowSubsystem::ResetGlobalVariables()
 
 void UStoryFlowSubsystem::ResetRuntimeCharacters()
 {
+	NotifySharedStateChanged();
 	if (ProjectAsset)
 	{
 		RuntimeCharacters.Empty();
@@ -316,6 +320,7 @@ void UStoryFlowSubsystem::ResetRuntimeCharacters()
 
 void UStoryFlowSubsystem::ResetDataAssetSeed()
 {
+	NotifySharedStateChanged();
 	// Contract §3: init installs the seed AND clears the overlay. Reseeding without clearing
 	// would leave session writes pointing at a table that no longer describes them.
 	StoryFlowDataAssets::ResetOverlay(DataAssetOverlay);
@@ -331,6 +336,7 @@ void UStoryFlowSubsystem::ResetDataAssetSeed()
 
 void UStoryFlowSubsystem::ResetDataAssetOverlay()
 {
+	NotifySharedStateChanged();
 	StoryFlowDataAssets::ResetOverlay(DataAssetOverlay);
 	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Data Asset session writes cleared"));
 }
@@ -352,6 +358,7 @@ bool UStoryFlowSubsystem::SetLanguage(const FString& LanguageCode)
 		// has to answer the new code inside the broadcast, and a handler that re-enters
 		// SetLanguage has to be measured against the new value so it no-ops instead of recursing.
 		CurrentLanguage = Next;
+		NotifySharedStateChanged();
 		UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Language set to '%s'"), *CurrentLanguage);
 		OnLanguageChanged.Broadcast(CurrentLanguage);
 	}
@@ -507,6 +514,7 @@ bool UStoryFlowSubsystem::LoadFromSlot(const FString& SlotName, int32 UserIndex)
 		return false;
 	}
 
+	NotifySharedStateChanged();
 	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Loaded from slot '%s' (%d globals, %d characters, %d once-only, %d data assets written)"),
 		*SlotName, GlobalVariables.Num(), RuntimeCharacters.Num(), UsedOnceOnlyOptions.Num(), DataAssetOverlay.Num());
 	return true;

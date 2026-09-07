@@ -40,6 +40,13 @@ namespace StoryFlowDataAssets
 	 */
 	using FOverlay = TMap<FString, TMap<FString, FStoryFlowVariant>>;
 
+	/** Shared read generation; owned beside the seed/overlay for the same lifetime. */
+	struct FSharedState
+	{
+		uint64 Revision = 0;
+		TWeakObjectPtr<UStoryFlowProjectAsset> Project;
+	};
+
 	/**
 	 * The two halves of the store as ONE non-owning reference, so callers that hold the pair
 	 * (the execution context, and every signature that threads it) cannot end up with a seed
@@ -54,6 +61,9 @@ namespace StoryFlowDataAssets
 	{
 		const FSeed* Seed = nullptr;
 		FOverlay* Overlay = nullptr;
+		FSharedState* SharedState = nullptr;
+
+		void NotifyChanged() const { if (SharedState) { ++SharedState->Revision; } }
 
 		bool IsValid() const { return Seed != nullptr && Overlay != nullptr; }
 	};
@@ -263,6 +273,12 @@ namespace StoryFlowDataAssets
 	 * the Blueprint surface does not, so this reports the refusal rather than logging it.
 	 */
 	STORYFLOWRUNTIME_API bool TrySet(const FSeed& Seed, FOverlay& Overlay, const FString& AssetId, const FString& VariableId, const FStoryFlowVariant& Value);
+	inline bool TrySet(const FStoreRef& Store, const FString& AssetId, const FString& VariableId, const FStoryFlowVariant& Value)
+	{
+		if (!Store.IsValid() || !TrySet(*Store.Seed, *Store.Overlay, AssetId, VariableId, Value)) { return false; }
+		Store.NotifyChanged();
+		return true;
+	}
 
 	/**
 	 * Does the seed's declaration still match the spawn-time snapshot an accessor node's pins

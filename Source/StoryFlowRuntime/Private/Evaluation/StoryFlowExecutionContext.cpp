@@ -40,6 +40,7 @@ void FStoryFlowExecutionContext::InitializeWithSubsystem(UStoryFlowProjectAsset*
 	ExternalCharacters = InCharacters;
 	ExternalUsedOnceOnlyOptions = InUsedOnceOnlyOptions;
 	DataAssetStore = InDataAssetStore;
+	SeenSharedRevision = InDataAssetStore.SharedState ? InDataAssetStore.SharedState->Revision : 0;
 	CharacterIdToPath = InCharacterIdToPath;
 	ActiveLanguage = InActiveLanguage;
 
@@ -105,6 +106,7 @@ FStoryFlowNode* FStoryFlowExecutionContext::GetNode(const FString& NodeId)
 			return Node;
 		}
 	}
+	MarkReadFailure();
 	return nullptr;
 }
 
@@ -132,6 +134,7 @@ void FStoryFlowExecutionContext::SetVariable(const FString& VariableId, const FS
 	if (FStoryFlowVariable* Variable = FindVariable(VariableId, bIsGlobal))
 	{
 		Variable->Value = Value;
+		NotifyStateChanged();
 	}
 	else
 	{
@@ -160,7 +163,8 @@ bool FStoryFlowExecutionContext::TryResolveDataAsset(const FString& AssetId, con
 	// the project globals. TryRead consults the project's ladder directly, so a `.sfd` value
 	// reads the same inside a dialogue and outside one — which is why the tripwire on the two
 	// GetString ladders does not extend to a third here.
-	return StoryFlowDataAssets::TryRead(DataAssetStore, Project.Get(), ActiveLanguage ? *ActiveLanguage : FString(), AssetId, VariableId, OutValue);
+	const UStoryFlowProjectAsset* ReadProject = DataAssetStore.SharedState ? DataAssetStore.SharedState->Project.Get() : Project.Get();
+	return StoryFlowDataAssets::TryRead(DataAssetStore, ReadProject, ActiveLanguage ? *ActiveLanguage : FString(), AssetId, VariableId, OutValue);
 }
 
 bool FStoryFlowExecutionContext::TrySetDataAsset(const FString& AssetId, const FString& VariableId, const FStoryFlowVariant& Value)
@@ -169,7 +173,7 @@ bool FStoryFlowExecutionContext::TrySetDataAsset(const FString& AssetId, const F
 	{
 		return false;
 	}
-	return StoryFlowDataAssets::TrySet(*DataAssetStore.Seed, *DataAssetStore.Overlay, AssetId, VariableId, Value);
+	return StoryFlowDataAssets::TrySet(DataAssetStore, AssetId, VariableId, Value);
 }
 
 TArray<FString> FStoryFlowExecutionContext::GetDataAssetVariableNames(const FString& AssetId) const
@@ -403,6 +407,7 @@ void FStoryFlowExecutionContext::SetCharacterVariable(const FString& CharacterPa
 	{
 		CharDef->Name = Value.ToString();
 		CharDef->bNameIsLiteral = true;
+		NotifyStateChanged();
 		return;
 	}
 
@@ -410,6 +415,7 @@ void FStoryFlowExecutionContext::SetCharacterVariable(const FString& CharacterPa
 	if (IsCharacterImageBuiltin(VariableName))
 	{
 		CharDef->Image = Value.GetString();
+		NotifyStateChanged();
 		return;
 	}
 
@@ -417,6 +423,7 @@ void FStoryFlowExecutionContext::SetCharacterVariable(const FString& CharacterPa
 	if (FStoryFlowVariable* Variable = CharDef->Variables.Find(VariableName))
 	{
 		Variable->Value = Value;
+		NotifyStateChanged();
 	}
 	else
 	{
@@ -503,7 +510,7 @@ bool FStoryFlowExecutionContext::PushScript(const FString& ScriptPath, const FSt
 		return false;
 	}
 
-	UStoryFlowProjectAsset* Proj = Project.Get();
+	UStoryFlowProjectAsset* Proj = DataAssetStore.SharedState ? DataAssetStore.SharedState->Project.Get() : Project.Get();
 	if (!Proj)
 	{
 		return false;
@@ -583,13 +590,13 @@ bool FStoryFlowExecutionContext::PopScript()
 
 FString FStoryFlowExecutionContext::GetString(const FString& Key) const
 {
-	const UStoryFlowProjectAsset* Proj = Project.Get();
+	const UStoryFlowProjectAsset* Proj = DataAssetStore.SharedState ? DataAssetStore.SharedState->Project.Get() : Project.Get();
 	return GetString(Key, Proj && Proj->bHasLocalization && ActiveLanguage ? *ActiveLanguage : SeedLanguageCode);
 }
 
 FString FStoryFlowExecutionContext::GetString(const FString& Key, const FString& LanguageCode) const
 {
-	UStoryFlowProjectAsset* Proj = Project.Get();
+	UStoryFlowProjectAsset* Proj = DataAssetStore.SharedState ? DataAssetStore.SharedState->Project.Get() : Project.Get();
 
 	// TIER 1, the localization overlay (spec §9). PROJECT-WIDE and ahead of the script table
 	// because the sidecar's id namespace is project-wide: the export keys one row per shipped id
@@ -913,6 +920,7 @@ void FStoryFlowExecutionContext::RebuildGlobalNameIndex()
 
 FStoryFlowVariable* FStoryFlowExecutionContext::FindVariableByName(const FString& VariableName, bool bIsGlobal)
 {
+	RefreshSharedState();
 	TMap<FString, FString>& Index = bIsGlobal ? GlobalVariableNameIndex : LocalVariableNameIndex;
 
 	// Fast path: O(1) index lookup
@@ -962,7 +970,26 @@ void FStoryFlowExecutionContext::ClearEvaluationCache()
 {
 	for (auto& Pair : NodeRuntimeStates)
 	{
+		if (Pair.Value.bIsExecutionOutput) { continue; }
 		Pair.Value.bHasCachedOutput = false;
 		Pair.Value.CachedOutput.Reset();
 	}
+}
+
+void FStoryFlowExecutionContext::RefreshSharedState()
+{
+	if (DataAssetStore.SharedState && SeenSharedRevision != DataAssetStore.SharedState->Revision)
+	{
+		SeenSharedRevision = DataAssetStore.SharedState->Revision;
+		// Retain the running script/local snapshot, but rebind every project-based read together.
+		Project = DataAssetStore.SharedState->Project;
+		RebuildGlobalNameIndex();
+		ClearEvaluationCache();
+	}
+}
+
+void FStoryFlowExecutionContext::NotifyStateChanged()
+{
+	DataAssetStore.NotifyChanged();
+	ClearEvaluationCache();
 }

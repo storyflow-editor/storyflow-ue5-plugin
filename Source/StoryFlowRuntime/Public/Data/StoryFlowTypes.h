@@ -306,6 +306,10 @@ private:
 	UPROPERTY()
 	EStoryFlowVariableType Type = EStoryFlowVariableType::None;
 
+	// Arrays carry their element type, so shape is tracked separately (including empty arrays).
+	UPROPERTY()
+	uint8 ValueShape = 0; // 0: legacy/unspecified, 1: scalar or map, 2: array
+
 	UPROPERTY()
 	bool bBoolValue = false;
 
@@ -339,6 +343,9 @@ private:
 public:
 	// Type checking
 	bool IsValid() const { return Type != EStoryFlowVariableType::None; }
+	bool IsArray() const { return ValueShape == 2; }
+	/** Restore shape from a declaration when reading legacy assets without shape metadata. */
+	void SetArrayShape(bool bIsArray) { ValueShape = bIsArray ? 2 : 1; }
 	// Note: In Blueprint, use FStoryFlowVariable.Type instead (BlueprintReadOnly).
 	// GetType() is C++ only — not a UFUNCTION, and FStoryFlowVariant's members are private.
 	EStoryFlowVariableType GetType() const { return Type; }
@@ -347,35 +354,41 @@ public:
 	void SetBool(bool Value)
 	{
 		Type = EStoryFlowVariableType::Boolean;
+		ValueShape = 1;
 		bBoolValue = Value;
 	}
 
 	void SetInt(int32 Value)
 	{
 		Type = EStoryFlowVariableType::Integer;
+		ValueShape = 1;
 		IntValue = Value;
 	}
 
 	void SetFloat(float Value)
 	{
 		Type = EStoryFlowVariableType::Float;
+		ValueShape = 1;
 		FloatValue = Value;
 	}
 
 	void SetString(const FString& Value)
 	{
 		Type = EStoryFlowVariableType::String;
+		ValueShape = 1;
 		StringValue = Value;
 	}
 
 	void SetEnum(const FString& Value)
 	{
 		Type = EStoryFlowVariableType::Enum;
+		ValueShape = 1;
 		StringValue = Value;
 	}
 
 	void SetArray(const TArray<FStoryFlowVariant>& Value)
 	{
+		ValueShape = 2;
 		ArrayValue = Value;
 		MapValue.Reset(); // a variant holds either array or map data, never both
 		// Infer type from first element, or keep current type
@@ -463,6 +476,7 @@ public:
 
 	TArray<FStoryFlowVariant>& GetArrayMutable()
 	{
+		ValueShape = 2;
 		return ArrayValue;
 	}
 
@@ -572,6 +586,7 @@ struct FStoryFlowMapEntry
 
 inline void FStoryFlowVariant::SetMap(const TArray<FStoryFlowMapEntry>& Value)
 {
+	ValueShape = 1;
 	Type = EStoryFlowVariableType::Map;
 	MapValue = MakeShared<TArray<FStoryFlowMapEntry>>(Value); // fresh storage — never aliases
 	ArrayValue.Empty(); // a variant holds either array or map data, never both
@@ -595,6 +610,7 @@ inline TArray<FStoryFlowMapEntry>& FStoryFlowVariant::GetMapMutable()
 inline void FStoryFlowVariant::AliasMap(FStoryFlowVariant& Source)
 {
 	Source.GetMapMutable(); // ensure Source has storage so the alias holds while empty
+	ValueShape = 1;
 	Type = EStoryFlowVariableType::Map;
 	MapValue = Source.MapValue; // SHARE the live storage (see MapValue doc)
 	ArrayValue.Empty(); // a variant holds either array or map data, never both
@@ -610,6 +626,7 @@ inline void FStoryFlowVariant::DeepCopyMap()
 
 inline void FStoryFlowVariant::Reset()
 {
+	ValueShape = 1;
 	Type = EStoryFlowVariableType::None;
 	bBoolValue = false;
 	IntValue = 0;
