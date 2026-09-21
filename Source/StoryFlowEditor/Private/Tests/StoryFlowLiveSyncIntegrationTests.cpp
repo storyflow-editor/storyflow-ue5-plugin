@@ -515,10 +515,20 @@ namespace StoryFlowLiveSyncProbe
 		TWeakObjectPtr<UStoryFlowEditorSubsystem> Subsystem;
 		FString ResultDir;
 		FString ExportDir;
+		FString BaseId;
 		FString DialogueId;
 		FString FirstLine;
 		FString SecondLine;
 		FString FrenchLine;
+		FString TitleId;
+		FString OptionId;
+		FString OptionSource;
+		FString FrenchOption;
+		FString ElderId;
+		FString ElderName;
+		FString FrenchElderName;
+		FString BaseTitle;
+		FString FrenchBaseTitle;
 		int32 Stage = 0;
 		double Started = FPlatformTime::Seconds();
 		TUniquePtr<StoryFlowTestWorld::FScopedWorld> PlayWorld;
@@ -526,10 +536,14 @@ namespace StoryFlowLiveSyncProbe
 		bool bPlayback = true;
 
 		FWaitForSync(FAutomationTestBase* InTest, UStoryFlowEditorSubsystem* InSubsystem, const FString& InResultDir,
-			const FString& InExportDir, const FString& InDialogueId, const FString& InFirstLine, const FString& InSecondLine,
-			const FString& InFrenchLine)
-			: Test(InTest), Subsystem(InSubsystem), ResultDir(InResultDir), ExportDir(InExportDir), DialogueId(InDialogueId),
-			  FirstLine(InFirstLine), SecondLine(InSecondLine), FrenchLine(InFrenchLine) {}
+			const FString& InExportDir, const FString& InBaseId, const FString& InDialogueId, const FString& InFirstLine, const FString& InSecondLine,
+			const FString& InFrenchLine, const FString& InTitleId, const FString& InOptionId, const FString& InOptionSource, const FString& InFrenchOption,
+			const FString& InElderId, const FString& InElderName, const FString& InFrenchElderName,
+			const FString& InBaseTitle, const FString& InFrenchBaseTitle)
+			: Test(InTest), Subsystem(InSubsystem), ResultDir(InResultDir), ExportDir(InExportDir), BaseId(InBaseId), DialogueId(InDialogueId),
+			  FirstLine(InFirstLine), SecondLine(InSecondLine), FrenchLine(InFrenchLine), TitleId(InTitleId), OptionId(InOptionId),
+			  OptionSource(InOptionSource), FrenchOption(InFrenchOption), ElderId(InElderId), ElderName(InElderName),
+			  FrenchElderName(InFrenchElderName), BaseTitle(InBaseTitle), FrenchBaseTitle(InFrenchBaseTitle) {}
 
 		bool ContinuePlayback(UStoryFlowEditorSubsystem* Live)
 		{
@@ -570,9 +584,9 @@ namespace StoryFlowLiveSyncProbe
 				bPlayback &= Test->TestEqual(TEXT("UMG button entered elder dialogue"), Elder.NodeId,
 					TEXT("34a307bb13d44de7b0f996ca1431bd74"));
 				bPlayback &= Test->TestTrue(TEXT("elder line"), Elder.Text.Contains(Expected));
-				bPlayback &= Test->TestEqual(TEXT("elder speaker"), Elder.Character.Name, TEXT("Elder Aldric"));
+				bPlayback &= Test->TestEqual(TEXT("elder speaker"), Elder.Character.Name, ElderName);
 				bPlayback &= Test->TestNotNull(TEXT("elder portrait resolved"), Elder.Character.Image.Get());
-				bPlayback &= Test->TestTrue(TEXT("UMG shows elder speaker"), Displayed.Contains(TEXT("Elder Aldric")));
+				bPlayback &= Test->TestTrue(TEXT("UMG shows elder speaker"), Displayed.Contains(ElderName));
 				bPlayback &= Test->TestTrue(TEXT("UMG shows elder option"), Displayed.Contains(TEXT("What kind of help?")));
 				TArray<UWidget*> ElderWidgets;
 				GatherWidgets(Widget, ElderWidgets);
@@ -617,13 +631,13 @@ namespace StoryFlowLiveSyncProbe
 				PlayWorld->Component->StopDialogue();
 				SlateWidget.Reset();
 				PlayWorld->Component->StartDialogueWithScript(TEXT("scripts/script_intro"));
-				bPlayback &= Choose(*Test, PlayWorld->Component, TEXT("Enter the village."));
+				bPlayback &= Choose(*Test, PlayWorld->Component, OptionSource);
 				bPlayback &= Choose(*Test, PlayWorld->Component, TEXT("I'm just passing through."));
 				bPlayback &= Test->TestTrue(TEXT("pass-through option ends dialogue"),
 					!PlayWorld->Component->GetCurrentDialogue().bIsValid);
 
 				PlayWorld->Component->StartDialogueWithScript(TEXT("scripts/script_intro"));
-				bPlayback &= Choose(*Test, PlayWorld->Component, TEXT("Enter the village."));
+				bPlayback &= Choose(*Test, PlayWorld->Component, OptionSource);
 				bPlayback &= Choose(*Test, PlayWorld->Component, TEXT("What kind of help?"));
 				bPlayback &= Choose(*Test, PlayWorld->Component, TEXT("That sounds dangerous. I'll pass."));
 				const FStoryFlowDialogueState Declined = PlayWorld->Component->GetCurrentDialogue();
@@ -633,7 +647,7 @@ namespace StoryFlowLiveSyncProbe
 				PlayWorld->Component->StopDialogue();
 				bPlayback &= CheckSaveLoad(*Test, PlayWorld->Subsystem, PlayWorld->Component, Live->GetProjectAsset());
 				PlayWorld->Component->StartDialogueWithScript(TEXT("scripts/script_intro"));
-				bPlayback &= Choose(*Test, PlayWorld->Component, TEXT("Enter the village."));
+				bPlayback &= Choose(*Test, PlayWorld->Component, OptionSource);
 				const FStoryFlowDialogueState RestoredElder = PlayWorld->Component->GetCurrentDialogue();
 				bPlayback &= Test->TestEqual(TEXT("loaded Elder reaches the dialogue UI"), RestoredElder.NodeId,
 					TEXT("34a307bb13d44de7b0f996ca1431bd74"));
@@ -685,15 +699,26 @@ namespace StoryFlowLiveSyncProbe
 			}
 			const TSharedPtr<FJsonObject> Sidecar = LoadJson(FPaths::Combine(ExportDir, TEXT("localization.json")));
 			const FStoryFlowStringTable* French = Project->LanguageStrings.Find(TEXT("fr"));
-			const FString Key = DialogueId + TEXT(".text");
-			const FString* Imported = French ? French->Entries.Find(Key) : nullptr;
 			const TSharedPtr<FJsonObject> Tables = Sidecar.IsValid() ? Sidecar->GetObjectField(TEXT("strings")) : nullptr;
 			const TSharedPtr<FJsonObject> FrenchWire = Tables.IsValid() ? Tables->GetObjectField(TEXT("fr")) : nullptr;
-			if (!Test->TestTrue(TEXT("imported localization sidecar and French intro agree"),
+			const TMap<FString, FString> ExpectedStrings = {
+				{ DialogueId + TEXT(".text"), FrenchLine },
+				{ OptionId, FrenchOption },
+				{ ElderId + TEXT(".cf_name"), FrenchElderName },
+				{ TitleId + TEXT(".value"), FrenchBaseTitle },
+			};
+			bool bStringsAgree = French != nullptr && FrenchWire.IsValid();
+			for (const TPair<FString, FString>& Entry : ExpectedStrings)
+			{
+				const FString* Imported = French ? French->Entries.Find(Entry.Key) : nullptr;
+				FString WireValue;
+				bStringsAgree &= Imported && *Imported == Entry.Value && FrenchWire.IsValid() &&
+					FrenchWire->TryGetStringField(Entry.Key, WireValue) && WireValue == Entry.Value;
+			}
+			if (!Test->TestTrue(TEXT("imported localization sidecar and multi-surface French table agree"),
 				Sidecar.IsValid() && Project->bHasLocalization && Project->SourceLanguage == TEXT("en") &&
 				Project->Languages.Num() == 1 && Project->Languages[0].Code == TEXT("fr") &&
-				Imported && *Imported == FrenchLine && FrenchWire.IsValid() &&
-				FrenchWire->GetStringField(Key) == FrenchLine))
+				bStringsAgree))
 			{
 				FFileHelper::SaveStringToFile(TEXT("localization import parity failed"), *FPaths::Combine(ResultDir, TEXT("failure.txt")));
 				Live->Disconnect();
@@ -722,18 +747,52 @@ namespace StoryFlowLiveSyncProbe
 			PlayWorld->Component->bAutoAddWidgetToViewport = false;
 			bPlayback &= Test->TestTrue(TEXT("Unreal runtime accepts French"), PlayWorld->Subsystem->SetLanguage(TEXT("fr")));
 			bPlayback &= Test->TestEqual(TEXT("active language is French"), PlayWorld->Subsystem->GetLanguage(), TEXT("fr"));
+			UStoryFlowDataAssetAsset* BaseAsset = Project->DataAssets.FindRef(BaseId);
+			bPlayback &= Test->TestNotNull(TEXT("localized base Data Asset imported"), BaseAsset);
+			bool bFoundTitle = false;
+			bPlayback &= Test->TestEqual(TEXT("authored Data Asset string localizes in French"),
+				PlayWorld->Subsystem->GetDataAssetStringVariable(BaseAsset, TEXT("Title"), bFoundTitle), FrenchBaseTitle);
+			bPlayback &= Test->TestTrue(TEXT("localized Data Asset Title found"), bFoundTitle);
+			bPlayback &= Test->TestTrue(TEXT("write source-shaped Data Asset literal"),
+				PlayWorld->Subsystem->SetDataAssetStringVariable(BaseAsset, TEXT("Title"), BaseTitle));
+			bPlayback &= Test->TestTrue(TEXT("switch to source for literal provenance"), PlayWorld->Subsystem->SetLanguage(TEXT("en")));
+			bPlayback &= Test->TestTrue(TEXT("switch back to French for literal provenance"), PlayWorld->Subsystem->SetLanguage(TEXT("fr")));
+			bPlayback &= Test->TestEqual(TEXT("host-written source-shaped string stays literal"),
+				PlayWorld->Subsystem->GetDataAssetStringVariable(BaseAsset, TEXT("Title"), bFoundTitle), BaseTitle);
+			PlayWorld->Subsystem->ResetDataAssetOverlay();
+			bPlayback &= Test->TestEqual(TEXT("overlay reset reveals authored French Data Asset string"),
+				PlayWorld->Subsystem->GetDataAssetStringVariable(BaseAsset, TEXT("Title"), bFoundTitle), FrenchBaseTitle);
 			PlayWorld->Component->StartDialogueWithScript(TEXT("scripts/script_intro"));
 			const FStoryFlowDialogueState FrenchState = PlayWorld->Component->GetCurrentDialogue();
 			bPlayback &= Test->TestEqual(TEXT("French intro resolves through the imported table"), FrenchState.Text, FrenchLine);
+			bPlayback &= Test->TestEqual(TEXT("French intro option count"), FrenchState.Options.Num(), 1);
+			if (FrenchState.Options.Num() == 1)
+			{
+				bPlayback &= Test->TestEqual(TEXT("French option keeps its id"), FrenchState.Options[0].Id, OptionId);
+				bPlayback &= Test->TestEqual(TEXT("French option resolves through the imported table"), FrenchState.Options[0].Text, FrenchOption);
+			}
 			if (UStoryFlowDialogueWidget* FrenchWidget = PlayWorld->Component->GetDialogueWidget())
 			{
-				bPlayback &= Test->TestTrue(TEXT("example UMG widget displays French"), WidgetText(FrenchWidget).Contains(FrenchLine));
+				bPlayback &= Test->TestTrue(TEXT("example UMG widget displays French dialogue and option"),
+					WidgetText(FrenchWidget).Contains(FrenchLine) && WidgetText(FrenchWidget).Contains(FrenchOption));
 				bPlayback &= CaptureWidget(*Test, FrenchWidget->TakeWidget(), FPaths::Combine(ResultDir, TEXT("ui-french.bmp")));
+				UButton* FrenchEnter = OptionButton(FrenchWidget, FrenchOption);
+				bPlayback &= Test->TestNotNull(TEXT("translated option has a rendered UMG button"), FrenchEnter);
+				if (FrenchEnter) FrenchEnter->OnClicked.Broadcast();
+				const FStoryFlowDialogueState FrenchElder = PlayWorld->Component->GetCurrentDialogue();
+				bPlayback &= Test->TestEqual(TEXT("translated option enters the Elder dialogue"), FrenchElder.NodeId,
+					TEXT("34a307bb13d44de7b0f996ca1431bd74"));
+				bPlayback &= Test->TestEqual(TEXT("authored Elder name localizes in French"), FrenchElder.Character.Name, FrenchElderName);
+				bPlayback &= Test->TestTrue(TEXT("example UMG widget displays localized Elder name"),
+					WidgetText(FrenchWidget).Contains(FrenchElderName));
+				bPlayback &= CaptureWidget(*Test, FrenchWidget->TakeWidget(), FPaths::Combine(ResultDir, TEXT("ui-french-elder.bmp")));
 			}
 			else bPlayback &= Test->TestTrue(TEXT("French dialogue created a UMG widget"), false);
+			PlayWorld->Component->StopDialogue();
 			bPlayback &= Test->TestFalse(TEXT("unknown Unreal language is refused"), PlayWorld->Subsystem->SetLanguage(TEXT("unknown")));
 			bPlayback &= Test->TestEqual(TEXT("unknown language keeps French"), PlayWorld->Subsystem->GetLanguage(), TEXT("fr"));
 			bPlayback &= Test->TestTrue(TEXT("Unreal runtime returns to source"), PlayWorld->Subsystem->SetLanguage(TEXT("en")));
+			PlayWorld->Subsystem->ResetAllState();
 			PlayWorld->Component->StartDialogueWithScript(TEXT("scripts/script_intro"));
 			const FStoryFlowDialogueState State = PlayWorld->Component->GetCurrentDialogue();
 			bPlayback &= Test->TestTrue(TEXT("intro dialogue active"), State.bIsValid);
@@ -746,10 +805,10 @@ namespace StoryFlowLiveSyncProbe
 			{
 				SlateWidget = Widget->TakeWidget();
 				bPlayback &= Test->TestTrue(TEXT("example widget displays intro"), WidgetText(Widget).Contains(SecondLine));
-				bPlayback &= Test->TestTrue(TEXT("example widget displays intro option"), WidgetText(Widget).Contains(TEXT("Enter the village.")));
+				bPlayback &= Test->TestTrue(TEXT("example widget displays intro option"), WidgetText(Widget).Contains(OptionSource));
 				bPlayback &= CaptureWidget(*Test, SlateWidget.ToSharedRef(), FPaths::Combine(ResultDir, TEXT("ui-intro.bmp")));
 				bPlayback &= Test->TestTrue(TEXT("widget remains constructed after capture"), Widget->IsConstructed());
-				UButton* Enter = OptionButton(Widget, TEXT("Enter the village."));
+				UButton* Enter = OptionButton(Widget, OptionSource);
 				bPlayback &= Test->TestNotNull(TEXT("intro option has a rendered UMG button"), Enter);
 				if (Enter) Enter->OnClicked.Broadcast();
 			}
@@ -764,27 +823,49 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowLiveSyncIntegrationTest, "StoryFlow.I
 
 bool FStoryFlowLiveSyncIntegrationTest::RunTest(const FString& Parameters)
 {
-	FString ResultDir, ExportDir, DialogueId, FirstLine, SecondLine, FrenchLine;
+	FString ResultDir, ExportDir, BaseId, DialogueId, FirstLine, SecondLine, FrenchLine, TitleId;
+	FString OptionId, OptionSource, FrenchOption, ElderId, ElderName, FrenchElderName, BaseTitle, FrenchBaseTitle;
 	int32 Port = 0;
 	FParse::Value(FCommandLine::Get(), TEXT("-sfPort="), Port);
 	FParse::Value(FCommandLine::Get(), TEXT("-sfResultDir="), ResultDir);
 	FParse::Value(FCommandLine::Get(), TEXT("-sfExportDir="), ExportDir);
+	FParse::Value(FCommandLine::Get(), TEXT("-sfBaseId="), BaseId);
 	FParse::Value(FCommandLine::Get(), TEXT("-sfDialogueId="), DialogueId);
+	FParse::Value(FCommandLine::Get(), TEXT("-sfTitleId="), TitleId);
 	FParse::Value(FCommandLine::Get(), TEXT("-sfFirstLine="), FirstLine);
 	FParse::Value(FCommandLine::Get(), TEXT("-sfSecondLine="), SecondLine);
 	FParse::Value(FCommandLine::Get(), TEXT("-sfFrenchLine="), FrenchLine);
+	FParse::Value(FCommandLine::Get(), TEXT("-sfOptionId="), OptionId);
+	FParse::Value(FCommandLine::Get(), TEXT("-sfOptionSource="), OptionSource);
+	FParse::Value(FCommandLine::Get(), TEXT("-sfFrenchOption="), FrenchOption);
+	FParse::Value(FCommandLine::Get(), TEXT("-sfElderId="), ElderId);
+	FParse::Value(FCommandLine::Get(), TEXT("-sfElderName="), ElderName);
+	FParse::Value(FCommandLine::Get(), TEXT("-sfFrenchElderName="), FrenchElderName);
+	FParse::Value(FCommandLine::Get(), TEXT("-sfBaseTitle="), BaseTitle);
+	FParse::Value(FCommandLine::Get(), TEXT("-sfFrenchBaseTitle="), FrenchBaseTitle);
 	FirstLine.ReplaceInline(TEXT("_"), TEXT(" "));
 	SecondLine.ReplaceInline(TEXT("_"), TEXT(" "));
 	FrenchLine.ReplaceInline(TEXT("_"), TEXT(" "));
+	OptionSource.ReplaceInline(TEXT("_"), TEXT(" "));
+	FrenchOption.ReplaceInline(TEXT("_"), TEXT(" "));
+	ElderName.ReplaceInline(TEXT("_"), TEXT(" "));
+	FrenchElderName.ReplaceInline(TEXT("_"), TEXT(" "));
+	BaseTitle.ReplaceInline(TEXT("_"), TEXT(" "));
+	FrenchBaseTitle.ReplaceInline(TEXT("_"), TEXT(" "));
 	if (!TestTrue(TEXT("integration arguments supplied"), Port > 0 && !ResultDir.IsEmpty() && !ExportDir.IsEmpty()
-		&& !DialogueId.IsEmpty() && !FirstLine.IsEmpty() && !SecondLine.IsEmpty() && !FrenchLine.IsEmpty())) return false;
+		&& !BaseId.IsEmpty() && !DialogueId.IsEmpty() && !TitleId.IsEmpty() && !FirstLine.IsEmpty() && !SecondLine.IsEmpty()
+		&& !FrenchLine.IsEmpty() && !OptionId.IsEmpty() && !OptionSource.IsEmpty() && !FrenchOption.IsEmpty()
+		&& !ElderId.IsEmpty() && !ElderName.IsEmpty() && !FrenchElderName.IsEmpty()
+		&& !BaseTitle.IsEmpty() && !FrenchBaseTitle.IsEmpty())) return false;
 	IFileManager::Get().MakeDirectory(*ResultDir, true);
 	UEditorAssetLibrary::DeleteDirectory(StoryFlowLiveSyncProbe::TestRoot);
 	UStoryFlowEditorSubsystem* Subsystem = GEditor ? GEditor->GetEditorSubsystem<UStoryFlowEditorSubsystem>() : nullptr;
 	if (!TestNotNull(TEXT("StoryFlow editor subsystem"), Subsystem)) return false;
 	Subsystem->SetContentPath(StoryFlowLiveSyncProbe::TestRoot);
 	Subsystem->ConnectToStoryFlow(TEXT("127.0.0.1"), Port);
-	ADD_LATENT_AUTOMATION_COMMAND(StoryFlowLiveSyncProbe::FWaitForSync(this, Subsystem, ResultDir, ExportDir, DialogueId, FirstLine, SecondLine, FrenchLine));
+	ADD_LATENT_AUTOMATION_COMMAND(StoryFlowLiveSyncProbe::FWaitForSync(this, Subsystem, ResultDir, ExportDir, BaseId,
+		DialogueId, FirstLine, SecondLine, FrenchLine, TitleId, OptionId, OptionSource, FrenchOption,
+		ElderId, ElderName, FrenchElderName, BaseTitle, FrenchBaseTitle));
 	return true;
 }
 
