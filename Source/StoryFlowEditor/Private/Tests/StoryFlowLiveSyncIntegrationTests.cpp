@@ -357,9 +357,10 @@ namespace StoryFlowLiveSyncProbe
 	}
 
 	bool CheckSaveLoad(FAutomationTestBase& Test, UStoryFlowSubsystem* Runtime,
-		UStoryFlowComponent* Component, UStoryFlowProjectAsset* Project)
+		UStoryFlowComponent* Component, UStoryFlowProjectAsset* Project, const FString& ResultDir)
 	{
 		const FString Slot = TEXT("StoryFlowLiveSyncSaveProbe");
+		const FString ColdSlot = TEXT("StoryFlowLiveSyncColdProbe");
 		const FString ChildId = TEXT("da_20202020202020202020202020202020");
 		const FString BaseId = TEXT("da_10101010101010101010101010101010");
 		const FString HpId = TEXT("30303030303030303030303030303030");
@@ -369,6 +370,7 @@ namespace StoryFlowLiveSyncProbe
 		const FString ImagesId = TEXT("bcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbc");
 		const FString MapId = TEXT("cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd");
 		UGameplayStatics::DeleteGameInSlot(Slot, 0);
+		UGameplayStatics::DeleteGameInSlot(ColdSlot, 0);
 		UStoryFlowDataAssetAsset* Child = Project->DataAssets.FindRef(ChildId);
 		UStoryFlowDataAssetAsset* Base = Project->DataAssets.FindRef(BaseId);
 		if (!Test.TestNotNull(TEXT("save probe imported child"), Child)) return false;
@@ -505,9 +507,99 @@ namespace StoryFlowLiveSyncProbe
 		bOk &= Test.TestTrue(TEXT("resaved slot parses"), Second.IsValid());
 		if (Second) bOk &= StoryFlowEngineContract::JsonEquals(Test, TEXT("full saved state"),
 			MakeShared<FJsonValueObject>(Second), MakeShared<FJsonValueObject>(First));
+		bOk &= Test.TestTrue(TEXT("prepare cold-process slot"), Runtime->SaveToSlot(ColdSlot, 0));
+		FString ExpectedText;
+		if (First) FJsonSerializer::Serialize(First.ToSharedRef(), TJsonWriterFactory<>::Create(&ExpectedText));
+		bOk &= Test.TestTrue(TEXT("write cold-process expected envelope"),
+			!ExpectedText.IsEmpty() && FFileHelper::SaveStringToFile(ExpectedText,
+				*FPaths::Combine(ResultDir, TEXT("cold-expected.json"))));
 		UGameplayStatics::DeleteGameInSlot(Slot, 0);
 		return bOk;
 	}
+
+	struct FColdLoad final : IAutomationLatentCommand
+	{
+		FAutomationTestBase* Test;
+		FString ResultDir;
+		FString OptionSource;
+
+		FColdLoad(FAutomationTestBase* InTest, const FString& InResultDir, const FString& InOptionSource)
+			: Test(InTest), ResultDir(InResultDir), OptionSource(InOptionSource) {}
+
+		bool Update() override
+		{
+			const FString ColdSlot = TEXT("StoryFlowLiveSyncColdProbe");
+			const FString AgainSlot = TEXT("StoryFlowLiveSyncColdProbeAgain");
+			bool bOk = true;
+			UStoryFlowProjectAsset* Project = LoadObject<UStoryFlowProjectAsset>(nullptr,
+				TEXT("/Game/StoryFlowLiveSyncProbe/SF_Project.SF_Project"));
+			if (!Test->TestNotNull(TEXT("fresh Unreal process loads imported project asset"), Project))
+			{
+				FFileHelper::SaveStringToFile(TEXT("cold_load=failed\nproject_asset=missing\n"),
+					*FPaths::Combine(ResultDir, TEXT("cold-load.txt")));
+				return true;
+			}
+			StoryFlowTestWorld::FScopedWorld World;
+			if (!Test->TestTrue(TEXT("cold-load runtime world initialized"), World.Init()))
+			{
+				FFileHelper::SaveStringToFile(TEXT("cold_load=failed\nruntime_world=failed\n"),
+					*FPaths::Combine(ResultDir, TEXT("cold-load.txt")));
+				return true;
+			}
+			World.Subsystem->SetProject(Project);
+			bOk &= Test->TestTrue(TEXT("fresh Unreal process loads cold slot"), World.Subsystem->LoadFromSlot(ColdSlot, 0));
+
+			const TSharedPtr<FJsonObject> Expected = LoadJson(FPaths::Combine(ResultDir, TEXT("cold-expected.json")));
+			bOk &= Test->TestTrue(TEXT("cold expected envelope parses"), Expected.IsValid());
+			bOk &= Test->TestTrue(TEXT("fresh Unreal process resaves restored state"), World.Subsystem->SaveToSlot(AgainSlot, 0));
+			UStoryFlowSaveGame* Resaved = Cast<UStoryFlowSaveGame>(UGameplayStatics::LoadGameFromSlot(AgainSlot, 0));
+			TSharedPtr<FJsonObject> Actual;
+			if (Resaved) FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Resaved->SaveDataJson), Actual);
+			bOk &= Test->TestTrue(TEXT("cold resaved envelope parses"), Actual.IsValid());
+			if (Expected && Actual) bOk &= StoryFlowEngineContract::JsonEquals(*Test, TEXT("cold full state"),
+				MakeShared<FJsonValueObject>(Actual), MakeShared<FJsonValueObject>(Expected));
+
+			UClass* WidgetClass = LoadClass<UStoryFlowDialogueWidget>(nullptr,
+				TEXT("/StoryFlowPlugin/Examples/WBP_Dialogue.WBP_Dialogue_C"));
+			bOk &= Test->TestNotNull(TEXT("cold-load dialogue widget class"), WidgetClass);
+			ULocalPlayer* LocalPlayer = NewObject<ULocalPlayer>(GEngine,
+				GEngine->LocalPlayerClass ? GEngine->LocalPlayerClass.Get() : ULocalPlayer::StaticClass());
+			APlayerController* Controller = World.World->SpawnActor<APlayerController>();
+			bOk &= Test->TestTrue(TEXT("cold-load local player controller"), LocalPlayer && Controller);
+			if (LocalPlayer && Controller)
+			{
+				Controller->Player = LocalPlayer;
+				LocalPlayer->PlayerController = Controller;
+				World.World->AddController(Controller);
+			}
+			World.Component->DialogueWidgetClass = WidgetClass;
+			World.Component->bAutoAddWidgetToViewport = false;
+			World.Component->StartDialogueWithScript(TEXT("scripts/script_intro"));
+			UStoryFlowDialogueWidget* Widget = World.Component->GetDialogueWidget();
+			bOk &= Test->TestNotNull(TEXT("cold-load dialogue created UMG"), Widget);
+			UButton* Enter = Widget ? OptionButton(Widget, OptionSource) : nullptr;
+			bOk &= Test->TestNotNull(TEXT("cold-load rendered intro option"), Enter);
+			if (Enter) Enter->OnClicked.Broadcast();
+			const FStoryFlowDialogueState Elder = World.Component->GetCurrentDialogue();
+			bOk &= Test->TestEqual(TEXT("cold-load option enters Elder dialogue"), Elder.NodeId,
+				TEXT("34a307bb13d44de7b0f996ca1431bd74"));
+			bOk &= Test->TestEqual(TEXT("cold-load Elder name"), Elder.Character.Name, TEXT("Saved Elder"));
+			bOk &= Test->TestTrue(TEXT("cold-load Elder portrait"), Elder.Character.Image &&
+				Elder.Character.Image->GetName().Contains(TEXT("elder_smiling")));
+			if (Widget)
+			{
+				bOk &= Test->TestTrue(TEXT("cold-load UMG shows restored Elder"), WidgetText(Widget).Contains(TEXT("Saved Elder")));
+				bOk &= CaptureWidget(*Test, Widget->TakeWidget(), FPaths::Combine(ResultDir, TEXT("ui-cold-restored.bmp")));
+			}
+			World.Component->StopDialogue();
+			UGameplayStatics::DeleteGameInSlot(ColdSlot, 0);
+			UGameplayStatics::DeleteGameInSlot(AgainSlot, 0);
+			FFileHelper::SaveStringToFile(bOk
+				? TEXT("cold_load=passed\nfull_envelope=passed\nui_restore=passed\n")
+				: TEXT("cold_load=failed\n"), *FPaths::Combine(ResultDir, TEXT("cold-load.txt")));
+			return true;
+		}
+	};
 
 	struct FWaitForSync final : IAutomationLatentCommand
 	{
@@ -534,6 +626,7 @@ namespace StoryFlowLiveSyncProbe
 		TUniquePtr<StoryFlowTestWorld::FScopedWorld> PlayWorld;
 		TSharedPtr<SWidget> SlateWidget;
 		bool bPlayback = true;
+		bool bWaitingForFrenchElder = false;
 
 		FWaitForSync(FAutomationTestBase* InTest, UStoryFlowEditorSubsystem* InSubsystem, const FString& InResultDir,
 			const FString& InExportDir, const FString& InBaseId, const FString& InDialogueId, const FString& InFirstLine, const FString& InSecondLine,
@@ -645,7 +738,7 @@ namespace StoryFlowLiveSyncProbe
 					TEXT("bcac5c00572c40d9b1939816c5e97192"));
 				bPlayback &= Test->TestTrue(TEXT("farewell line"), Declined.Text.Contains(TEXT("The elder nods slowly.")));
 				PlayWorld->Component->StopDialogue();
-				bPlayback &= CheckSaveLoad(*Test, PlayWorld->Subsystem, PlayWorld->Component, Live->GetProjectAsset());
+				bPlayback &= CheckSaveLoad(*Test, PlayWorld->Subsystem, PlayWorld->Component, Live->GetProjectAsset(), ResultDir);
 				PlayWorld->Component->StartDialogueWithScript(TEXT("scripts/script_intro"));
 				bPlayback &= Choose(*Test, PlayWorld->Component, OptionSource);
 				const FStoryFlowDialogueState RestoredElder = PlayWorld->Component->GetCurrentDialogue();
@@ -672,10 +765,70 @@ namespace StoryFlowLiveSyncProbe
 			return false;
 		}
 
+		bool ContinueFrenchElder(UStoryFlowEditorSubsystem* Live)
+		{
+			if (!PlayWorld || !PlayWorld->Component) return true;
+			PlayWorld->World->Tick(LEVELTICK_All, 0.016f);
+			UStoryFlowDialogueWidget* Widget = PlayWorld->Component->GetDialogueWidget();
+			if (!Widget)
+			{
+				Test->AddError(TEXT("French dialogue widget disappeared while its transition was running"));
+				Live->Disconnect();
+				return true;
+			}
+			const FString Displayed = WidgetText(Widget);
+			if (!Displayed.Contains(FrenchElderName))
+			{
+				FWidgetRenderer TickRenderer(true, true);
+				UTextureRenderTarget2D* TickFrame = SlateWidget.IsValid()
+					? TickRenderer.DrawWidget(SlateWidget.ToSharedRef(), FVector2D(640, 360)) : nullptr;
+				TArray<FColor> TickPixels;
+				if (TickFrame) TickFrame->GameThread_GetRenderTargetResource()->ReadPixels(TickPixels);
+				if (FPlatformTime::Seconds() - Started < 10.0) return false;
+				const FString Failure = FString::Printf(TEXT("UMG never displayed localized Elder name '%s'; widget text: %s"),
+					*FrenchElderName, *Displayed);
+				Test->AddError(Failure);
+				FFileHelper::SaveStringToFile(Failure, *FPaths::Combine(ResultDir, TEXT("failure.txt")));
+				Live->Disconnect();
+				return true;
+			}
+
+			bPlayback &= SlateWidget.IsValid() && CaptureWidget(*Test, SlateWidget.ToSharedRef(),
+				FPaths::Combine(ResultDir, TEXT("ui-french-elder.bmp")));
+			PlayWorld->Component->StopDialogue();
+			bPlayback &= Test->TestFalse(TEXT("unknown Unreal language is refused"), PlayWorld->Subsystem->SetLanguage(TEXT("unknown")));
+			bPlayback &= Test->TestEqual(TEXT("unknown language keeps French"), PlayWorld->Subsystem->GetLanguage(), TEXT("fr"));
+			bPlayback &= Test->TestTrue(TEXT("Unreal runtime returns to source"), PlayWorld->Subsystem->SetLanguage(TEXT("en")));
+			PlayWorld->Subsystem->ResetAllState();
+			PlayWorld->Component->StartDialogueWithScript(TEXT("scripts/script_intro"));
+			const FStoryFlowDialogueState State = PlayWorld->Component->GetCurrentDialogue();
+			bPlayback &= Test->TestTrue(TEXT("intro dialogue active"), State.bIsValid);
+			bPlayback &= Test->TestEqual(TEXT("runtime intro line"), State.Text, SecondLine);
+			bPlayback &= Test->TestEqual(TEXT("runtime intro node"), State.NodeId, DialogueId);
+			Widget = PlayWorld->Component->GetDialogueWidget();
+			bPlayback &= Test->TestNotNull(TEXT("dialogue created the example UMG widget"), Widget);
+			bPlayback &= Test->TestTrue(TEXT("example widget has a tree"), Widget && Widget->WidgetTree != nullptr);
+			if (Widget && Widget->WidgetTree)
+			{
+				SlateWidget = Widget->TakeWidget();
+				bPlayback &= Test->TestTrue(TEXT("example widget displays intro"), WidgetText(Widget).Contains(SecondLine));
+				bPlayback &= Test->TestTrue(TEXT("example widget displays intro option"), WidgetText(Widget).Contains(OptionSource));
+				bPlayback &= CaptureWidget(*Test, SlateWidget.ToSharedRef(), FPaths::Combine(ResultDir, TEXT("ui-intro.bmp")));
+				bPlayback &= Test->TestTrue(TEXT("widget remains constructed after capture"), Widget->IsConstructed());
+				UButton* Enter = OptionButton(Widget, OptionSource);
+				bPlayback &= Test->TestNotNull(TEXT("intro option has a rendered UMG button"), Enter);
+				if (Enter) Enter->OnClicked.Broadcast();
+			}
+			bWaitingForFrenchElder = false;
+			Started = FPlatformTime::Seconds();
+			return false;
+		}
+
 		bool Update() override
 		{
 			UStoryFlowEditorSubsystem* Live = Subsystem.Get();
 			if (!Live) { Test->AddError(TEXT("StoryFlow editor subsystem disappeared")); return true; }
+			if (bWaitingForFrenchElder) return ContinueFrenchElder(Live);
 			if (Stage >= 2) return ContinuePlayback(Live);
 			if (FPlatformTime::Seconds() - Started > 240.0)
 			{
@@ -773,9 +926,10 @@ namespace StoryFlowLiveSyncProbe
 			}
 			if (UStoryFlowDialogueWidget* FrenchWidget = PlayWorld->Component->GetDialogueWidget())
 			{
+				SlateWidget = FrenchWidget->TakeWidget();
 				bPlayback &= Test->TestTrue(TEXT("example UMG widget displays French dialogue and option"),
 					WidgetText(FrenchWidget).Contains(FrenchLine) && WidgetText(FrenchWidget).Contains(FrenchOption));
-				bPlayback &= CaptureWidget(*Test, FrenchWidget->TakeWidget(), FPaths::Combine(ResultDir, TEXT("ui-french.bmp")));
+				bPlayback &= CaptureWidget(*Test, SlateWidget.ToSharedRef(), FPaths::Combine(ResultDir, TEXT("ui-french.bmp")));
 				UButton* FrenchEnter = OptionButton(FrenchWidget, FrenchOption);
 				bPlayback &= Test->TestNotNull(TEXT("translated option has a rendered UMG button"), FrenchEnter);
 				if (FrenchEnter) FrenchEnter->OnClicked.Broadcast();
@@ -783,35 +937,9 @@ namespace StoryFlowLiveSyncProbe
 				bPlayback &= Test->TestEqual(TEXT("translated option enters the Elder dialogue"), FrenchElder.NodeId,
 					TEXT("34a307bb13d44de7b0f996ca1431bd74"));
 				bPlayback &= Test->TestEqual(TEXT("authored Elder name localizes in French"), FrenchElder.Character.Name, FrenchElderName);
-				bPlayback &= Test->TestTrue(TEXT("example UMG widget displays localized Elder name"),
-					WidgetText(FrenchWidget).Contains(FrenchElderName));
-				bPlayback &= CaptureWidget(*Test, FrenchWidget->TakeWidget(), FPaths::Combine(ResultDir, TEXT("ui-french-elder.bmp")));
 			}
 			else bPlayback &= Test->TestTrue(TEXT("French dialogue created a UMG widget"), false);
-			PlayWorld->Component->StopDialogue();
-			bPlayback &= Test->TestFalse(TEXT("unknown Unreal language is refused"), PlayWorld->Subsystem->SetLanguage(TEXT("unknown")));
-			bPlayback &= Test->TestEqual(TEXT("unknown language keeps French"), PlayWorld->Subsystem->GetLanguage(), TEXT("fr"));
-			bPlayback &= Test->TestTrue(TEXT("Unreal runtime returns to source"), PlayWorld->Subsystem->SetLanguage(TEXT("en")));
-			PlayWorld->Subsystem->ResetAllState();
-			PlayWorld->Component->StartDialogueWithScript(TEXT("scripts/script_intro"));
-			const FStoryFlowDialogueState State = PlayWorld->Component->GetCurrentDialogue();
-			bPlayback &= Test->TestTrue(TEXT("intro dialogue active"), State.bIsValid);
-			bPlayback &= Test->TestEqual(TEXT("runtime intro line"), State.Text, SecondLine);
-			bPlayback &= Test->TestEqual(TEXT("runtime intro node"), State.NodeId, DialogueId);
-			UStoryFlowDialogueWidget* Widget = PlayWorld->Component->GetDialogueWidget();
-			bPlayback &= Test->TestNotNull(TEXT("dialogue created the example UMG widget"), Widget);
-			bPlayback &= Test->TestTrue(TEXT("example widget has a tree"), Widget && Widget->WidgetTree != nullptr);
-			if (Widget && Widget->WidgetTree)
-			{
-				SlateWidget = Widget->TakeWidget();
-				bPlayback &= Test->TestTrue(TEXT("example widget displays intro"), WidgetText(Widget).Contains(SecondLine));
-				bPlayback &= Test->TestTrue(TEXT("example widget displays intro option"), WidgetText(Widget).Contains(OptionSource));
-				bPlayback &= CaptureWidget(*Test, SlateWidget.ToSharedRef(), FPaths::Combine(ResultDir, TEXT("ui-intro.bmp")));
-				bPlayback &= Test->TestTrue(TEXT("widget remains constructed after capture"), Widget->IsConstructed());
-				UButton* Enter = OptionButton(Widget, OptionSource);
-				bPlayback &= Test->TestNotNull(TEXT("intro option has a rendered UMG button"), Enter);
-				if (Enter) Enter->OnClicked.Broadcast();
-			}
+			bWaitingForFrenchElder = true;
 			Started = FPlatformTime::Seconds();
 			return false;
 		}
@@ -823,6 +951,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowLiveSyncIntegrationTest, "StoryFlow.I
 
 bool FStoryFlowLiveSyncIntegrationTest::RunTest(const FString& Parameters)
 {
+	int32 ColdLoadMode = 0;
+	FParse::Value(FCommandLine::Get(), TEXT("-sfColdLoad="), ColdLoadMode);
+	const bool bColdLoad = ColdLoadMode == 1;
 	FString ResultDir, ExportDir, BaseId, DialogueId, FirstLine, SecondLine, FrenchLine, TitleId;
 	FString OptionId, OptionSource, FrenchOption, ElderId, ElderName, FrenchElderName, BaseTitle, FrenchBaseTitle;
 	int32 Port = 0;
@@ -858,6 +989,11 @@ bool FStoryFlowLiveSyncIntegrationTest::RunTest(const FString& Parameters)
 		&& !ElderId.IsEmpty() && !ElderName.IsEmpty() && !FrenchElderName.IsEmpty()
 		&& !BaseTitle.IsEmpty() && !FrenchBaseTitle.IsEmpty())) return false;
 	IFileManager::Get().MakeDirectory(*ResultDir, true);
+	if (bColdLoad)
+	{
+		ADD_LATENT_AUTOMATION_COMMAND(StoryFlowLiveSyncProbe::FColdLoad(this, ResultDir, OptionSource));
+		return true;
+	}
 	UEditorAssetLibrary::DeleteDirectory(StoryFlowLiveSyncProbe::TestRoot);
 	UStoryFlowEditorSubsystem* Subsystem = GEditor ? GEditor->GetEditorSubsystem<UStoryFlowEditorSubsystem>() : nullptr;
 	if (!TestNotNull(TEXT("StoryFlow editor subsystem"), Subsystem)) return false;
