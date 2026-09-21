@@ -14,6 +14,7 @@
 #include "Data/StoryFlowDataAssetAsset.h"
 #include "Data/StoryFlowProjectAsset.h"
 #include "Data/StoryFlowScriptAsset.h"
+#include "Data/StoryFlowSaveGame.h"
 #include "Editor.h"
 #include "EditorAssetLibrary.h"
 #include "Engine/Engine.h"
@@ -21,6 +22,7 @@
 #include "Engine/TextureRenderTarget2D.h"
 #include "Engine/Texture2D.h"
 #include "GameFramework/PlayerController.h"
+#include "Kismet/GameplayStatics.h"
 #include "HAL/FileManager.h"
 #include "Misc/CommandLine.h"
 #include "Misc/FileHelper.h"
@@ -354,6 +356,159 @@ namespace StoryFlowLiveSyncProbe
 			&& Test.TestTrue(TEXT("UMG frame saved"), FFileHelper::CreateBitmap(*Path, 1280, 720, Pixels.GetData()));
 	}
 
+	bool CheckSaveLoad(FAutomationTestBase& Test, UStoryFlowSubsystem* Runtime,
+		UStoryFlowComponent* Component, UStoryFlowProjectAsset* Project)
+	{
+		const FString Slot = TEXT("StoryFlowLiveSyncSaveProbe");
+		const FString ChildId = TEXT("da_20202020202020202020202020202020");
+		const FString BaseId = TEXT("da_10101010101010101010101010101010");
+		const FString HpId = TEXT("30303030303030303030303030303030");
+		const FString ImageId = TEXT("80808080808080808080808080808080");
+		const FString CharacterId = TEXT("90909090909090909090909090909090");
+		const FString AudioId = TEXT("abababababababababababababababab");
+		const FString ImagesId = TEXT("bcbcbcbcbcbcbcbcbcbcbcbcbcbcbcbc");
+		const FString MapId = TEXT("cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd");
+		UGameplayStatics::DeleteGameInSlot(Slot, 0);
+		UStoryFlowDataAssetAsset* Child = Project->DataAssets.FindRef(ChildId);
+		UStoryFlowDataAssetAsset* Base = Project->DataAssets.FindRef(BaseId);
+		if (!Test.TestNotNull(TEXT("save probe imported child"), Child)) return false;
+		if (!Test.TestNotNull(TEXT("save probe imported base"), Base)) return false;
+		FString ElderId;
+		for (const auto& Pair : Project->CharacterIdToPath)
+		{
+			if (Pair.Value.Contains(TEXT("npc_elder"))) { ElderId = Pair.Key; break; }
+		}
+		if (!Test.TestTrue(TEXT("save probe Elder id"), !ElderId.IsEmpty())) return false;
+		const FString ElderPath = Project->CharacterIdToPath.FindChecked(ElderId);
+		FStoryFlowCharacterDef* Elder = Runtime->GetRuntimeCharacters().Find(ElderPath);
+		if (!Test.TestTrue(TEXT("save probe runtime Elder"), Elder != nullptr)) return false;
+		const FString SmilingKey = Elder->Image;
+		Elder->Name = TEXT("Saved Elder");
+		Elder->bNameIsLiteral = true;
+		FStoryFlowVariant FalseValue;
+		FalseValue.SetBool(false);
+		Component->SetCharacterVariableById(ElderId, TEXT("SyncTrust"), FalseValue);
+		Component->SetIntVariable(TEXT("PlayerHP"), 73, true);
+		bool bOk = true;
+		bOk &= Test.TestTrue(TEXT("save writes Health"), Runtime->SetDataAssetIntVariable(Child, TEXT("Health"), 37));
+		bOk &= Test.TestTrue(TEXT("save writes Title"), Runtime->SetDataAssetStringVariable(Child, TEXT("Title"), TEXT("Saved Child")));
+		bOk &= Test.TestTrue(TEXT("save writes Enabled"), Runtime->SetDataAssetBoolVariable(Child, TEXT("Enabled"), true));
+		bOk &= Test.TestTrue(TEXT("save writes Rate"), Runtime->SetDataAssetFloatVariable(Child, TEXT("Rate"), 6.25f));
+		bOk &= Test.TestTrue(TEXT("save writes Mode"), Runtime->SetDataAssetEnumVariable(Child, TEXT("Mode"), TEXT("Closed")));
+		bool bFound = false;
+		const FStoryFlowVariant Images = Runtime->GetDataAssetVariantVariable(Child, TEXT("Portraits"), bFound);
+		bOk &= Test.TestTrue(TEXT("save probe image array"), bFound && Images.GetArray().Num() > 0);
+		const FStoryFlowVariant Map = Runtime->GetDataAssetVariantVariable(Child, TEXT("SpeakerByRole"), bFound);
+		bOk &= Test.TestTrue(TEXT("save probe character map"), bFound && Map.GetMap().Num() > 0);
+		if (!bOk) return false;
+		TArray<FStoryFlowVariant> NewImages = Images.GetArray();
+		const FStoryFlowVariant ExtraImage = NewImages[0];
+		NewImages.Add(ExtraImage);
+		TArray<FStoryFlowVariant> Keys;
+		TArray<FStoryFlowVariant> Values;
+		for (const FStoryFlowMapEntry& Entry : Map.GetMap()) { Keys.Add(Entry.Key); Values.Add(Entry.Value); }
+		FStoryFlowVariant ExtraKey;
+		ExtraKey.SetString(TEXT("alternate"));
+		Keys.Add(ExtraKey);
+		const FStoryFlowVariant ExtraValue = Values[0];
+		Values.Add(ExtraValue);
+		bOk &= Test.TestTrue(TEXT("save writes image array"), Runtime->SetDataAssetArrayVariable(Child, TEXT("Portraits"), NewImages));
+		bOk &= Test.TestTrue(TEXT("save writes character map"), Runtime->SetDataAssetMapVariable(Child, TEXT("SpeakerByRole"), Keys, Values));
+		if (!bOk) return false;
+		const FString IconKey = Runtime->GetDataAssetStringVariable(Base, TEXT("Icon"), bFound);
+		const FString SpeakerKey = Runtime->GetDataAssetStringVariable(Base, TEXT("Speaker"), bFound);
+		const FString CurrentCue = Runtime->GetDataAssetStringVariable(Child, TEXT("Cue"), bFound);
+		FString AudioKey;
+		for (const auto& Pair : Project->ResolvedAssets)
+		{
+			if (Pair.Key != CurrentCue && Cast<USoundWave>(Pair.Value.LoadSynchronous())) { AudioKey = Pair.Key; break; }
+		}
+		bOk &= Test.TestTrue(TEXT("save probe alternate audio"), !AudioKey.IsEmpty());
+		bOk &= Test.TestTrue(TEXT("save writes image reference"), Runtime->SetDataAssetStringVariable(Child, TEXT("Icon"), IconKey));
+		bOk &= Test.TestTrue(TEXT("save writes character reference"), Runtime->SetDataAssetStringVariable(Child, TEXT("Speaker"), SpeakerKey));
+		bOk &= Test.TestTrue(TEXT("save writes audio reference"), Runtime->SetDataAssetStringVariable(Child, TEXT("Cue"), AudioKey));
+		if (!bOk) return false;
+		Runtime->GetUsedOnceOnlyOptions().Add(TEXT("sync_probe.once"));
+		if (!Test.TestTrue(TEXT("save imported game to slot"), Runtime->SaveToSlot(Slot, 0))) return false;
+		auto ReadSlot = [&Slot]() -> TSharedPtr<FJsonObject>
+		{
+			UStoryFlowSaveGame* Saved = Cast<UStoryFlowSaveGame>(UGameplayStatics::LoadGameFromSlot(Slot, 0));
+			TSharedPtr<FJsonObject> Parsed;
+			if (Saved) FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Saved->SaveDataJson), Parsed);
+			return Parsed;
+		};
+		const TSharedPtr<FJsonObject> First = ReadSlot();
+		if (!Test.TestTrue(TEXT("slot contains JSON"), First.IsValid())) return false;
+		bOk &= Test.TestEqual(TEXT("save format version"), First->GetStringField(TEXT("version")), TEXT("1"));
+		const auto Globals = First->GetObjectField(TEXT("globalVariables"));
+		bOk &= Test.TestEqual(TEXT("slot carries every imported global"), Globals->Values.Num(), Runtime->GetGlobalVariables().Num());
+		bool bSavedHp = false;
+		for (const auto& Pair : Globals->Values)
+		{
+			const auto Row = Pair.Value->AsObject();
+			if (Row->GetStringField(TEXT("name")) == TEXT("PlayerHP")) bSavedHp = Row->GetNumberField(TEXT("value")) == 73;
+		}
+		bOk &= Test.TestTrue(TEXT("slot contains changed global"), bSavedHp);
+		const auto Characters = First->GetObjectField(TEXT("characters"));
+		bOk &= Test.TestEqual(TEXT("slot carries every imported character"), Characters->Values.Num(), Runtime->GetRuntimeCharacters().Num());
+		const TSharedPtr<FJsonObject>* SavedElder = nullptr;
+		bOk &= Test.TestTrue(TEXT("slot contains Elder"), Characters->TryGetObjectField(ElderPath, SavedElder));
+		if (SavedElder)
+		{
+			bOk &= Test.TestEqual(TEXT("slot contains changed name"), (*SavedElder)->GetStringField(TEXT("name")), TEXT("Saved Elder"));
+			bOk &= Test.TestEqual(TEXT("slot contains portrait"), (*SavedElder)->GetStringField(TEXT("image")), SmilingKey);
+			bOk &= Test.TestTrue(TEXT("slot contains custom character variables"),
+				(*SavedElder)->GetObjectField(TEXT("variables"))->Values.Num() >= 3);
+		}
+		bOk &= Test.TestTrue(TEXT("slot contains once-only choice"), First->GetArrayField(TEXT("usedOnceOnlyOptions")).ContainsByPredicate(
+			[](const TSharedPtr<FJsonValue>& Value) { return Value->AsString() == TEXT("sync_probe.once"); }));
+		const auto DataAssets = First->GetObjectField(TEXT("dataAssets"));
+		const TSharedPtr<FJsonObject>* SavedChild = nullptr;
+		bOk &= Test.TestTrue(TEXT("slot contains child overlay"), DataAssets->TryGetObjectField(ChildId, SavedChild));
+		if (SavedChild)
+		{
+			bOk &= Test.TestEqual(TEXT("slot carries every Data Asset write shape"), (*SavedChild)->Values.Num(), 10);
+			bOk &= Test.TestEqual(TEXT("slot contains Health"), (*SavedChild)->GetNumberField(HpId), 37.0);
+			bOk &= Test.TestEqual(TEXT("slot contains image reference"), (*SavedChild)->GetStringField(ImageId), IconKey);
+			bOk &= Test.TestEqual(TEXT("slot contains character reference"), (*SavedChild)->GetStringField(CharacterId), SpeakerKey);
+			bOk &= Test.TestEqual(TEXT("slot contains audio reference"), (*SavedChild)->GetStringField(AudioId), AudioKey);
+			bOk &= Test.TestTrue(TEXT("slot contains image array and character map"),
+				(*SavedChild)->HasField(ImagesId) && (*SavedChild)->HasField(MapId));
+		}
+		if (!bOk) return false;
+		Component->SetIntVariable(TEXT("PlayerHP"), 9, true);
+		Runtime->ResetRuntimeCharacters();
+		Runtime->ResetDataAssetOverlay();
+		Runtime->GetUsedOnceOnlyOptions().Empty();
+		Runtime->GetUsedOnceOnlyOptions().Add(TEXT("sync_probe.after_save"));
+		bOk &= Test.TestEqual(TEXT("post-save global mutation landed"), Component->GetIntVariable(TEXT("PlayerHP"), true), 9);
+		bOk &= Test.TestTrue(TEXT("post-save overlay reset landed"), Runtime->GetDataAssetIntVariable(Child, TEXT("Health"), bFound) != 37 && bFound);
+		if (!bOk) return false;
+		bOk &= Test.TestTrue(TEXT("load imported game from slot"), Runtime->LoadFromSlot(Slot, 0));
+		Elder = Runtime->GetRuntimeCharacters().Find(ElderPath);
+		bOk &= Test.TestEqual(TEXT("loaded global"), Component->GetIntVariable(TEXT("PlayerHP"), true), 73);
+		bOk &= Test.TestTrue(TEXT("loaded Elder"), Elder && Elder->Name == TEXT("Saved Elder") && Elder->Image == SmilingKey && Elder->bNameIsLiteral);
+		bOk &= Test.TestFalse(TEXT("loaded custom character boolean"), Component->GetCharacterVariableById(ElderId, TEXT("SyncTrust")).GetBool());
+		bOk &= Test.TestEqual(TEXT("loaded Health"), Runtime->GetDataAssetIntVariable(Child, TEXT("Health"), bFound), 37);
+		bOk &= Test.TestEqual(TEXT("loaded Title"), Runtime->GetDataAssetStringVariable(Child, TEXT("Title"), bFound), TEXT("Saved Child"));
+		bOk &= Test.TestTrue(TEXT("loaded Enabled"), Runtime->GetDataAssetBoolVariable(Child, TEXT("Enabled"), bFound));
+		bOk &= Test.TestNearlyEqual(TEXT("loaded Rate"), Runtime->GetDataAssetFloatVariable(Child, TEXT("Rate"), bFound), 6.25f);
+		bOk &= Test.TestEqual(TEXT("loaded Mode"), Runtime->GetDataAssetEnumVariable(Child, TEXT("Mode"), bFound), TEXT("Closed"));
+		bOk &= Test.TestEqual(TEXT("loaded image reference"), Runtime->GetDataAssetStringVariable(Child, TEXT("Icon"), bFound), IconKey);
+		bOk &= Test.TestEqual(TEXT("loaded character reference"), Runtime->GetDataAssetStringVariable(Child, TEXT("Speaker"), bFound), SpeakerKey);
+		bOk &= Test.TestEqual(TEXT("loaded audio reference"), Runtime->GetDataAssetStringVariable(Child, TEXT("Cue"), bFound), AudioKey);
+		bOk &= Test.TestTrue(TEXT("loaded once-only set replaces later edits"),
+			Runtime->GetUsedOnceOnlyOptions().Contains(TEXT("sync_probe.once")) &&
+			!Runtime->GetUsedOnceOnlyOptions().Contains(TEXT("sync_probe.after_save")));
+		bOk &= Test.TestTrue(TEXT("resave loaded state"), Runtime->SaveToSlot(Slot, 0));
+		const TSharedPtr<FJsonObject> Second = ReadSlot();
+		bOk &= Test.TestTrue(TEXT("resaved slot parses"), Second.IsValid());
+		if (Second) bOk &= StoryFlowEngineContract::JsonEquals(Test, TEXT("full saved state"),
+			MakeShared<FJsonValueObject>(Second), MakeShared<FJsonValueObject>(First));
+		UGameplayStatics::DeleteGameInSlot(Slot, 0);
+		return bOk;
+	}
+
 	struct FWaitForSync final : IAutomationLatentCommand
 	{
 		FAutomationTestBase* Test;
@@ -476,8 +631,24 @@ namespace StoryFlowLiveSyncProbe
 					TEXT("bcac5c00572c40d9b1939816c5e97192"));
 				bPlayback &= Test->TestTrue(TEXT("farewell line"), Declined.Text.Contains(TEXT("The elder nods slowly.")));
 				PlayWorld->Component->StopDialogue();
+				bPlayback &= CheckSaveLoad(*Test, PlayWorld->Subsystem, PlayWorld->Component, Live->GetProjectAsset());
+				PlayWorld->Component->StartDialogueWithScript(TEXT("scripts/script_intro"));
+				bPlayback &= Choose(*Test, PlayWorld->Component, TEXT("Enter the village."));
+				const FStoryFlowDialogueState RestoredElder = PlayWorld->Component->GetCurrentDialogue();
+				bPlayback &= Test->TestEqual(TEXT("loaded Elder reaches the dialogue UI"), RestoredElder.NodeId,
+					TEXT("34a307bb13d44de7b0f996ca1431bd74"));
+				bPlayback &= Test->TestEqual(TEXT("loaded Elder name reaches dialogue"), RestoredElder.Character.Name,
+					TEXT("Saved Elder"));
+				bPlayback &= Test->TestTrue(TEXT("loaded Elder portrait reaches dialogue"), RestoredElder.Character.Image
+					&& RestoredElder.Character.Image->GetName().Contains(TEXT("elder_smiling")));
+				if (UStoryFlowDialogueWidget* RestoredWidget = PlayWorld->Component->GetDialogueWidget())
+				{
+					bPlayback &= Test->TestTrue(TEXT("loaded Elder name reaches UMG"), WidgetText(RestoredWidget).Contains(TEXT("Saved Elder")));
+				}
+				else { bPlayback &= Test->TestTrue(TEXT("loaded dialogue widget exists"), false); }
+				PlayWorld->Component->StopDialogue();
 				PlayWorld.Reset();
-				FFileHelper::SaveStringToFile(bPlayback ? TEXT("playback=passed\ntyped_runtime=passed\nbranches=passed\nui_render=passed\nlocalization=passed\n") : TEXT("playback=failed\n"),
+				FFileHelper::SaveStringToFile(bPlayback ? TEXT("playback=passed\ntyped_runtime=passed\nbranches=passed\nui_render=passed\nlocalization=passed\nsave_load=passed\n") : TEXT("playback=failed\n"),
 					*FPaths::Combine(ResultDir, TEXT("playback.txt")));
 				Live->Disconnect();
 				return true;
