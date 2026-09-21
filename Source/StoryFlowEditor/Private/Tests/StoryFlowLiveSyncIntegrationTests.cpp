@@ -363,6 +363,7 @@ namespace StoryFlowLiveSyncProbe
 		FString DialogueId;
 		FString FirstLine;
 		FString SecondLine;
+		FString FrenchLine;
 		int32 Stage = 0;
 		double Started = FPlatformTime::Seconds();
 		TUniquePtr<StoryFlowTestWorld::FScopedWorld> PlayWorld;
@@ -370,9 +371,10 @@ namespace StoryFlowLiveSyncProbe
 		bool bPlayback = true;
 
 		FWaitForSync(FAutomationTestBase* InTest, UStoryFlowEditorSubsystem* InSubsystem, const FString& InResultDir,
-			const FString& InExportDir, const FString& InDialogueId, const FString& InFirstLine, const FString& InSecondLine)
+			const FString& InExportDir, const FString& InDialogueId, const FString& InFirstLine, const FString& InSecondLine,
+			const FString& InFrenchLine)
 			: Test(InTest), Subsystem(InSubsystem), ResultDir(InResultDir), ExportDir(InExportDir), DialogueId(InDialogueId),
-			  FirstLine(InFirstLine), SecondLine(InSecondLine) {}
+			  FirstLine(InFirstLine), SecondLine(InSecondLine), FrenchLine(InFrenchLine) {}
 
 		bool ContinuePlayback(UStoryFlowEditorSubsystem* Live)
 		{
@@ -475,7 +477,7 @@ namespace StoryFlowLiveSyncProbe
 				bPlayback &= Test->TestTrue(TEXT("farewell line"), Declined.Text.Contains(TEXT("The elder nods slowly.")));
 				PlayWorld->Component->StopDialogue();
 				PlayWorld.Reset();
-				FFileHelper::SaveStringToFile(bPlayback ? TEXT("playback=passed\ntyped_runtime=passed\nbranches=passed\nui_render=passed\n") : TEXT("playback=failed\n"),
+				FFileHelper::SaveStringToFile(bPlayback ? TEXT("playback=passed\ntyped_runtime=passed\nbranches=passed\nui_render=passed\nlocalization=passed\n") : TEXT("playback=failed\n"),
 					*FPaths::Combine(ResultDir, TEXT("playback.txt")));
 				Live->Disconnect();
 				return true;
@@ -510,13 +512,31 @@ namespace StoryFlowLiveSyncProbe
 				Live->Disconnect();
 				return true;
 			}
-			const FString Marker = FString::Printf(TEXT("value_parity=passed\nchild_hp=%d\nintro=%s\n"), Hp, *Line);
+			const TSharedPtr<FJsonObject> Sidecar = LoadJson(FPaths::Combine(ExportDir, TEXT("localization.json")));
+			const FStoryFlowStringTable* French = Project->LanguageStrings.Find(TEXT("fr"));
+			const FString Key = DialogueId + TEXT(".text");
+			const FString* Imported = French ? French->Entries.Find(Key) : nullptr;
+			const TSharedPtr<FJsonObject> Tables = Sidecar.IsValid() ? Sidecar->GetObjectField(TEXT("strings")) : nullptr;
+			const TSharedPtr<FJsonObject> FrenchWire = Tables.IsValid() ? Tables->GetObjectField(TEXT("fr")) : nullptr;
+			if (!Test->TestTrue(TEXT("imported localization sidecar and French intro agree"),
+				Sidecar.IsValid() && Project->bHasLocalization && Project->SourceLanguage == TEXT("en") &&
+				Project->Languages.Num() == 1 && Project->Languages[0].Code == TEXT("fr") &&
+				Imported && *Imported == FrenchLine && FrenchWire.IsValid() &&
+				FrenchWire->GetStringField(Key) == FrenchLine))
+			{
+				FFileHelper::SaveStringToFile(TEXT("localization import parity failed"), *FPaths::Combine(ResultDir, TEXT("failure.txt")));
+				Live->Disconnect();
+				return true;
+			}
+			const FString Marker = FString::Printf(TEXT("value_parity=passed\nlocalization=passed\nchild_hp=%d\nintro=%s\n"), Hp, *Line);
 			FFileHelper::SaveStringToFile(Marker, *FPaths::Combine(ResultDir, Stage == 0 ? TEXT("stage-1.txt") : TEXT("stage-2.txt")));
 			if (Stage++ == 0) { Started = FPlatformTime::Seconds(); return false; }
 
 			PlayWorld = MakeUnique<StoryFlowTestWorld::FScopedWorld>();
 			if (!Test->TestTrue(TEXT("runtime world initialized"), PlayWorld->Init())) return true;
 			PlayWorld->Subsystem->SetProject(Project);
+			bPlayback &= Test->TestTrue(TEXT("French appears in the Unreal language roster"),
+				PlayWorld->Subsystem->GetLanguages().ContainsByPredicate([](const FStoryFlowLanguage& Row) { return Row.Code == TEXT("fr"); }));
 			UClass* WidgetClass = LoadClass<UStoryFlowDialogueWidget>(nullptr,
 				TEXT("/StoryFlowPlugin/Examples/WBP_Dialogue.WBP_Dialogue_C"));
 			if (!Test->TestNotNull(TEXT("plugin example dialogue widget class"), WidgetClass)) return true;
@@ -529,6 +549,20 @@ namespace StoryFlowLiveSyncProbe
 			PlayWorld->World->AddController(Controller);
 			PlayWorld->Component->DialogueWidgetClass = WidgetClass;
 			PlayWorld->Component->bAutoAddWidgetToViewport = false;
+			bPlayback &= Test->TestTrue(TEXT("Unreal runtime accepts French"), PlayWorld->Subsystem->SetLanguage(TEXT("fr")));
+			bPlayback &= Test->TestEqual(TEXT("active language is French"), PlayWorld->Subsystem->GetLanguage(), TEXT("fr"));
+			PlayWorld->Component->StartDialogueWithScript(TEXT("scripts/script_intro"));
+			const FStoryFlowDialogueState FrenchState = PlayWorld->Component->GetCurrentDialogue();
+			bPlayback &= Test->TestEqual(TEXT("French intro resolves through the imported table"), FrenchState.Text, FrenchLine);
+			if (UStoryFlowDialogueWidget* FrenchWidget = PlayWorld->Component->GetDialogueWidget())
+			{
+				bPlayback &= Test->TestTrue(TEXT("example UMG widget displays French"), WidgetText(FrenchWidget).Contains(FrenchLine));
+				bPlayback &= CaptureWidget(*Test, FrenchWidget->TakeWidget(), FPaths::Combine(ResultDir, TEXT("ui-french.bmp")));
+			}
+			else bPlayback &= Test->TestTrue(TEXT("French dialogue created a UMG widget"), false);
+			bPlayback &= Test->TestFalse(TEXT("unknown Unreal language is refused"), PlayWorld->Subsystem->SetLanguage(TEXT("unknown")));
+			bPlayback &= Test->TestEqual(TEXT("unknown language keeps French"), PlayWorld->Subsystem->GetLanguage(), TEXT("fr"));
+			bPlayback &= Test->TestTrue(TEXT("Unreal runtime returns to source"), PlayWorld->Subsystem->SetLanguage(TEXT("en")));
 			PlayWorld->Component->StartDialogueWithScript(TEXT("scripts/script_intro"));
 			const FStoryFlowDialogueState State = PlayWorld->Component->GetCurrentDialogue();
 			bPlayback &= Test->TestTrue(TEXT("intro dialogue active"), State.bIsValid);
@@ -559,7 +593,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowLiveSyncIntegrationTest, "StoryFlow.I
 
 bool FStoryFlowLiveSyncIntegrationTest::RunTest(const FString& Parameters)
 {
-	FString ResultDir, ExportDir, DialogueId, FirstLine, SecondLine;
+	FString ResultDir, ExportDir, DialogueId, FirstLine, SecondLine, FrenchLine;
 	int32 Port = 0;
 	FParse::Value(FCommandLine::Get(), TEXT("-sfPort="), Port);
 	FParse::Value(FCommandLine::Get(), TEXT("-sfResultDir="), ResultDir);
@@ -567,17 +601,19 @@ bool FStoryFlowLiveSyncIntegrationTest::RunTest(const FString& Parameters)
 	FParse::Value(FCommandLine::Get(), TEXT("-sfDialogueId="), DialogueId);
 	FParse::Value(FCommandLine::Get(), TEXT("-sfFirstLine="), FirstLine);
 	FParse::Value(FCommandLine::Get(), TEXT("-sfSecondLine="), SecondLine);
+	FParse::Value(FCommandLine::Get(), TEXT("-sfFrenchLine="), FrenchLine);
 	FirstLine.ReplaceInline(TEXT("_"), TEXT(" "));
 	SecondLine.ReplaceInline(TEXT("_"), TEXT(" "));
+	FrenchLine.ReplaceInline(TEXT("_"), TEXT(" "));
 	if (!TestTrue(TEXT("integration arguments supplied"), Port > 0 && !ResultDir.IsEmpty() && !ExportDir.IsEmpty()
-		&& !DialogueId.IsEmpty() && !FirstLine.IsEmpty() && !SecondLine.IsEmpty())) return false;
+		&& !DialogueId.IsEmpty() && !FirstLine.IsEmpty() && !SecondLine.IsEmpty() && !FrenchLine.IsEmpty())) return false;
 	IFileManager::Get().MakeDirectory(*ResultDir, true);
 	UEditorAssetLibrary::DeleteDirectory(StoryFlowLiveSyncProbe::TestRoot);
 	UStoryFlowEditorSubsystem* Subsystem = GEditor ? GEditor->GetEditorSubsystem<UStoryFlowEditorSubsystem>() : nullptr;
 	if (!TestNotNull(TEXT("StoryFlow editor subsystem"), Subsystem)) return false;
 	Subsystem->SetContentPath(StoryFlowLiveSyncProbe::TestRoot);
 	Subsystem->ConnectToStoryFlow(TEXT("127.0.0.1"), Port);
-	ADD_LATENT_AUTOMATION_COMMAND(StoryFlowLiveSyncProbe::FWaitForSync(this, Subsystem, ResultDir, ExportDir, DialogueId, FirstLine, SecondLine));
+	ADD_LATENT_AUTOMATION_COMMAND(StoryFlowLiveSyncProbe::FWaitForSync(this, Subsystem, ResultDir, ExportDir, DialogueId, FirstLine, SecondLine, FrenchLine));
 	return true;
 }
 
