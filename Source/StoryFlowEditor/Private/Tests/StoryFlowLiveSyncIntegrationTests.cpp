@@ -517,6 +517,69 @@ namespace StoryFlowLiveSyncProbe
 		return bOk;
 	}
 
+	bool CheckLegacyImport(FAutomationTestBase& Test, UStoryFlowProjectAsset* Project,
+		const FString& ExportDir, const FString& DialogueId, const FString& ExpectedLine)
+	{
+		if (!Test.TestNotNull(TEXT("migrated WebSocket sync installed project"), Project)) return false;
+		const TSharedPtr<FJsonObject> Globals = LoadJson(FPaths::Combine(ExportDir, TEXT("global-variables.json")));
+		const TSharedPtr<FJsonObject> Characters = LoadJson(FPaths::Combine(ExportDir, TEXT("characters.json")));
+		const TSharedPtr<FJsonObject> Index = LoadJson(FPaths::Combine(ExportDir, TEXT("character-index.json")));
+		const TSharedPtr<FJsonObject> Data = LoadJson(FPaths::Combine(ExportDir, TEXT("data-assets.json")));
+		if (!Test.TestTrue(TEXT("migrated export JSON is readable"),
+			Globals.IsValid() && Characters.IsValid() && Index.IsValid() && Data.IsValid())) return false;
+		bool bOk = true;
+		const auto GlobalVars = Globals->GetObjectField(TEXT("variables"));
+		bOk &= Test.TestEqual(TEXT("migrated global count"), Project->GlobalVariables.Num(), GlobalVars->Values.Num());
+		for (const auto& Pair : GlobalVars->Values)
+			bOk &= CheckVariable(Test, TEXT("migrated global ") + Pair.Key,
+				Project->GlobalVariables.Find(Pair.Key), Pair.Value->AsObject());
+		bOk &= CheckMedia(Test, TEXT("migrated global"), Globals, Project->ResolvedAssets, 1);
+
+		const auto CharacterRecords = Characters->GetObjectField(TEXT("characters"));
+		bOk &= Test.TestEqual(TEXT("migrated character count"), Project->Characters.Num(), CharacterRecords->Values.Num());
+		for (const auto& Pair : CharacterRecords->Values)
+		{
+			const FString Key = Pair.Key.ToLower();
+			UStoryFlowCharacterAsset* const* Found = Project->Characters.Find(Key);
+			if (!Test.TestTrue(TEXT("migrated character ") + Key, Found && *Found)) { bOk = false; continue; }
+			const auto Expected = Pair.Value->AsObject();
+			bOk &= Test.TestEqual(Key + TEXT(" name key"), (*Found)->Name, Expected->GetStringField(TEXT("name")));
+			bOk &= Test.TestEqual(Key + TEXT(" portrait key"), (*Found)->Image, Expected->GetStringField(TEXT("image")));
+			const auto Variables = Expected->GetObjectField(TEXT("variables"));
+			bOk &= Test.TestEqual(Key + TEXT(" variable count"), (*Found)->Variables.Num(), Variables->Values.Num());
+			for (const auto& Variable : Variables->Values)
+			{
+				const auto Spec = Variable.Value->AsObject();
+				bOk &= CheckVariable(Test, Key + TEXT(" variable ") + Variable.Key,
+					(*Found)->Variables.Find(Spec->GetStringField(TEXT("name"))), Spec);
+			}
+			if (!(*Found)->Image.IsEmpty())
+			{
+				const auto* Portrait = (*Found)->ResolvedAssets.Find((*Found)->Image);
+				bOk &= Test.TestTrue(Key + TEXT(" resolved portrait"), Portrait && Portrait->LoadSynchronous() != nullptr);
+			}
+		}
+		bOk &= CheckMedia(Test, TEXT("migrated character"), Characters, Project->ResolvedAssets, 1);
+
+		const auto Bridge = Index->GetObjectField(TEXT("characters"));
+		bOk &= Test.TestEqual(TEXT("migrated character bridge count"), Project->CharacterIdToPath.Num(), Bridge->Values.Num());
+		for (const auto& Pair : Bridge->Values)
+		{
+			const FString* Actual = Project->CharacterIdToPath.Find(Pair.Key);
+			bOk &= Test.TestTrue(TEXT("migrated character id ") + Pair.Key,
+				Actual && *Actual == Pair.Value->AsString().ToLower() && Project->Characters.Contains(*Actual));
+		}
+		bOk &= Test.TestEqual(TEXT("frozen 1.7 data asset export is empty"),
+			Data->GetObjectField(TEXT("dataAssets"))->Values.Num(), 0);
+		bOk &= Test.TestEqual(TEXT("frozen 1.7 imported data assets are empty"), Project->DataAssets.Num(), 0);
+		UStoryFlowScriptAsset* Intro = Project->GetScriptByPath(TEXT("scripts/script_intro"));
+		if (!Test.TestNotNull(TEXT("migrated intro script"), Intro)) return false;
+		const FStoryFlowNode* Dialogue = Intro->Nodes.Find(DialogueId);
+		if (!Test.TestTrue(TEXT("migrated opening dialogue"), Dialogue != nullptr)) return false;
+		bOk &= Test.TestEqual(TEXT("migrated opening text"), Intro->GetString(Dialogue->Data.Text), ExpectedLine);
+		return bOk;
+	}
+
 	struct FColdLoad final : IAutomationLatentCommand
 	{
 		FAutomationTestBase* Test;
@@ -689,6 +752,96 @@ namespace StoryFlowLiveSyncProbe
 
 			FFileHelper::SaveStringToFile(TEXT("deletion_resync=passed\nstale_media=absent\n"),
 				*FPaths::Combine(ResultDir, TEXT("deletion-resync.txt")));
+			Live->Disconnect();
+			return true;
+		}
+	};
+
+	struct FWaitForLegacy final : IAutomationLatentCommand
+	{
+		FAutomationTestBase* Test;
+		TWeakObjectPtr<UStoryFlowEditorSubsystem> Subsystem;
+		FString ResultDir;
+		FString ExportDir;
+		FString DialogueId;
+		FString DialogueText;
+		FString OptionSource;
+		FString ElderName;
+		double Started = FPlatformTime::Seconds();
+
+		FWaitForLegacy(FAutomationTestBase* InTest, UStoryFlowEditorSubsystem* InSubsystem,
+			const FString& InResultDir, const FString& InExportDir, const FString& InDialogueId,
+			const FString& InDialogueText, const FString& InOptionSource, const FString& InElderName)
+			: Test(InTest), Subsystem(InSubsystem), ResultDir(InResultDir), ExportDir(InExportDir),
+			  DialogueId(InDialogueId), DialogueText(InDialogueText), OptionSource(InOptionSource),
+			  ElderName(InElderName) {}
+
+		bool Update() override
+		{
+			UStoryFlowEditorSubsystem* Live = Subsystem.Get();
+			if (!Live) { Test->AddError(TEXT("StoryFlow editor subsystem disappeared during migrated import")); return true; }
+			if (FPlatformTime::Seconds() - Started > 480.0)
+			{
+				Test->AddError(TEXT("Timed out waiting for migrated 1.7 import"));
+				FFileHelper::SaveStringToFile(TEXT("migrated import timed out"),
+					*FPaths::Combine(ResultDir, TEXT("failure.txt")));
+				Live->Disconnect();
+				return true;
+			}
+			UStoryFlowProjectAsset* Project = Live->GetProjectAsset();
+			// The same content root still contains the deletion-phase project when this
+			// process starts. The frozen sample has no authored Data Assets and 63
+			// globals, so wait for that replacement shape before running strict checks.
+			if (!Project || Project->DataAssets.Num() != 0 || Project->GlobalVariables.Num() != 63) return false;
+			bool bOk = CheckLegacyImport(*Test, Project, ExportDir, DialogueId, DialogueText);
+			FString Diagnostics = FString::Printf(TEXT("import=%d\n"), bOk);
+
+			StoryFlowTestWorld::FScopedWorld World;
+			bOk &= Test->TestTrue(TEXT("migrated runtime world initialized"), World.Init());
+			World.Subsystem->SetProject(Project);
+			UClass* WidgetClass = LoadClass<UStoryFlowDialogueWidget>(nullptr,
+				TEXT("/StoryFlowPlugin/Examples/WBP_Dialogue.WBP_Dialogue_C"));
+			bOk &= Test->TestNotNull(TEXT("migrated dialogue widget class"), WidgetClass);
+			ULocalPlayer* LocalPlayer = NewObject<ULocalPlayer>(GEngine,
+				GEngine->LocalPlayerClass ? GEngine->LocalPlayerClass.Get() : ULocalPlayer::StaticClass());
+			APlayerController* Controller = World.World->SpawnActor<APlayerController>();
+			bOk &= Test->TestTrue(TEXT("migrated local player controller"), LocalPlayer && Controller);
+			if (LocalPlayer && Controller)
+			{
+				Controller->Player = LocalPlayer;
+				LocalPlayer->PlayerController = Controller;
+				World.World->AddController(Controller);
+			}
+			World.Component->DialogueWidgetClass = WidgetClass;
+			World.Component->bAutoAddWidgetToViewport = false;
+			World.Component->StartDialogueWithScript(TEXT("scripts/script_intro"));
+			const FStoryFlowDialogueState First = World.Component->GetCurrentDialogue();
+			bOk &= Test->TestEqual(TEXT("migrated runtime opening node"), First.NodeId, DialogueId);
+			bOk &= Test->TestEqual(TEXT("migrated runtime opening text"), First.Text, DialogueText);
+			Diagnostics += FString::Printf(TEXT("runtime_node=%s\nruntime_text=%s\n"), *First.NodeId, *First.Text);
+			UStoryFlowDialogueWidget* Widget = World.Component->GetDialogueWidget();
+			bOk &= Test->TestNotNull(TEXT("migrated runtime created UMG"), Widget);
+			if (Widget)
+			{
+				const FString Displayed = WidgetText(Widget);
+				Diagnostics += TEXT("widget_text=") + Displayed + TEXT("\n");
+				bOk &= Test->TestTrue(TEXT("migrated UMG displays opening story"),
+					Displayed.Contains(DialogueText) && Displayed.Contains(OptionSource));
+				bOk &= CaptureWidget(*Test, Widget->TakeWidget(),
+					FPaths::Combine(ResultDir, TEXT("ui-legacy-intro.bmp")));
+				UButton* Enter = OptionButton(Widget, OptionSource);
+				bOk &= Test->TestNotNull(TEXT("migrated opening option has a UMG button"), Enter);
+				if (Enter) Enter->OnClicked.Broadcast();
+			}
+			const FStoryFlowDialogueState Elder = World.Component->GetCurrentDialogue();
+			Diagnostics += FString::Printf(TEXT("elder_node=%s\nelder_name=%s\nelder_image=%d\n"),
+				*Elder.NodeId, *Elder.Character.Name, Elder.Character.Image != nullptr);
+			bOk &= Test->TestEqual(TEXT("migrated Elder name reaches runtime"), Elder.Character.Name, ElderName);
+			bOk &= Test->TestTrue(TEXT("migrated Elder portrait reaches runtime"), Elder.Character.Image != nullptr);
+			FFileHelper::SaveStringToFile(bOk
+				? TEXT("legacy_migration=passed\nvalue_parity=passed\nmedia=passed\nui_render=passed\n")
+				: TEXT("legacy_migration=failed\n") + Diagnostics,
+				*FPaths::Combine(ResultDir, TEXT("legacy-migration.txt")));
 			Live->Disconnect();
 			return true;
 		}
@@ -1050,6 +1203,9 @@ bool FStoryFlowLiveSyncIntegrationTest::RunTest(const FString& Parameters)
 	int32 DeletionProbeMode = 0;
 	FParse::Value(FCommandLine::Get(), TEXT("-sfDeletionProbe="), DeletionProbeMode);
 	const bool bDeletionProbe = DeletionProbeMode == 1;
+	int32 LegacyProbeMode = 0;
+	FParse::Value(FCommandLine::Get(), TEXT("-sfLegacyProbe="), LegacyProbeMode);
+	const bool bLegacyProbe = LegacyProbeMode == 1;
 	FString ResultDir, ExportDir, BaseId, ChildId, DialogueId, FirstLine, SecondLine, FrenchLine, TitleId;
 	FString OptionId, OptionSource, FrenchOption, ElderId, ElderName, FrenchElderName, BaseTitle, FrenchBaseTitle;
 	int32 Port = 0;
@@ -1071,7 +1227,14 @@ bool FStoryFlowLiveSyncIntegrationTest::RunTest(const FString& Parameters)
 	FParse::Value(FCommandLine::Get(), TEXT("-sfFrenchElderName="), FrenchElderName);
 	FParse::Value(FCommandLine::Get(), TEXT("-sfBaseTitle="), BaseTitle);
 	FParse::Value(FCommandLine::Get(), TEXT("-sfFrenchBaseTitle="), FrenchBaseTitle);
-	FirstLine.ReplaceInline(TEXT("_"), TEXT(" "));
+	if (bLegacyProbe)
+	{
+		FString LegacyLineFile;
+		FParse::Value(FCommandLine::Get(), TEXT("-sfLegacyLineFile="), LegacyLineFile);
+		if (!TestTrue(TEXT("legacy line sidecar supplied"), !LegacyLineFile.IsEmpty() &&
+			FFileHelper::LoadFileToString(FirstLine, *LegacyLineFile))) return false;
+	}
+	if (!bLegacyProbe) FirstLine.ReplaceInline(TEXT("_"), TEXT(" "));
 	SecondLine.ReplaceInline(TEXT("_"), TEXT(" "));
 	FrenchLine.ReplaceInline(TEXT("_"), TEXT(" "));
 	OptionSource.ReplaceInline(TEXT("_"), TEXT(" "));
@@ -1099,6 +1262,14 @@ bool FStoryFlowLiveSyncIntegrationTest::RunTest(const FString& Parameters)
 		Subsystem->ConnectToStoryFlow(TEXT("127.0.0.1"), Port);
 		ADD_LATENT_AUTOMATION_COMMAND(StoryFlowLiveSyncProbe::FWaitForDeletion(
 			this, Subsystem, ResultDir, BaseId, ChildId, TitleId, DialogueId));
+		return true;
+	}
+	if (bLegacyProbe)
+	{
+		Subsystem->SetContentPath(StoryFlowLiveSyncProbe::TestRoot);
+		Subsystem->ConnectToStoryFlow(TEXT("127.0.0.1"), Port);
+		ADD_LATENT_AUTOMATION_COMMAND(StoryFlowLiveSyncProbe::FWaitForLegacy(
+			this, Subsystem, ResultDir, ExportDir, DialogueId, FirstLine, OptionSource, ElderName));
 		return true;
 	}
 	UEditorAssetLibrary::DeleteDirectory(StoryFlowLiveSyncProbe::TestRoot);
