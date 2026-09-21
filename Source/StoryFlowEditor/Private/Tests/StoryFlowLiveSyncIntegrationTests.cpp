@@ -601,6 +601,99 @@ namespace StoryFlowLiveSyncProbe
 		}
 	};
 
+	struct FWaitForDeletion final : IAutomationLatentCommand
+	{
+		FAutomationTestBase* Test;
+		TWeakObjectPtr<UStoryFlowEditorSubsystem> Subsystem;
+		FString ResultDir;
+		FString BaseId;
+		FString ChildId;
+		FString TitleId;
+		FString DialogueId;
+		double Started = FPlatformTime::Seconds();
+
+		FWaitForDeletion(FAutomationTestBase* InTest, UStoryFlowEditorSubsystem* InSubsystem,
+			const FString& InResultDir, const FString& InBaseId, const FString& InChildId,
+			const FString& InTitleId, const FString& InDialogueId)
+			: Test(InTest), Subsystem(InSubsystem), ResultDir(InResultDir), BaseId(InBaseId),
+			  ChildId(InChildId), TitleId(InTitleId), DialogueId(InDialogueId) {}
+
+		bool Update() override
+		{
+			UStoryFlowEditorSubsystem* Live = Subsystem.Get();
+			if (!Live)
+			{
+				Test->AddError(TEXT("StoryFlow editor subsystem disappeared during deletion resync"));
+				return true;
+			}
+			if (FPlatformTime::Seconds() - Started > 240.0)
+			{
+				Test->AddError(TEXT("Timed out waiting for deleted StoryFlow data to leave the Unreal project"));
+				FFileHelper::SaveStringToFile(TEXT("deletion resync timed out"),
+					*FPaths::Combine(ResultDir, TEXT("failure.txt")));
+				Live->Disconnect();
+				return true;
+			}
+
+			UStoryFlowProjectAsset* Project = Live->GetProjectAsset();
+			if (!Project) return false;
+			bool bSyncGlobalsGone = true;
+			for (const auto& Pair : Project->GlobalVariables)
+			{
+				bSyncGlobalsGone &= !Pair.Value.Name.StartsWith(TEXT("Sync"), ESearchCase::CaseSensitive);
+			}
+			UStoryFlowCharacterAsset* Elder = nullptr;
+			for (const auto& Pair : Project->Characters)
+			{
+				if (Pair.Key.EndsWith(TEXT("npc_elder.sfc"), ESearchCase::IgnoreCase))
+				{
+					Elder = Pair.Value;
+					break;
+				}
+			}
+			bool bSyncCharacterFieldsGone = Elder != nullptr;
+			if (Elder)
+			{
+				for (const auto& Pair : Elder->Variables)
+				{
+					bSyncCharacterFieldsGone &= !Pair.Value.Name.StartsWith(TEXT("Sync"), ESearchCase::CaseSensitive);
+				}
+			}
+			UStoryFlowDataAssetAsset* Base = Project->DataAssets.FindRef(BaseId);
+			bool bBaseDeclarationsGone = Base != nullptr;
+			if (Base)
+			{
+				for (const FStoryFlowVariable& Variable : Base->Variables)
+				{
+					bBaseDeclarationsGone &= Variable.Id != TitleId &&
+						Variable.Id != TEXT("80808080808080808080808080808080") &&
+						Variable.Id != TEXT("abababababababababababababababab");
+				}
+			}
+			const FStoryFlowStringTable* French = Project->LanguageStrings.Find(TEXT("fr"));
+			const bool bLocalizationCorrect = French &&
+				!French->Entries.Contains(TitleId + TEXT(".value")) &&
+				French->Entries.Contains(DialogueId + TEXT(".text"));
+			bool bStaleMediaGone = true;
+			for (const auto& Pair : Project->ResolvedAssets)
+			{
+				bStaleMediaGone &= !Pair.Key.Contains(TEXT("syncprobeunique"), ESearchCase::IgnoreCase) &&
+					!Pair.Value.ToSoftObjectPath().ToString().Contains(TEXT("syncprobeunique"), ESearchCase::IgnoreCase);
+			}
+
+			if (!bSyncGlobalsGone || !bSyncCharacterFieldsGone || Project->DataAssets.Contains(ChildId) ||
+				!bBaseDeclarationsGone || !bLocalizationCorrect || !bStaleMediaGone)
+			{
+				return false;
+			}
+
+			FFileHelper::SaveStringToFile(TEXT("deletion_resync=passed\nstale_media=absent\n"),
+				*FPaths::Combine(ResultDir, TEXT("deletion-resync.txt")));
+			Live->Disconnect();
+			return true;
+		}
+	};
+
 	struct FWaitForSync final : IAutomationLatentCommand
 	{
 		FAutomationTestBase* Test;
@@ -954,13 +1047,17 @@ bool FStoryFlowLiveSyncIntegrationTest::RunTest(const FString& Parameters)
 	int32 ColdLoadMode = 0;
 	FParse::Value(FCommandLine::Get(), TEXT("-sfColdLoad="), ColdLoadMode);
 	const bool bColdLoad = ColdLoadMode == 1;
-	FString ResultDir, ExportDir, BaseId, DialogueId, FirstLine, SecondLine, FrenchLine, TitleId;
+	int32 DeletionProbeMode = 0;
+	FParse::Value(FCommandLine::Get(), TEXT("-sfDeletionProbe="), DeletionProbeMode);
+	const bool bDeletionProbe = DeletionProbeMode == 1;
+	FString ResultDir, ExportDir, BaseId, ChildId, DialogueId, FirstLine, SecondLine, FrenchLine, TitleId;
 	FString OptionId, OptionSource, FrenchOption, ElderId, ElderName, FrenchElderName, BaseTitle, FrenchBaseTitle;
 	int32 Port = 0;
 	FParse::Value(FCommandLine::Get(), TEXT("-sfPort="), Port);
 	FParse::Value(FCommandLine::Get(), TEXT("-sfResultDir="), ResultDir);
 	FParse::Value(FCommandLine::Get(), TEXT("-sfExportDir="), ExportDir);
 	FParse::Value(FCommandLine::Get(), TEXT("-sfBaseId="), BaseId);
+	FParse::Value(FCommandLine::Get(), TEXT("-sfChildId="), ChildId);
 	FParse::Value(FCommandLine::Get(), TEXT("-sfDialogueId="), DialogueId);
 	FParse::Value(FCommandLine::Get(), TEXT("-sfTitleId="), TitleId);
 	FParse::Value(FCommandLine::Get(), TEXT("-sfFirstLine="), FirstLine);
@@ -984,7 +1081,7 @@ bool FStoryFlowLiveSyncIntegrationTest::RunTest(const FString& Parameters)
 	BaseTitle.ReplaceInline(TEXT("_"), TEXT(" "));
 	FrenchBaseTitle.ReplaceInline(TEXT("_"), TEXT(" "));
 	if (!TestTrue(TEXT("integration arguments supplied"), Port > 0 && !ResultDir.IsEmpty() && !ExportDir.IsEmpty()
-		&& !BaseId.IsEmpty() && !DialogueId.IsEmpty() && !TitleId.IsEmpty() && !FirstLine.IsEmpty() && !SecondLine.IsEmpty()
+		&& !BaseId.IsEmpty() && !ChildId.IsEmpty() && !DialogueId.IsEmpty() && !TitleId.IsEmpty() && !FirstLine.IsEmpty() && !SecondLine.IsEmpty()
 		&& !FrenchLine.IsEmpty() && !OptionId.IsEmpty() && !OptionSource.IsEmpty() && !FrenchOption.IsEmpty()
 		&& !ElderId.IsEmpty() && !ElderName.IsEmpty() && !FrenchElderName.IsEmpty()
 		&& !BaseTitle.IsEmpty() && !FrenchBaseTitle.IsEmpty())) return false;
@@ -994,9 +1091,17 @@ bool FStoryFlowLiveSyncIntegrationTest::RunTest(const FString& Parameters)
 		ADD_LATENT_AUTOMATION_COMMAND(StoryFlowLiveSyncProbe::FColdLoad(this, ResultDir, OptionSource));
 		return true;
 	}
-	UEditorAssetLibrary::DeleteDirectory(StoryFlowLiveSyncProbe::TestRoot);
 	UStoryFlowEditorSubsystem* Subsystem = GEditor ? GEditor->GetEditorSubsystem<UStoryFlowEditorSubsystem>() : nullptr;
 	if (!TestNotNull(TEXT("StoryFlow editor subsystem"), Subsystem)) return false;
+	if (bDeletionProbe)
+	{
+		Subsystem->SetContentPath(StoryFlowLiveSyncProbe::TestRoot);
+		Subsystem->ConnectToStoryFlow(TEXT("127.0.0.1"), Port);
+		ADD_LATENT_AUTOMATION_COMMAND(StoryFlowLiveSyncProbe::FWaitForDeletion(
+			this, Subsystem, ResultDir, BaseId, ChildId, TitleId, DialogueId));
+		return true;
+	}
+	UEditorAssetLibrary::DeleteDirectory(StoryFlowLiveSyncProbe::TestRoot);
 	Subsystem->SetContentPath(StoryFlowLiveSyncProbe::TestRoot);
 	Subsystem->ConnectToStoryFlow(TEXT("127.0.0.1"), Port);
 	ADD_LATENT_AUTOMATION_COMMAND(StoryFlowLiveSyncProbe::FWaitForSync(this, Subsystem, ResultDir, ExportDir, BaseId,
