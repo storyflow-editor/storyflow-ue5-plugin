@@ -327,7 +327,7 @@ L   jawOpen .52  tongueUp .82  tongueRaise .58
 8. **Smoothing.** Ease each morph's current weight toward the target with `1 - exp(-smooth * dt)`, `smooth`
    default **16**. Frame-rate independent: never lerp by a raw per-frame constant.
 
-Defaults: `strength 0.55`, `sensitivity 1.0`, `jawBias 1.0`, `smooth 16`.
+Standalone driver defaults: `strength 0.55`, `sensitivity 1.0`, `jawBias 1.0`, `smooth 16`.
 
 > **SUPERSEDED 2026-09-05.** Steps 1-8 above are what both arms shipped on 2026-09-03 and what the audit below
 > found wanting. The v2 rule that follows is NORMATIVE from 2026-09-05; the constants are unchanged, the INPUT
@@ -381,7 +381,7 @@ Timings unchanged (hold 0.12-0.25 s, 20 % gap of MM-or-rest for 0.14-0.36 s, MM 
 Level = 0 in the idle and silent paths (the meter reports analysed loudness, nothing else).
 Centroid (the clamped axis position of the last analysed frame, 0 = OO, 1 = EE) is exposed beside Level and
 is 0 in the idle and silent paths: a mouth that opens but looks wrong is a centroid pinned at one end.
-FullScale is a tunable on BOTH components (Unreal AnalysisFullScale 5.66, Unity AnalysisFullScale 1.0),
+FullScale is a tunable on BOTH components (Unreal and Unity AnalysisFullScale default 32.0),
 floored at 0.001 on the way to the driver; RawPeak is the instrument for setting it.
 ResetLevel: peak = 0.12, Level = 0, s_prev zeroed.
 ```

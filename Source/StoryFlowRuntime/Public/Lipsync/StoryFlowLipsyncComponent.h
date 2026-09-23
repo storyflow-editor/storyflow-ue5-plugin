@@ -98,16 +98,16 @@ public:
 	TObjectPtr<USoundSubmix> AnalysisSubmix;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Lipsync|Feel", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float Strength = 0.55f;
+	float Strength = 0.50f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Lipsync|Feel", meta = (ClampMin = "0.1", ClampMax = "3.0"))
 	float Sensitivity = 1.0f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Lipsync|Feel", meta = (ClampMin = "0.0", ClampMax = "2.0"))
-	float JawBias = 1.0f;
+	float JawBias = 1.12f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Lipsync|Feel", meta = (ClampMin = "1.0", ClampMax = "40.0"))
-	float Smoothing = 16.0f;
+	float Smoothing = 40.0f;
 
 	/** Move the mouth on lines whose audio cannot be analysed, instead of leaving a dead face. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Lipsync|Feel")
@@ -117,13 +117,11 @@ public:
 	 * The raw magnitude a full-scale sine produces at its own bin, which is what the driver divides by to
 	 * put the mixer's spectrum back on the decibel scale its constants were tuned on.
 	 *
-	 * 5.66 is ALGEBRA, not measurement: a Hann window over 512 samples with the mixer's sqrt-of-FFT-size
-	 * scaling gives A * sqrt(512) / 4. Nobody has measured it. To set it properly, play the loudest line in
-	 * the game, read GetRawPeak(), and put that number here — too low and every line saturates the mouth
-	 * wide open, too high and quiet lines never pass the gate.
+	 * To calibrate it, play the loudest line in the game, read GetRawPeak(), and put that number here —
+	 * too low and every line saturates the mouth wide open, too high and quiet lines never pass the gate.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, AdvancedDisplay, Category = "StoryFlow|Lipsync", meta = (ClampMin = "0.001"))
-	float AnalysisFullScale = 5.66f;
+	float AnalysisFullScale = 32.0f;
 
 	/**
 	 * Drive the mouth from any playing audio: a cutscene line, a bark, a radio. Nothing to bake and nothing
