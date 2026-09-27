@@ -34,6 +34,10 @@ static EStoryFlowVariableType ArrayModifyElementType(EStoryFlowNodeType Type)
 	case EStoryFlowNodeType::RemoveFromImageArray:
 	case EStoryFlowNodeType::ClearImageArray:
 		return EStoryFlowVariableType::Image;
+	case EStoryFlowNodeType::AddToDataAssetArray:
+	case EStoryFlowNodeType::RemoveFromDataAssetArray:
+	case EStoryFlowNodeType::ClearDataAssetArray:
+		return EStoryFlowVariableType::DataAsset;
 	case EStoryFlowNodeType::AddToCharacterArray:
 	case EStoryFlowNodeType::RemoveFromCharacterArray:
 	case EStoryFlowNodeType::ClearCharacterArray:
@@ -58,6 +62,7 @@ static EStoryFlowNodeType SetArrayTwinOf(EStoryFlowNodeType GetArrayType)
 	case EStoryFlowNodeType::GetFloatArray:     return EStoryFlowNodeType::SetFloatArray;
 	case EStoryFlowNodeType::GetStringArray:    return EStoryFlowNodeType::SetStringArray;
 	case EStoryFlowNodeType::GetImageArray:     return EStoryFlowNodeType::SetImageArray;
+	case EStoryFlowNodeType::GetDataAssetRefArray: return EStoryFlowNodeType::SetDataAssetRefArray;
 	case EStoryFlowNodeType::GetCharacterArray: return EStoryFlowNodeType::SetCharacterArray;
 	case EStoryFlowNodeType::GetAudioArray:     return EStoryFlowNodeType::SetAudioArray;
 	default:                                    return GetArrayType;
@@ -369,6 +374,14 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 	{
 		TArray<FStoryFlowVariant> Array = EvaluateImageArrayInput(Node, StoryFlowHandles::In_ImageArray);
 		FString Value = EvaluateStringInput(Node, StoryFlowHandles::In_Image, Node->Data.Value.GetString());
+		Result = Array.ContainsByPredicate([&Value](const FStoryFlowVariant& V) { return V.GetString().Equals(Value); });
+		break;
+	}
+
+	case EStoryFlowNodeType::ArrayContainsDataAsset:
+	{
+		TArray<FStoryFlowVariant> Array = EvaluateDataAssetArrayInput(Node, StoryFlowHandles::In_DataAssetArray);
+		FString Value = EvaluateStringInput(Node, StoryFlowHandles::In_DataAsset, Node->Data.Value.GetString());
 		Result = Array.ContainsByPredicate([&Value](const FStoryFlowVariant& V) { return V.GetString().Equals(Value); });
 		break;
 	}
@@ -808,6 +821,7 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 	case EStoryFlowNodeType::ForEachFloatLoop:
 	case EStoryFlowNodeType::ForEachStringLoop:
 	case EStoryFlowNodeType::ForEachImageLoop:
+	case EStoryFlowNodeType::ForEachDataAssetLoop:
 	case EStoryFlowNodeType::ForEachCharacterLoop:
 	case EStoryFlowNodeType::ForEachAudioLoop:
 	{
@@ -903,6 +917,13 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 		break;
 	}
 
+	case EStoryFlowNodeType::ArrayLengthDataAsset:
+	{
+		TArray<FStoryFlowVariant> Array = EvaluateDataAssetArrayInput(Node, StoryFlowHandles::In_DataAssetArray);
+		Result = Array.Num();
+		break;
+	}
+
 	case EStoryFlowNodeType::ArrayLengthCharacter:
 	{
 		TArray<FStoryFlowVariant> Array = EvaluateCharacterArrayInput(Node, StoryFlowHandles::In_CharacterArray);
@@ -921,6 +942,14 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 	{
 		TArray<FStoryFlowVariant> Array = EvaluateImageArrayInput(Node, StoryFlowHandles::In_ImageArray);
 		FString Value = EvaluateStringInput(Node, StoryFlowHandles::In_Image, Node->Data.Value.GetString());
+		Result = Array.IndexOfByPredicate([&Value](const FStoryFlowVariant& V) { return V.GetString().Equals(Value); });
+		break;
+	}
+
+	case EStoryFlowNodeType::FindInDataAssetArray:
+	{
+		TArray<FStoryFlowVariant> Array = EvaluateDataAssetArrayInput(Node, StoryFlowHandles::In_DataAssetArray);
+		FString Value = EvaluateStringInput(Node, StoryFlowHandles::In_DataAsset, Node->Data.Value.GetString());
 		Result = Array.IndexOfByPredicate([&Value](const FStoryFlowVariant& V) { return V.GetString().Equals(Value); });
 		break;
 	}
@@ -1282,6 +1311,62 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 // String Evaluation
 // ============================================================================
 
+FString FStoryFlowEvaluator::EvaluateDataAssetFromNode(FStoryFlowNode* Node, const FString& TargetNodeId, const FString& SourceHandle)
+{
+	if (!Node || !Context) { return FString(); }
+	bool bDepthValid;
+	FDepthGuard Guard(Context->EvaluationDepth, STORYFLOW_MAX_EVALUATION_DEPTH, bDepthValid);
+	if (!bDepthValid) { Context->MarkReadFailure(); return FString(); }
+	Context->RefreshSharedState();
+	switch (Node->Type) {
+	case EStoryFlowNodeType::GetDataAsset: return Node->Data.AssetId;
+	case EStoryFlowNodeType::GetDataAssetRef: case EStoryFlowNodeType::SetDataAssetRef: {
+		const auto* V = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
+		if (V && V->Type == EStoryFlowVariableType::DataAsset && !V->bIsArray) { return V->Value.GetString(); } break;
+	}
+	case EStoryFlowNodeType::GetCharacterVar: case EStoryFlowNodeType::SetCharacterVar: {
+		const FString Ref = ResolveCharacterTarget(Node);
+		const auto* V = Context->FindCharacterVariable(Ref, Node->Data.VariableName);
+		if (Node->Data.VariableType == TEXT("dataAsset") && V && V->Type == EStoryFlowVariableType::DataAsset && !V->bIsArray) { return V->Value.GetString(); } break;
+	}
+	case EStoryFlowNodeType::GetDataAssetVariable: case EStoryFlowNodeType::SetDataAssetVariable: {
+		FStoryFlowVariant Value;
+		if (Node->Data.VariableType == TEXT("dataAsset") && !Node->Data.bIsArray && TryReadDataAssetVariable(Node, Value)) { return Value.GetString(); } break;
+	}
+	case EStoryFlowNodeType::GetDataAssetArrayElement: case EStoryFlowNodeType::GetRandomDataAssetArrayElement: {
+		const auto Array = EvaluateDataAssetArrayInput(Node, StoryFlowHandles::In_DataAssetArray);
+		const int32 Index = Node->Type == EStoryFlowNodeType::GetDataAssetArrayElement ? EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer, Node->Data.Value.GetInt(0)) : (Array.IsEmpty() ? -1 : FMath::RandRange(0, Array.Num() - 1));
+		return Array.IsValidIndex(Index) ? Array[Index].GetString() : FString();
+	}
+	case EStoryFlowNodeType::GetMapValue: {
+		FStoryFlowVariant Value;
+		if (Node->Data.ValueType == TEXT("dataAsset") && ComputeGetMapValue(Node, Value)) { return Value.GetString(); } break;
+	}
+	case EStoryFlowNodeType::ForEachDataAssetLoop: {
+		FStoryFlowVariant Value;
+		return Context->GetNodeState(Node->Id).TryGetLoopElement(Value) ? Value.GetString() : FString();
+	}
+	case EStoryFlowNodeType::ForEachMap:
+		if (Node->Data.ValueType == TEXT("dataAsset") && SourceHandle.EndsWith(TEXT("-value"))) { return Context->GetNodeState(Node->Id).LoopValue.GetString(); } break;
+	case EStoryFlowNodeType::RunScript: {
+		const int32 At = SourceHandle.Find(TEXT("-out-"));
+		if (At != INDEX_NONE) {
+			for (const auto& Output : Node->Data.ScriptOutputs) {
+				if (Output.Id == SourceHandle.Mid(At + 5) && Output.Type == TEXT("dataAsset") && !Output.bIsArray) {
+					const auto& State = Context->GetNodeState(Node->Id);
+					const auto* Actual = State.OutputDeclarations.Find(Output.Name);
+					const auto* Value = State.OutputValues.Find(Output.Name);
+					if ((!Actual || (Actual->Key == EStoryFlowVariableType::DataAsset && !Actual->Value)) && State.bHasOutputValues && Value && !Value->IsArray() && Value->GetType() == EStoryFlowVariableType::DataAsset) { return Value->GetString(); }
+				}
+			}
+		} break;
+	}
+	default: break;
+	}
+	Context->MarkReadFailure(); return FString();
+}
+
+
 FString FStoryFlowEvaluator::EvaluateStringInput(FStoryFlowNode* Node, const FString& HandleSuffix, const FString& Fallback)
 {
 	if (!Context || !Node)
@@ -1301,7 +1386,7 @@ FString FStoryFlowEvaluator::EvaluateStringInput(FStoryFlowNode* Node, const FSt
 		return Fallback;
 	}
 
-	return EvaluateStringFromNode(SourceNode, Node->Id, Edge->SourceHandle);
+	return HandleSuffix.StartsWith(TEXT("dataAsset")) ? EvaluateDataAssetFromNode(SourceNode, Node->Id, Edge->SourceHandle) : EvaluateStringFromNode(SourceNode, Node->Id, Edge->SourceHandle);
 }
 
 FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const FString& TargetNodeId, const FString& SourceHandle)
@@ -1822,6 +1907,16 @@ TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateArrayInputGeneric(FStoryF
 
 		if (const FStoryFlowVariant* OutputValue = RunScriptState.OutputValues.Find(OutputName))
 		{
+			if (ExpectedType == EStoryFlowVariableType::DataAsset)
+			{
+				const auto* Actual = RunScriptState.OutputDeclarations.Find(OutputName);
+				if ((Actual && (Actual->Key != ExpectedType || !Actual->Value)) || !OutputValue->IsArray() || OutputValue->GetType() != ExpectedType
+					|| OutputValue->GetArray().ContainsByPredicate([](const FStoryFlowVariant& Element) { return Element.IsArray() || Element.GetType() != EStoryFlowVariableType::DataAsset; }))
+				{
+					Context->MarkReadFailure();
+					return {};
+				}
+			}
 			return OutputValue->GetArray();
 		}
 
@@ -1954,6 +2049,11 @@ TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateStringArrayInput(FStoryFl
 TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateImageArrayInput(FStoryFlowNode* Node, const FString& HandleSuffix)
 {
 	return EvaluateArrayInputGeneric(Node, HandleSuffix, EStoryFlowNodeType::GetImageArray);
+}
+
+TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateDataAssetArrayInput(FStoryFlowNode* Node, const FString& HandleSuffix)
+{
+	return EvaluateArrayInputGeneric(Node, HandleSuffix, EStoryFlowNodeType::GetDataAssetRefArray);
 }
 
 TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateCharacterArrayInput(FStoryFlowNode* Node, const FString& HandleSuffix)
@@ -2297,6 +2397,10 @@ FStoryFlowVariant FStoryFlowEvaluator::EvaluateMapOpValueInput(FStoryFlowNode* N
 	else if (ValueType == TEXT("float"))
 	{
 		Value.SetFloat(EvaluateFloatInput(Node, HandleSuffix, Node->Data.MapInlineValue.GetFloat(0.0f)));
+	}
+	else if (ValueType == TEXT("dataAsset"))
+	{
+		Value.SetDataAsset(EvaluateStringInput(Node, HandleSuffix, Node->Data.MapInlineValue.GetString()));
 	}
 	else if (ValueType == TEXT("enum"))
 	{

@@ -962,6 +962,7 @@ protected:
 	void HandleSetBackgroundImage(FStoryFlowNode* Node);
 	void HandleSetAudio(FStoryFlowNode* Node);
 	void HandlePlayAudio(FStoryFlowNode* Node);
+	void HandleSetDataAssetRef(FStoryFlowNode* Node);
 	void HandleSetCharacter(FStoryFlowNode* Node);
 
 	// Character Variable Handlers

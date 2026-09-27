@@ -82,6 +82,7 @@ namespace
 		case EStoryFlowVariableType::Enum:
 		case EStoryFlowVariableType::Image:
 		case EStoryFlowVariableType::Audio:
+		case EStoryFlowVariableType::DataAsset:
 		case EStoryFlowVariableType::Character:
 		{
 			FString s = Variant.GetString();
@@ -157,11 +158,12 @@ namespace
 		}
 		case EStoryFlowVariableType::Image:
 		case EStoryFlowVariableType::Audio:
+		case EStoryFlowVariableType::DataAsset:
 		case EStoryFlowVariableType::Character:
 		{
 			FString s;
 			Reader << s;
-			OutVariant.SetString(s);
+			if (VarType == EStoryFlowVariableType::DataAsset) { OutVariant.SetDataAsset(s); } else { OutVariant.SetString(s); }
 			break;
 		}
 		case EStoryFlowVariableType::Map:
@@ -348,6 +350,7 @@ EStoryFlowVariableType ParseVariableType(const FString& TypeString)
 		{ TEXT("image"),     EStoryFlowVariableType::Image },
 		{ TEXT("audio"),     EStoryFlowVariableType::Audio },
 		{ TEXT("character"), EStoryFlowVariableType::Character },
+		{ TEXT("dataAsset"), EStoryFlowVariableType::DataAsset },
 		{ TEXT("map"),       EStoryFlowVariableType::Map },
 	};
 
@@ -514,6 +517,21 @@ EStoryFlowNodeType ParseNodeType(const FString& TypeString)
 		{ TEXT("arrayContainsImage"), EStoryFlowNodeType::ArrayContainsImage },
 		{ TEXT("findInImageArray"), EStoryFlowNodeType::FindInImageArray },
 
+		// Data reference variables and arrays
+		{ TEXT("getDataAssetRef"), EStoryFlowNodeType::GetDataAssetRef },
+		{ TEXT("setDataAssetRef"), EStoryFlowNodeType::SetDataAssetRef },
+		{ TEXT("getDataAssetRefArray"), EStoryFlowNodeType::GetDataAssetRefArray },
+		{ TEXT("setDataAssetRefArray"), EStoryFlowNodeType::SetDataAssetRefArray },
+		{ TEXT("getDataAssetArrayElement"), EStoryFlowNodeType::GetDataAssetArrayElement },
+		{ TEXT("setDataAssetArrayElement"), EStoryFlowNodeType::SetDataAssetArrayElement },
+		{ TEXT("getRandomDataAssetArrayElement"), EStoryFlowNodeType::GetRandomDataAssetArrayElement },
+		{ TEXT("addToDataAssetArray"), EStoryFlowNodeType::AddToDataAssetArray },
+		{ TEXT("removeFromDataAssetArray"), EStoryFlowNodeType::RemoveFromDataAssetArray },
+		{ TEXT("clearDataAssetArray"), EStoryFlowNodeType::ClearDataAssetArray },
+		{ TEXT("arrayLengthDataAsset"), EStoryFlowNodeType::ArrayLengthDataAsset },
+		{ TEXT("arrayContainsDataAsset"), EStoryFlowNodeType::ArrayContainsDataAsset },
+		{ TEXT("findInDataAssetArray"), EStoryFlowNodeType::FindInDataAssetArray },
+		{ TEXT("forEachDataAssetLoop"), EStoryFlowNodeType::ForEachDataAssetLoop },
 		// Character Arrays
 		{ TEXT("getCharacterArray"), EStoryFlowNodeType::GetCharacterArray },
 		{ TEXT("setCharacterArray"), EStoryFlowNodeType::SetCharacterArray },

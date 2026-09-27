@@ -75,6 +75,8 @@ struct FNodeRuntimeState
 
 	/** Output values from a completed RunScript call (keyed by variable ID) */
 	TMap<FString, FStoryFlowVariant> OutputValues;
+	/** Actual callee declarations: caller interface snapshots can become stale. */
+	TMap<FString, TPair<EStoryFlowVariableType, bool>> OutputDeclarations;
 	bool bHasOutputValues = false;
 
 	/**

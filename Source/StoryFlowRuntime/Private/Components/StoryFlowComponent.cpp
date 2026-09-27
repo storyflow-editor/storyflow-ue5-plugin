@@ -1021,7 +1021,7 @@ TMap<FString, FString> UStoryFlowComponent::GetStringToStringMap(const FString& 
 	}
 	const EStoryFlowVariableType VT = Var->ValueType;
 	const bool bStringFamily = (VT == EStoryFlowVariableType::String || VT == EStoryFlowVariableType::Enum ||
-		VT == EStoryFlowVariableType::Image || VT == EStoryFlowVariableType::Audio || VT == EStoryFlowVariableType::Character);
+		VT == EStoryFlowVariableType::Image || VT == EStoryFlowVariableType::Audio || VT == EStoryFlowVariableType::Character || VT == EStoryFlowVariableType::DataAsset);
 	if (!bStringFamily)
 	{
 		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have string-family values"), *VariableName);
@@ -1114,7 +1114,7 @@ TMap<int32, FString> UStoryFlowComponent::GetIntToStringMap(const FString& Varia
 	}
 	const EStoryFlowVariableType VT = Var->ValueType;
 	const bool bStringFamily = (VT == EStoryFlowVariableType::String || VT == EStoryFlowVariableType::Enum ||
-		VT == EStoryFlowVariableType::Image || VT == EStoryFlowVariableType::Audio || VT == EStoryFlowVariableType::Character);
+		VT == EStoryFlowVariableType::Image || VT == EStoryFlowVariableType::Audio || VT == EStoryFlowVariableType::Character || VT == EStoryFlowVariableType::DataAsset);
 	if (!bStringFamily)
 	{
 		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have string-family values"), *VariableName);
@@ -1241,7 +1241,7 @@ void UStoryFlowComponent::SetStringToStringMap(const FString& VariableName, cons
 	}
 	const EStoryFlowVariableType VT = Var->ValueType;
 	const bool bStringFamily = (VT == EStoryFlowVariableType::String || VT == EStoryFlowVariableType::Enum ||
-		VT == EStoryFlowVariableType::Image || VT == EStoryFlowVariableType::Audio || VT == EStoryFlowVariableType::Character);
+		VT == EStoryFlowVariableType::Image || VT == EStoryFlowVariableType::Audio || VT == EStoryFlowVariableType::Character || VT == EStoryFlowVariableType::DataAsset);
 	if (!bStringFamily)
 	{
 		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have string-family values"), *VariableName);
@@ -1255,7 +1255,7 @@ void UStoryFlowComponent::SetStringToStringMap(const FString& VariableName, cons
 	{
 		FStoryFlowMapEntry E;
 		if (bEnumKey) { E.Key.SetEnum(P.Key); } else { E.Key.SetString(P.Key); }
-		if (bEnumValue) { E.Value.SetEnum(P.Value); } else { E.Value.SetString(P.Value); }
+		if (bEnumValue) { E.Value.SetEnum(P.Value); } else if (VT == EStoryFlowVariableType::DataAsset) { E.Value.SetDataAsset(P.Value); } else { E.Value.SetString(P.Value); }
 		Entries.Add(E);
 	}
 	Var->Value.SetMap(Entries);
@@ -1354,7 +1354,7 @@ void UStoryFlowComponent::SetIntToStringMap(const FString& VariableName, const T
 	}
 	const EStoryFlowVariableType VT = Var->ValueType;
 	const bool bStringFamily = (VT == EStoryFlowVariableType::String || VT == EStoryFlowVariableType::Enum ||
-		VT == EStoryFlowVariableType::Image || VT == EStoryFlowVariableType::Audio || VT == EStoryFlowVariableType::Character);
+		VT == EStoryFlowVariableType::Image || VT == EStoryFlowVariableType::Audio || VT == EStoryFlowVariableType::Character || VT == EStoryFlowVariableType::DataAsset);
 	if (!bStringFamily)
 	{
 		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map '%s' does not have string-family values"), *VariableName);
@@ -1367,7 +1367,7 @@ void UStoryFlowComponent::SetIntToStringMap(const FString& VariableName, const T
 	{
 		FStoryFlowMapEntry E;
 		E.Key.SetInt(P.Key);
-		if (bEnumValue) { E.Value.SetEnum(P.Value); } else { E.Value.SetString(P.Value); }
+		if (bEnumValue) { E.Value.SetEnum(P.Value); } else if (VT == EStoryFlowVariableType::DataAsset) { E.Value.SetDataAsset(P.Value); } else { E.Value.SetString(P.Value); }
 		Entries.Add(E);
 	}
 	Var->Value.SetMap(Entries);
@@ -2192,11 +2192,13 @@ const TMap<EStoryFlowNodeType, UStoryFlowComponent::FNodeHandler>& UStoryFlowCom
 		for (EStoryFlowNodeType Type : {
 			EStoryFlowNodeType::SetBoolArray, EStoryFlowNodeType::SetIntArray,
 			EStoryFlowNodeType::SetFloatArray, EStoryFlowNodeType::SetStringArray,
-			EStoryFlowNodeType::SetImageArray, EStoryFlowNodeType::SetCharacterArray,
+			EStoryFlowNodeType::SetImageArray, EStoryFlowNodeType::SetDataAssetRefArray,
+			EStoryFlowNodeType::SetCharacterArray,
 			EStoryFlowNodeType::SetAudioArray,
 			EStoryFlowNodeType::SetBoolArrayElement, EStoryFlowNodeType::SetIntArrayElement,
 			EStoryFlowNodeType::SetFloatArrayElement, EStoryFlowNodeType::SetStringArrayElement,
-			EStoryFlowNodeType::SetImageArrayElement, EStoryFlowNodeType::SetCharacterArrayElement,
+			EStoryFlowNodeType::SetImageArrayElement, EStoryFlowNodeType::SetDataAssetArrayElement,
+			EStoryFlowNodeType::SetCharacterArrayElement,
 			EStoryFlowNodeType::SetAudioArrayElement })
 		{
 			T.Add(Type, ArraySetHandler);
@@ -2207,15 +2209,18 @@ const TMap<EStoryFlowNodeType, UStoryFlowComponent::FNodeHandler>& UStoryFlowCom
 		for (EStoryFlowNodeType Type : {
 			EStoryFlowNodeType::AddToBoolArray, EStoryFlowNodeType::AddToIntArray,
 			EStoryFlowNodeType::AddToFloatArray, EStoryFlowNodeType::AddToStringArray,
-			EStoryFlowNodeType::AddToImageArray, EStoryFlowNodeType::AddToCharacterArray,
+			EStoryFlowNodeType::AddToImageArray, EStoryFlowNodeType::AddToDataAssetArray,
+			EStoryFlowNodeType::AddToCharacterArray,
 			EStoryFlowNodeType::AddToAudioArray,
 			EStoryFlowNodeType::RemoveFromBoolArray, EStoryFlowNodeType::RemoveFromIntArray,
 			EStoryFlowNodeType::RemoveFromFloatArray, EStoryFlowNodeType::RemoveFromStringArray,
-			EStoryFlowNodeType::RemoveFromImageArray, EStoryFlowNodeType::RemoveFromCharacterArray,
+			EStoryFlowNodeType::RemoveFromImageArray, EStoryFlowNodeType::RemoveFromDataAssetArray,
+			EStoryFlowNodeType::RemoveFromCharacterArray,
 			EStoryFlowNodeType::RemoveFromAudioArray,
 			EStoryFlowNodeType::ClearBoolArray, EStoryFlowNodeType::ClearIntArray,
 			EStoryFlowNodeType::ClearFloatArray, EStoryFlowNodeType::ClearStringArray,
-			EStoryFlowNodeType::ClearImageArray, EStoryFlowNodeType::ClearCharacterArray,
+			EStoryFlowNodeType::ClearImageArray, EStoryFlowNodeType::ClearDataAssetArray,
+			EStoryFlowNodeType::ClearCharacterArray,
 			EStoryFlowNodeType::ClearAudioArray })
 		{
 			T.Add(Type, ArrayModifyHandler);
@@ -2225,27 +2230,33 @@ const TMap<EStoryFlowNodeType, UStoryFlowComponent::FNodeHandler>& UStoryFlowCom
 		for (EStoryFlowNodeType Type : {
 			EStoryFlowNodeType::GetBoolArray, EStoryFlowNodeType::GetIntArray,
 			EStoryFlowNodeType::GetFloatArray, EStoryFlowNodeType::GetStringArray,
-			EStoryFlowNodeType::GetImageArray, EStoryFlowNodeType::GetCharacterArray,
+			EStoryFlowNodeType::GetImageArray, EStoryFlowNodeType::GetDataAssetRefArray,
+			EStoryFlowNodeType::GetCharacterArray,
 			EStoryFlowNodeType::GetAudioArray,
 			EStoryFlowNodeType::GetBoolArrayElement, EStoryFlowNodeType::GetIntArrayElement,
 			EStoryFlowNodeType::GetFloatArrayElement, EStoryFlowNodeType::GetStringArrayElement,
-			EStoryFlowNodeType::GetImageArrayElement, EStoryFlowNodeType::GetCharacterArrayElement,
+			EStoryFlowNodeType::GetImageArrayElement, EStoryFlowNodeType::GetDataAssetArrayElement,
+			EStoryFlowNodeType::GetCharacterArrayElement,
 			EStoryFlowNodeType::GetAudioArrayElement,
 			EStoryFlowNodeType::GetRandomBoolArrayElement, EStoryFlowNodeType::GetRandomIntArrayElement,
 			EStoryFlowNodeType::GetRandomFloatArrayElement, EStoryFlowNodeType::GetRandomStringArrayElement,
-			EStoryFlowNodeType::GetRandomImageArrayElement, EStoryFlowNodeType::GetRandomCharacterArrayElement,
+			EStoryFlowNodeType::GetRandomImageArrayElement, EStoryFlowNodeType::GetRandomDataAssetArrayElement,
+			EStoryFlowNodeType::GetRandomCharacterArrayElement,
 			EStoryFlowNodeType::GetRandomAudioArrayElement,
 			EStoryFlowNodeType::ArrayLengthBool, EStoryFlowNodeType::ArrayLengthInt,
 			EStoryFlowNodeType::ArrayLengthFloat, EStoryFlowNodeType::ArrayLengthString,
-			EStoryFlowNodeType::ArrayLengthImage, EStoryFlowNodeType::ArrayLengthCharacter,
+			EStoryFlowNodeType::ArrayLengthImage, EStoryFlowNodeType::ArrayLengthDataAsset,
+			EStoryFlowNodeType::ArrayLengthCharacter,
 			EStoryFlowNodeType::ArrayLengthAudio,
 			EStoryFlowNodeType::ArrayContainsBool, EStoryFlowNodeType::ArrayContainsInt,
 			EStoryFlowNodeType::ArrayContainsFloat, EStoryFlowNodeType::ArrayContainsString,
-			EStoryFlowNodeType::ArrayContainsImage, EStoryFlowNodeType::ArrayContainsCharacter,
+			EStoryFlowNodeType::ArrayContainsImage, EStoryFlowNodeType::ArrayContainsDataAsset,
+			EStoryFlowNodeType::ArrayContainsCharacter,
 			EStoryFlowNodeType::ArrayContainsAudio,
 			EStoryFlowNodeType::FindInBoolArray, EStoryFlowNodeType::FindInIntArray,
 			EStoryFlowNodeType::FindInFloatArray, EStoryFlowNodeType::FindInStringArray,
-			EStoryFlowNodeType::FindInImageArray, EStoryFlowNodeType::FindInCharacterArray,
+			EStoryFlowNodeType::FindInImageArray, EStoryFlowNodeType::FindInDataAssetArray,
+			EStoryFlowNodeType::FindInCharacterArray,
 			EStoryFlowNodeType::FindInAudioArray })
 		{
 			T.Add(Type, LogicHandler);
@@ -2256,7 +2267,8 @@ const TMap<EStoryFlowNodeType, UStoryFlowComponent::FNodeHandler>& UStoryFlowCom
 		for (EStoryFlowNodeType Type : {
 			EStoryFlowNodeType::ForEachBoolLoop, EStoryFlowNodeType::ForEachIntLoop,
 			EStoryFlowNodeType::ForEachFloatLoop, EStoryFlowNodeType::ForEachStringLoop,
-			EStoryFlowNodeType::ForEachImageLoop, EStoryFlowNodeType::ForEachCharacterLoop,
+			EStoryFlowNodeType::ForEachImageLoop, EStoryFlowNodeType::ForEachDataAssetLoop,
+			EStoryFlowNodeType::ForEachCharacterLoop,
 			EStoryFlowNodeType::ForEachAudioLoop })
 		{
 			T.Add(Type, ForEachHandler);
@@ -2265,6 +2277,7 @@ const TMap<EStoryFlowNodeType, UStoryFlowComponent::FNodeHandler>& UStoryFlowCom
 		// Media get handlers (data nodes)
 		T.Add(EStoryFlowNodeType::GetImage,     LogicHandler);
 		T.Add(EStoryFlowNodeType::GetAudio,     LogicHandler);
+		T.Add(EStoryFlowNodeType::GetDataAssetRef, LogicHandler);
 		T.Add(EStoryFlowNodeType::GetCharacter,  LogicHandler);
 
 		// Media set handlers
@@ -2272,6 +2285,7 @@ const TMap<EStoryFlowNodeType, UStoryFlowComponent::FNodeHandler>& UStoryFlowCom
 		T.Add(EStoryFlowNodeType::SetBackgroundImage,  &UStoryFlowComponent::HandleSetBackgroundImage);
 		T.Add(EStoryFlowNodeType::SetAudio,            &UStoryFlowComponent::HandleSetAudio);
 		T.Add(EStoryFlowNodeType::PlayAudio,           &UStoryFlowComponent::HandlePlayAudio);
+		T.Add(EStoryFlowNodeType::SetDataAssetRef, &UStoryFlowComponent::HandleSetDataAssetRef);
 		T.Add(EStoryFlowNodeType::SetCharacter,        &UStoryFlowComponent::HandleSetCharacter);
 
 		// Character variable handlers
@@ -2433,6 +2447,7 @@ void UStoryFlowComponent::HandleEnd(FStoryFlowNode* Node)
 		// Gather output variable values BEFORE popping (still in called script)
 		// Key by variable Name so evaluators can match via ScriptOutputs name lookup
 		TMap<FString, FStoryFlowVariant> OutputValues;
+		TMap<FString, TPair<EStoryFlowVariableType, bool>> OutputDeclarations;
 		TMap<FString, FStoryFlowVariable> MapOutputVariables;
 		for (const auto& VarPair : ExecutionContext.LocalVariables)
 		{
@@ -2454,6 +2469,7 @@ void UStoryFlowComponent::HandleEnd(FStoryFlowNode* Node)
 			else
 			{
 				OutputValues.Add(VarPair.Value.Name, VarPair.Value.Value);
+				OutputDeclarations.Add(VarPair.Value.Name, {VarPair.Value.Type, VarPair.Value.bIsArray});
 			}
 		}
 
@@ -2483,6 +2499,7 @@ void UStoryFlowComponent::HandleEnd(FStoryFlowNode* Node)
 			{
 				FNodeRuntimeState& RSState = ExecutionContext.GetNodeState(Frame.ReturnNodeId);
 				RSState.OutputValues = MoveTemp(OutputValues);
+				RSState.OutputDeclarations = MoveTemp(OutputDeclarations);
 				RSState.MapOutputVariables = MoveTemp(MapOutputVariables);
 				RSState.bHasOutputValues = true;
 			}
@@ -2714,6 +2731,8 @@ void UStoryFlowComponent::HandleRunScript(FStoryFlowNode* Node)
 						Arr = Evaluator->EvaluateStringArrayInput(Node, HandleSuffix);
 					else if (Param.Type == TEXT("image"))
 						Arr = Evaluator->EvaluateImageArrayInput(Node, HandleSuffix);
+					else if (Param.Type == TEXT("dataAsset"))
+						Arr = Evaluator->EvaluateDataAssetArrayInput(Node, HandleSuffix);
 					else if (Param.Type == TEXT("character"))
 						Arr = Evaluator->EvaluateCharacterArrayInput(Node, HandleSuffix);
 					else if (Param.Type == TEXT("audio"))
@@ -2721,6 +2740,7 @@ void UStoryFlowComponent::HandleRunScript(FStoryFlowNode* Node)
 
 					FStoryFlowVariant ArrVariant;
 					ArrVariant.SetArray(Arr);
+					if (Param.Type == TEXT("dataAsset")) { ArrVariant.SetArray(Arr, EStoryFlowVariableType::DataAsset); }
 					ParamValues.Add(Param.Name, MoveTemp(ArrVariant));
 				}
 			}
@@ -2785,7 +2805,9 @@ void UStoryFlowComponent::HandleRunScript(FStoryFlowNode* Node)
 					if (ExecutionContext.FindInputEdge(Node->Id, HandleSuffix))
 					{
 						FString Val = Evaluator->EvaluateStringInput(Node, HandleSuffix, TEXT(""));
-						ParamValues.Add(Param.Name, FStoryFlowVariant::FromString(Val));
+						FStoryFlowVariant Value;
+						if (Param.Type == TEXT("dataAsset")) { Value.SetDataAsset(Val); } else { Value.SetString(Val); }
+						ParamValues.Add(Param.Name, Value);
 					}
 				}
 			}
@@ -3065,6 +3087,7 @@ static FString SetArrayElementTypeToken(EStoryFlowNodeType Type)
 	case EStoryFlowNodeType::SetFloatArrayElement:     return TEXT("float");
 	case EStoryFlowNodeType::SetStringArrayElement:    return TEXT("string");
 	case EStoryFlowNodeType::SetImageArrayElement:     return TEXT("image");
+	case EStoryFlowNodeType::SetDataAssetArrayElement: return TEXT("dataAsset");
 	case EStoryFlowNodeType::SetCharacterArrayElement: return TEXT("character");
 	case EStoryFlowNodeType::SetAudioArrayElement:     return TEXT("audio");
 	default:                                           return FString();
@@ -3137,6 +3160,9 @@ void UStoryFlowComponent::HandleArraySetElement(FStoryFlowNode* Node)
 	}
 	case EStoryFlowNodeType::SetImageArrayElement:
 		NewValue.SetString(Evaluator->EvaluateStringInput(Node, TEXT("image-4"), Node->Data.Value2.GetString()));
+		break;
+	case EStoryFlowNodeType::SetDataAssetArrayElement:
+		NewValue.SetDataAsset(Evaluator->EvaluateStringInput(Node, TEXT("dataAsset-4"), Node->Data.Value2.GetString()));
 		break;
 	case EStoryFlowNodeType::SetCharacterArrayElement:
 		NewValue.SetString(Evaluator->EvaluateStringInput(Node, TEXT("character-4"), Node->Data.Value2.GetString()));
@@ -3238,6 +3264,7 @@ void UStoryFlowComponent::HandleArraySet(FStoryFlowNode* Node)
 	case EStoryFlowNodeType::SetFloatArrayElement:
 	case EStoryFlowNodeType::SetStringArrayElement:
 	case EStoryFlowNodeType::SetImageArrayElement:
+	case EStoryFlowNodeType::SetDataAssetArrayElement:
 	case EStoryFlowNodeType::SetCharacterArrayElement:
 	case EStoryFlowNodeType::SetAudioArrayElement:
 		HandleArraySetElement(Node);
@@ -3277,6 +3304,9 @@ void UStoryFlowComponent::HandleArraySet(FStoryFlowNode* Node)
 		case EStoryFlowNodeType::SetImageArray:
 			NewArray = Evaluator->EvaluateImageArrayInput(Node, TEXT("image-array"));
 			break;
+		case EStoryFlowNodeType::SetDataAssetRefArray:
+			NewArray = Evaluator->EvaluateDataAssetArrayInput(Node, TEXT("dataAsset-array"));
+			break;
 		case EStoryFlowNodeType::SetCharacterArray:
 			NewArray = Evaluator->EvaluateCharacterArrayInput(Node, TEXT("character-array"));
 			break;
@@ -3310,6 +3340,8 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 		ArrayHandleSuffix = StoryFlowHandles::In_StringArray; break;
 	case EStoryFlowNodeType::AddToImageArray: case EStoryFlowNodeType::RemoveFromImageArray: case EStoryFlowNodeType::ClearImageArray:
 		ArrayHandleSuffix = StoryFlowHandles::In_ImageArray; break;
+	case EStoryFlowNodeType::AddToDataAssetArray: case EStoryFlowNodeType::RemoveFromDataAssetArray: case EStoryFlowNodeType::ClearDataAssetArray:
+		ArrayHandleSuffix = StoryFlowHandles::In_DataAssetArray; break;
 	case EStoryFlowNodeType::AddToCharacterArray: case EStoryFlowNodeType::RemoveFromCharacterArray: case EStoryFlowNodeType::ClearCharacterArray:
 		ArrayHandleSuffix = StoryFlowHandles::In_CharacterArray; break;
 	case EStoryFlowNodeType::AddToAudioArray: case EStoryFlowNodeType::RemoveFromAudioArray: case EStoryFlowNodeType::ClearAudioArray:
@@ -3339,6 +3371,8 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 	FStoryFlowVariable* Var = nullptr;
 	FStoryFlowVariable DataAssetScratch;
 	FStoryFlowNode* DataAssetAccessor = nullptr;
+	FStoryFlowNode* CharacterAccessor = nullptr;
+	bool bSnapshotOnly = false;
 	FString DataAssetId;
 
 	if (ArrayInputSource && FStoryFlowEvaluator::IsDataAssetAccessor(ArrayInputSource->Type))
@@ -3378,6 +3412,17 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 			}
 		}
 	}
+	else if (ArrayInputSource && (ArrayInputSource->Type == EStoryFlowNodeType::GetCharacterVar || ArrayInputSource->Type == EStoryFlowNodeType::SetCharacterVar))
+	{
+		if (ArrayInputSource->Data.bIsArray)
+		{
+			DataAssetScratch.Type = ParseVariableType(ArrayInputSource->Data.VariableType);
+			DataAssetScratch.bIsArray = true;
+			DataAssetScratch.Value.SetArray(EvaluateTypedArrayInput(Node, ArrayInputSource->Data.VariableType, ArrayHandleSuffix), DataAssetScratch.Type);
+			CharacterAccessor = ArrayInputSource;
+			Var = &DataAssetScratch;
+		}
+	}
 	else
 	{
 		// Try this node's direct variable reference first, then fall back to the edge source's.
@@ -3390,6 +3435,16 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 		if (!Var && ArrayInputSource && !ArrayInputSource->Data.Variable.IsEmpty())
 		{
 			Var = ExecutionContext.FindVariable(ArrayInputSource->Data.Variable, ArrayInputSource->Data.bIsGlobal);
+		}
+		if (!Var && ArrayInputSource && (Node->Type == EStoryFlowNodeType::AddToDataAssetArray || Node->Type == EStoryFlowNodeType::RemoveFromDataAssetArray || Node->Type == EStoryFlowNodeType::ClearDataAssetArray))
+		{
+			// Derived outputs are copied and changed locally. Only an immediate variable
+			// or field source receives a write; never walk through earlier modifiers.
+			DataAssetScratch.Type = EStoryFlowVariableType::DataAsset;
+			DataAssetScratch.bIsArray = true;
+			DataAssetScratch.Value.SetArray(Evaluator->EvaluateDataAssetArrayInput(Node, ArrayHandleSuffix), DataAssetScratch.Type);
+			Var = &DataAssetScratch;
+			bSnapshotOnly = true;
 		}
 	}
 
@@ -3449,6 +3504,13 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 		Arr.Add(Elem);
 		break;
 	}
+	case EStoryFlowNodeType::AddToDataAssetArray:
+	{
+		FStoryFlowVariant Elem;
+		Elem.SetDataAsset(Evaluator ? Evaluator->EvaluateStringInput(Node, TEXT("dataAsset-3"), Node->Data.Value.GetString()) : Node->Data.Value.GetString());
+		Arr.Add(Elem);
+		break;
+	}
 	case EStoryFlowNodeType::AddToCharacterArray:
 	{
 		FStoryFlowVariant Elem;
@@ -3470,6 +3532,7 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 	case EStoryFlowNodeType::RemoveFromFloatArray:
 	case EStoryFlowNodeType::RemoveFromStringArray:
 	case EStoryFlowNodeType::RemoveFromImageArray:
+	case EStoryFlowNodeType::RemoveFromDataAssetArray:
 	case EStoryFlowNodeType::RemoveFromCharacterArray:
 	case EStoryFlowNodeType::RemoveFromAudioArray:
 	{
@@ -3487,6 +3550,7 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 	case EStoryFlowNodeType::ClearFloatArray:
 	case EStoryFlowNodeType::ClearStringArray:
 	case EStoryFlowNodeType::ClearImageArray:
+	case EStoryFlowNodeType::ClearDataAssetArray:
 	case EStoryFlowNodeType::ClearCharacterArray:
 	case EStoryFlowNodeType::ClearAudioArray:
 		Arr.Empty();
@@ -3514,15 +3578,19 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 			Evaluator->ClearCache();
 		}
 	}
+	else if (CharacterAccessor)
+	{
+		ExecutionContext.SetCharacterVariable(Evaluator->ResolveCharacterTarget(CharacterAccessor), CharacterAccessor->Data.VariableName, Var->Value);
+	}
 
 	// Store result array in CachedOutput so downstream nodes connected to this
 	// node's output can read it (matches HTML's setNodeOutputValue pattern)
 	FNodeRuntimeState& ArrayNodeState = ExecutionContext.GetNodeState(Node->Id);
-	ArrayNodeState.CachedOutput.SetArray(Arr);
+	ArrayNodeState.CachedOutput.SetArray(Arr, Var->Type);
 	ArrayNodeState.bHasCachedOutput = true;
 	ArrayNodeState.bIsExecutionOutput = true;
 
-	if (DataAssetAccessor)
+	if (DataAssetAccessor || CharacterAccessor || bSnapshotOnly)
 	{
 		HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
 		return;
@@ -3760,6 +3828,9 @@ void UStoryFlowComponent::HandleForEachLoop(FStoryFlowNode* Node)
 			case EStoryFlowNodeType::ForEachImageLoop:
 				Array = Evaluator->EvaluateImageArrayInput(Node, TEXT("image-array"));
 				break;
+			case EStoryFlowNodeType::ForEachDataAssetLoop:
+				Array = Evaluator->EvaluateDataAssetArrayInput(Node, TEXT("dataAsset-array"));
+				break;
 			case EStoryFlowNodeType::ForEachCharacterLoop:
 				Array = Evaluator->EvaluateCharacterArrayInput(Node, TEXT("character-array"));
 				break;
@@ -3983,6 +4054,37 @@ void UStoryFlowComponent::HandleSetAudio(FStoryFlowNode* Node)
 
 	FStoryFlowVariant Value;
 	Value.SetString(NewValue);
+	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
+	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
+	{
+		SF_TRACE(ExecutionContext, "VAR SET \"%s\" global=%s value=%s", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"), *Value.ToString());
+		NotifyVariableChanged(*Var, Node->Data.bIsGlobal);
+	}
+
+	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
+}
+
+void UStoryFlowComponent::HandleSetDataAssetRef(FStoryFlowNode* Node)
+{
+	const FStoryFlowVariable* Target = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
+	if (!Target || Target->Type != EStoryFlowVariableType::DataAsset || Target->bIsArray)
+	{
+		HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
+		return;
+	}
+	// Evaluate dataAsset value from connected input or inline
+	FString NewValue;
+	if (Evaluator)
+	{
+		NewValue = Evaluator->EvaluateStringInput(Node, TEXT("dataAsset"), Node->Data.Value.GetString());
+	}
+	else
+	{
+		NewValue = Node->Data.Value.GetString();
+	}
+
+	FStoryFlowVariant Value;
+	Value.SetDataAsset(NewValue);
 	ExecutionContext.SetVariable(Node->Data.Variable, Value, Node->Data.bIsGlobal);
 	if (FStoryFlowVariable* Var = ExecutionContext.FindVariable(Node->Data.Variable, Node->Data.bIsGlobal))
 	{
@@ -4358,6 +4460,10 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 			{
 				NewValue.SetInt(Evaluator->EvaluateIntegerFromNode(SourceNode, Node->Id, InputEdge->SourceHandle));
 			}
+			else if (VariableType == TEXT("dataAsset"))
+			{
+				NewValue.SetDataAsset(Evaluator->EvaluateDataAssetFromNode(SourceNode, Node->Id, InputEdge->SourceHandle));
+			}
 			else if (VariableType == TEXT("float"))
 			{
 				NewValue.SetFloat(Evaluator->EvaluateFloatFromNode(SourceNode, Node->Id, InputEdge->SourceHandle));
@@ -4424,6 +4530,7 @@ void UStoryFlowComponent::HandleSetCharacterVar(FStoryFlowNode* Node)
 		}
 	}
 
+	if (VariableType == TEXT("dataAsset") && !bIsArray) { NewValue.SetDataAsset(NewValue.GetString()); }
 	// Set the character variable
 	ExecutionContext.SetCharacterVariable(CharacterPath, VariableName, NewValue);
 
@@ -4557,6 +4664,10 @@ bool UStoryFlowComponent::TryReadDataAssetSetInput(FStoryFlowNode* Node, FStoryF
 	{
 		OutValue.SetFloat(Evaluator->EvaluateFloatFromNode(SourceNode, Node->Id, Edge->SourceHandle));
 	}
+	else if (Data.VariableType == TEXT("dataAsset"))
+	{
+		OutValue.SetDataAsset(Evaluator->EvaluateDataAssetFromNode(SourceNode, Node->Id, Edge->SourceHandle));
+	}
 	else if (Data.VariableType == TEXT("enum"))
 	{
 		// Enum travels as a string but is NOT String-typed: the seed stores an enum declaration's
@@ -4663,6 +4774,10 @@ TArray<FStoryFlowVariant> UStoryFlowComponent::EvaluateTypedArrayInput(FStoryFlo
 	{
 		return Evaluator->EvaluateImageArrayInput(Node, HandleSuffix);
 	}
+	if (VariableType == TEXT("dataAsset"))
+	{
+		return Evaluator->EvaluateDataAssetArrayInput(Node, HandleSuffix);
+	}
 	if (VariableType == TEXT("character"))
 	{
 		return Evaluator->EvaluateCharacterArrayInput(Node, HandleSuffix);
@@ -4721,6 +4836,7 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 		if (FStoryFlowCharacterDef* CharDef = ExecutionContext.FindCharacter(SpeakerRef))
 		{
 			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: BuildDialogueState - Found character, raw Name='%s'"), *CharDef->Name);
+			State.Character.CharacterPath = SpeakerRef;
 			State.Character.Name = CharDef->bNameIsLiteral ? CharDef->Name : ExecutionContext.GetString(CharDef->Name, ActiveLanguageCode());
 			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: BuildDialogueState - Resolved Name='%s'"), *State.Character.Name);
 

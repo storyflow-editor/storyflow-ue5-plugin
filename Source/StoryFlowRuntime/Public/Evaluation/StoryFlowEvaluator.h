@@ -92,6 +92,8 @@ public:
 	TArray<FStoryFlowVariant> EvaluateImageArrayInput(FStoryFlowNode* Node, const FString& HandleSuffix);
 
 	/** Evaluate character array from a connected input */
+	TArray<FStoryFlowVariant> EvaluateDataAssetArrayInput(FStoryFlowNode* Node, const FString& HandleSuffix);
+	FString EvaluateDataAssetFromNode(FStoryFlowNode* Node, const FString& TargetNodeId = FString(), const FString& SourceHandle = FString());
 	TArray<FStoryFlowVariant> EvaluateCharacterArrayInput(FStoryFlowNode* Node, const FString& HandleSuffix);
 
 	/** Evaluate audio array from a connected input */

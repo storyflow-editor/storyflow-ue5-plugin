@@ -404,13 +404,13 @@ bool FStoryFlowImportHashSchemaSaltTest::RunTest(const FString& Parameters)
 
 	// A script's hash parts are exactly {condensed source JSON, script path}.
 	const TArray<FString> HashParts = { CondenseJson(V1), TEXT("salt/subject") };
-	const FString CurrentSaltHash = HashWithSalt(TEXT("8"), HashParts);
-	const FString OldSaltHash = HashWithSalt(TEXT("7"), HashParts);
+	const FString CurrentSaltHash = HashWithSalt(TEXT("9"), HashParts);
+	const FString OldSaltHash = HashWithSalt(TEXT("8"), HashParts);
 
-	TestEqual(TEXT("the recorded hash is salted with schema version 8"), Imported->ImportedSourceHash, CurrentSaltHash);
+	TestEqual(TEXT("the recorded hash is salted with schema version 9"), Imported->ImportedSourceHash, CurrentSaltHash);
 	TestNotEqual(TEXT("a hash recorded under the old salt can never match"), CurrentSaltHash, OldSaltHash);
 
-	// Simulate an asset last written by the version-7 plugin: same source, old-salt hash.
+	// Simulate an asset last written by the version-8 plugin: same source, old-salt hash.
 	// The re-import must NOT skip — it must re-parse and re-record the current hash.
 	Imported->ImportedSourceHash = OldSaltHash;
 	UStoryFlowScriptAsset* Reimported = UStoryFlowImporter::ImportScriptFromJson(V1, TEXT("salt/subject"), TestRoot);

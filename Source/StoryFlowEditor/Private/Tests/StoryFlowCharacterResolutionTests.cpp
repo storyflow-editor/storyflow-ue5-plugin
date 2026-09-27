@@ -1093,8 +1093,8 @@ bool FStoryFlowCharacterCfBuiltinAliasTest::RunTest(const FString& Parameters)
 		Context.LocalVariables.Add(CharTyped.Id, CharTyped);
 		TestEqual(TEXT("interpolation resolves {var.cf_name} to the Name builtin"),
 			Context.InterpolateVariables(TEXT("{protagonist.cf_name}")), FString(TEXT("Public Renamed")));
-		TestEqual(TEXT("interpolation resolves {var.cf_image} to the Image builtin"),
-			Context.InterpolateVariables(TEXT("{protagonist.cf_image}")), FString(TEXT("typed.png")));
+		TestEqual(TEXT("interpolation preserves non-display image references"),
+			Context.InterpolateVariables(TEXT("{protagonist.cf_image}")), FString(TEXT("{protagonist.cf_image}")));
 	}
 
 	CleanUp();

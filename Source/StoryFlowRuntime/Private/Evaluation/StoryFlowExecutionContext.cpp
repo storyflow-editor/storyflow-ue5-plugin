@@ -1,6 +1,7 @@
 // Copyright 2026 StoryFlow. All Rights Reserved.
 
 #include "Evaluation/StoryFlowExecutionContext.h"
+#include "Evaluation/StoryFlowEvaluator.h"
 #include "StoryFlowRuntime.h"
 #include "Data/StoryFlowScriptAsset.h"
 #include "Data/StoryFlowProjectAsset.h"
@@ -209,18 +210,9 @@ FString FStoryFlowExecutionContext::ResolveDataAssetId(const FStoryFlowNode& Acc
 		return FString();
 	}
 
-	// const_cast only because GetNode is non-const; nothing here writes through it.
-	const FStoryFlowNode* Source = const_cast<FStoryFlowExecutionContext*>(this)->GetNode(Edge->Source);
-
-	// The type check keeps a non-pill source honest instead of speculatively reading an
-	// AssetId field off whatever is on the far end (contract §6 row 1). An unbound pill
-	// answers with its own empty AssetId, which is row 2 — both degrade identically here,
-	// and the reference ladder folds them into one 'unwired' reason too.
-	if (!Source || Source->Type != EStoryFlowNodeType::GetDataAsset)
-	{
-		return FString();
-	}
-	return Source->Data.AssetId;
+	FStoryFlowExecutionContext* Mutable = const_cast<FStoryFlowExecutionContext*>(this);
+	FStoryFlowEvaluator Evaluator(Mutable);
+	return Evaluator.EvaluateDataAssetFromNode(Mutable->GetNode(Edge->Source), Accessor.Id, Edge->SourceHandle);
 }
 
 bool FStoryFlowExecutionContext::TryResolveDataAssetBinding(const FStoryFlowNode& Accessor, FString& OutAssetId)
@@ -681,155 +673,87 @@ FString FStoryFlowExecutionContext::GetString(const FString& Key, const FString&
 
 FString FStoryFlowExecutionContext::InterpolateVariables(const FString& Text) const
 {
-	FString Result = Text;
-
-	// Early out if no interpolation needed
-	if (!Result.Contains(TEXT("{")))
-	{
-		return Result;
-	}
-
-	// Build display-name -> variable lookup maps once (O(n) total instead of O(n) per token)
-	// Each entry maps display name AND id to the variable pointer
-	TMap<FString, const FStoryFlowVariable*> VarLookup;
-
-	// Local variables (higher priority - added first, won't be overwritten)
-	for (const auto& Pair : LocalVariables)
-	{
-		VarLookup.Add(Pair.Value.Name, &Pair.Value);
-		VarLookup.Add(Pair.Value.Id, &Pair.Value);
-	}
-
-	// Global variables (lower priority - only added if key not already present)
-	const TMap<FString, FStoryFlowVariable>* GlobalVars = ExternalGlobalVariables;
-	if (!GlobalVars && Project.IsValid())
-	{
-		GlobalVars = &Project->GlobalVariables;
-	}
-
-	if (GlobalVars)
-	{
-		for (const auto& Pair : *GlobalVars)
-		{
-			if (!VarLookup.Contains(Pair.Value.Name))
-			{
-				VarLookup.Add(Pair.Value.Name, &Pair.Value);
+	TMap<FString, const FStoryFlowVariable*> Roots;
+	const auto* Globals = ExternalGlobalVariables ? ExternalGlobalVariables : (Project.IsValid() ? &Project->GlobalVariables : nullptr);
+	if (Globals) { for (const auto& Pair : *Globals) { Roots.Add(Pair.Value.Name, &Pair.Value); Roots.Add(Pair.Value.Id, &Pair.Value); } }
+	for (const auto& Pair : LocalVariables) { Roots.Add(Pair.Value.Name, &Pair.Value); Roots.Add(Pair.Value.Id, &Pair.Value); }
+	auto Leaf = [](const FStoryFlowVariable& V, FString& Out) {
+		if (V.bIsArray || V.Value.IsArray()) { return false; }
+		switch (V.Type) {
+		case EStoryFlowVariableType::Boolean: case EStoryFlowVariableType::Integer:
+		case EStoryFlowVariableType::Float: case EStoryFlowVariableType::String: case EStoryFlowVariableType::Enum:
+			Out = V.Value.ToString(); return true;
+		default: return false;
+		}
+	};
+	auto Field = [&](EStoryFlowVariableType Type, const FString& Ref, const FString& Name, FStoryFlowVariable& Out) {
+		if (Type == EStoryFlowVariableType::DataAsset) {
+			if (!DataAssetStore.IsValid()) { return false; }
+			const auto* Decl = StoryFlowDataAssets::FindDeclarationByName(*DataAssetStore.Seed, Ref, Name);
+			if (!Decl) { return false; }
+			Out = *Decl; return TryResolveDataAsset(Ref, Decl->Id, Out.Value);
+		}
+		if (Type != EStoryFlowVariableType::Character) { return false; }
+		FString Key = NormalizeCharacterPath(Ref);
+		if (IsCharacterIdRef(Ref)) {
+			const FString* Path = CharacterIdToPath ? CharacterIdToPath->Find(Ref) : nullptr;
+			if (!Path) { return false; } Key = *Path;
+		}
+		const auto* Character = ExternalCharacters ? ExternalCharacters->Find(Key) : nullptr;
+		if (!Character) {
+			// Legacy callers can provide a presentation-only speaker without a live ref.
+			if (!Ref.IsEmpty() || !CurrentDialogueState.Character.CharacterPath.IsEmpty()) { return false; }
+			if (Name.Equals(TEXT("name"), ESearchCase::IgnoreCase)) {
+				Out.Type = EStoryFlowVariableType::String; Out.Value.SetString(CurrentDialogueState.Character.Name); return true;
 			}
-			if (!VarLookup.Contains(Pair.Value.Id))
-			{
-				VarLookup.Add(Pair.Value.Id, &Pair.Value);
-			}
+			if (const auto* Value = CurrentDialogueState.Character.Variables.Find(Name)) { Out.Type = Value->GetType(); Out.Value = *Value; return true; }
+			return false;
 		}
-	}
-
-	// Pattern: {variableName}
-	int32 StartIndex = 0;
-	while (true)
-	{
-		int32 OpenBrace = Result.Find(TEXT("{"), ESearchCase::CaseSensitive, ESearchDir::FromStart, StartIndex);
-		if (OpenBrace == INDEX_NONE)
-		{
-			break;
+		if (IsCharacterNameBuiltin(Name)) {
+			Out.Type = EStoryFlowVariableType::String;
+			Out.Value.SetString(Character->bNameIsLiteral ? Character->Name : GetString(Character->Name)); return true;
 		}
-
-		int32 CloseBrace = Result.Find(TEXT("}"), ESearchCase::CaseSensitive, ESearchDir::FromStart, OpenBrace);
-		if (CloseBrace == INDEX_NONE)
-		{
-			break;
+		for (const auto& Pair : Character->Variables) {
+			if (Pair.Value.Name.Equals(Name, ESearchCase::CaseSensitive) || Pair.Value.Id.Equals(Name, ESearchCase::CaseSensitive)) { Out = Pair.Value; return true; }
 		}
-
-		FString VarName = Result.Mid(OpenBrace + 1, CloseBrace - OpenBrace - 1);
+		return false;
+	};
+	auto Resolve = [&](const FString& Path, FString& Out) {
+		EStoryFlowVariableType Type; FString Ref, Remaining;
+		if (Path.StartsWith(TEXT("Character."), ESearchCase::CaseSensitive)) {
+			Type = EStoryFlowVariableType::Character; Ref = CurrentDialogueState.Character.CharacterPath; Remaining = Path.Mid(10).TrimStartAndEnd();
+		} else {
+			int32 Dot = INDEX_NONE;
+			if (!Path.FindChar(TEXT('.'), Dot)) { const auto* V = Roots.Find(Path); return V && Leaf(**V, Out); }
+			const auto* V = Roots.Find(Path.Left(Dot));
+			if (!V || (*V)->bIsArray || (*V)->Value.IsArray()) { return false; }
+			Type = (*V)->Type; Ref = (*V)->Value.GetString(); Remaining = Path.Mid(Dot + 1);
+			if (Ref.IsEmpty()) { return false; }
+		}
+		while (!Remaining.IsEmpty()) {
+			FStoryFlowVariable V;
+			if (Field(Type, Ref, Remaining, V)) { return Leaf(V, Out); }
+			int32 Dot = INDEX_NONE;
+			if (!Remaining.FindChar(TEXT('.'), Dot) || !Field(Type, Ref, Remaining.Left(Dot), V) || V.bIsArray || V.Value.IsArray()) { return false; }
+			Type = V.Type; Ref = V.Value.GetString(); Remaining = Remaining.Mid(Dot + 1);
+			if (Ref.IsEmpty()) { return false; }
+		}
+		return false;
+	};
+	FString Result; int32 Position = 0;
+	while (Position < Text.Len()) {
+		const int32 Open = Text.Find(TEXT("{"), ESearchCase::CaseSensitive, ESearchDir::FromStart, Position);
+		const int32 Close = Open == INDEX_NONE ? INDEX_NONE : Text.Find(TEXT("}"), ESearchCase::CaseSensitive, ESearchDir::FromStart, Open + 1);
+		if (Close == INDEX_NONE) { Result += Text.Mid(Position); break; }
+		Result += Text.Mid(Position, Open - Position);
 		FString Replacement;
-
-		// Check for Character.property pattern
-		if (VarName.StartsWith(TEXT("Character.")))
-		{
-			FString PropertyName = VarName.RightChop(10);
-			if (PropertyName.Equals(TEXT("name"), ESearchCase::IgnoreCase))
-			{
-				Replacement = CurrentDialogueState.Character.Name;
-			}
-			else if (const FStoryFlowVariant* CharVar = CurrentDialogueState.Character.Variables.Find(PropertyName))
-			{
-				Replacement = CharVar->ToString();
-			}
-		}
-		else if (VarName.Contains(TEXT(".")))
-		{
-			// Handle nested variable (charVar.innerVar)
-			// This is for character-type variables: {protagonist.Health}
-			int32 DotIndex;
-			VarName.FindChar(TEXT('.'), DotIndex);
-			FString CharVarName = VarName.Left(DotIndex);
-			FString InnerVarName = VarName.RightChop(DotIndex + 1);
-
-			// Find the character-type variable via lookup map
-			const FStoryFlowVariable* const* FoundVar = VarLookup.Find(CharVarName);
-			if (FoundVar && *FoundVar && (*FoundVar)->Type == EStoryFlowVariableType::Character)
-			{
-				FString CharacterPath = (*FoundVar)->Value.GetString();
-				if (!CharacterPath.IsEmpty())
-				{
-					// Normalize path for lookup
-					FString NormalizedPath = NormalizeCharacterPath(CharacterPath);
-
-					// Find character definition from runtime characters
-					const FStoryFlowCharacterDef* CharDef = nullptr;
-					if (ExternalCharacters)
-					{
-						CharDef = ExternalCharacters->Find(NormalizedPath);
-					}
-
-					if (CharDef)
-					{
-						// Handle built-in "Name" property (resolve through string table; cf_name
-						// alias — amendment A2a). NAME-OR-CF SPELLINGS ONLY on this branch: the
-						// custom-variable row below tolerates ids by design (an HTML-reference
-						// asymmetry recorded as deliberate), and that tolerance must not creep
-						// into the builtins.
-						if (IsCharacterNameBuiltin(InnerVarName))
-						{
-							Replacement = CharDef->bNameIsLiteral ? CharDef->Name : GetString(CharDef->Name);
-						}
-						// Handle built-in "Image" property (or cf_image — amendment A2a)
-						else if (IsCharacterImageBuiltin(InnerVarName))
-						{
-							Replacement = CharDef->Image;
-						}
-						else
-						{
-							// Look up custom variable by name
-							for (const auto& VarPair : CharDef->Variables)
-							{
-								if (VarPair.Value.Name == InnerVarName || VarPair.Value.Id == InnerVarName)
-								{
-									Replacement = VarPair.Value.Value.ToString();
-									break;
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-		else
-		{
-			// Regular variable lookup via pre-built map (O(1) instead of O(n))
-			if (const FStoryFlowVariable* const* FoundVar = VarLookup.Find(VarName))
-			{
-				Replacement = (*FoundVar)->Value.ToString();
-			}
-		}
-
-		// Replace the pattern
-		FString Pattern = FString::Printf(TEXT("{%s}"), *VarName);
-		Result = Result.Replace(*Pattern, *Replacement);
-
-		StartIndex = OpenBrace + Replacement.Len();
+		const FString Path = Text.Mid(Open + 1, Close - Open - 1).TrimStartAndEnd();
+		Result += Resolve(Path, Replacement) ? Replacement : Text.Mid(Open, Close - Open + 1);
+		Position = Close + 1;
 	}
-
 	return Result;
 }
+
 
 void FStoryFlowExecutionContext::ResolveStringVariableValues(TMap<FString, FStoryFlowVariable>& Variables) const
 {

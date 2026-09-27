@@ -33,6 +33,7 @@ FString VariableTypeToString(EStoryFlowVariableType Type)
 	case EStoryFlowVariableType::Enum:      return TEXT("Enum");
 	case EStoryFlowVariableType::Image:     return TEXT("Image");
 	case EStoryFlowVariableType::Audio:     return TEXT("Audio");
+	case EStoryFlowVariableType::DataAsset: return TEXT("DataAsset");
 	case EStoryFlowVariableType::Character: return TEXT("Character");
 	case EStoryFlowVariableType::Map:       return TEXT("Map");
 	default:                                return TEXT("None");
@@ -71,6 +72,7 @@ EStoryFlowVariableType StringToVariableType(const FString& Str)
 		{ TEXT("Image"),     EStoryFlowVariableType::Image },
 		{ TEXT("Audio"),     EStoryFlowVariableType::Audio },
 		{ TEXT("Character"), EStoryFlowVariableType::Character },
+		{ TEXT("DataAsset"), EStoryFlowVariableType::DataAsset },
 		{ TEXT("Map"),       EStoryFlowVariableType::Map },
 	};
 
@@ -103,6 +105,7 @@ TSharedPtr<FJsonValue> VariantToJson(const FStoryFlowVariant& Variant)
 	case EStoryFlowVariableType::Enum:
 	case EStoryFlowVariableType::Image:
 	case EStoryFlowVariableType::Audio:
+	case EStoryFlowVariableType::DataAsset:
 	case EStoryFlowVariableType::Character:
 		return MakeShared<FJsonValueString>(Variant.GetString());
 
@@ -137,8 +140,9 @@ FStoryFlowVariant VariantFromJson(const TSharedPtr<FJsonValue>& JsonValue, EStor
 	case EStoryFlowVariableType::String:
 	case EStoryFlowVariableType::Image:
 	case EStoryFlowVariableType::Audio:
+	case EStoryFlowVariableType::DataAsset:
 	case EStoryFlowVariableType::Character:
-		Result.SetString(JsonValue->AsString());
+		if (Type == EStoryFlowVariableType::DataAsset) { Result.SetDataAsset(JsonValue->AsString()); } else { Result.SetString(JsonValue->AsString()); }
 		break;
 
 	case EStoryFlowVariableType::Enum:
@@ -572,6 +576,7 @@ bool SavedScalarMatches(const TSharedPtr<FJsonValue>& Value, EStoryFlowVariableT
 	case EStoryFlowVariableType::String:
 	case EStoryFlowVariableType::Image:
 	case EStoryFlowVariableType::Audio:
+	case EStoryFlowVariableType::DataAsset:
 	case EStoryFlowVariableType::Character:
 	case EStoryFlowVariableType::Enum:
 		return Value->Type == EJson::String && (Type != EStoryFlowVariableType::Enum || EnumValues.IsEmpty() || EnumValues.ContainsByPredicate([&Value](const FString& Option) { return Option.Equals(Value->AsString(), ESearchCase::CaseSensitive); }));

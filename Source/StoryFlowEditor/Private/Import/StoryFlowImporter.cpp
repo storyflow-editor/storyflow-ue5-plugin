@@ -119,7 +119,7 @@ namespace
 	    script imported under 7 that carries one — parsed then as Unknown, and
 	    Node.Type persists in the .uasset — must re-parse or the node answers
 	    empty arrays forever. */
-	constexpr const TCHAR* ImportHashSchemaVersion = TEXT("8");
+	constexpr const TCHAR* ImportHashSchemaVersion = TEXT("9");
 
 	FString SerializeJsonCondensed(const TSharedRef<FJsonObject>& JsonObject)
 	{
@@ -1853,7 +1853,11 @@ FStoryFlowVariant UStoryFlowImporter::ParseVariant(const TSharedPtr<FJsonValue>&
 		break;
 
 	case EJson::String:
-		if (ExpectedType == EStoryFlowVariableType::Enum)
+		if (ExpectedType == EStoryFlowVariableType::DataAsset)
+		{
+			Variant.SetDataAsset(Value->AsString());
+		}
+		else if (ExpectedType == EStoryFlowVariableType::Enum)
 		{
 			Variant.SetEnum(Value->AsString());
 		}
@@ -1871,6 +1875,7 @@ FStoryFlowVariant UStoryFlowImporter::ParseVariant(const TSharedPtr<FJsonValue>&
 			ArrayValues.Add(ParseVariant(ArrayItem, ExpectedType));
 		}
 		Variant.SetArray(ArrayValues);
+		if (ExpectedType == EStoryFlowVariableType::DataAsset) { Variant.SetArray(ArrayValues, ExpectedType); }
 		break;
 	}
 

@@ -245,7 +245,23 @@ enum class EStoryFlowNodeType : uint8
 	ForEachMap,
 
 	// Unknown/Custom
-	Unknown UMETA(Hidden)
+	Unknown UMETA(Hidden),
+
+	// Appended to preserve all existing serialized enum ordinals.
+	GetDataAssetRef,
+	SetDataAssetRef,
+	GetDataAssetRefArray,
+	SetDataAssetRefArray,
+	GetDataAssetArrayElement,
+	SetDataAssetArrayElement,
+	GetRandomDataAssetArrayElement,
+	AddToDataAssetArray,
+	RemoveFromDataAssetArray,
+	ClearDataAssetArray,
+	ArrayLengthDataAsset,
+	ArrayContainsDataAsset,
+	FindInDataAssetArray,
+	ForEachDataAssetLoop
 };
 
 /**
@@ -263,7 +279,8 @@ enum class EStoryFlowVariableType : uint8
 	Image,
 	Audio,
 	Character,
-	Map
+	Map,
+	DataAsset
 };
 
 /**
@@ -379,6 +396,8 @@ public:
 		StringValue = Value;
 	}
 
+	void SetDataAsset(const FString& Value) { SetString(Value); Type = EStoryFlowVariableType::DataAsset; }
+
 	void SetEnum(const FString& Value)
 	{
 		Type = EStoryFlowVariableType::Enum;
@@ -462,7 +481,7 @@ public:
 		// Image, Audio, and Character types also store their values in StringValue
 		if (Type == EStoryFlowVariableType::String || Type == EStoryFlowVariableType::Enum ||
 			Type == EStoryFlowVariableType::Image || Type == EStoryFlowVariableType::Audio ||
-			Type == EStoryFlowVariableType::Character)
+			Type == EStoryFlowVariableType::Character || Type == EStoryFlowVariableType::DataAsset)
 		{
 			return StringValue;
 		}
@@ -511,6 +530,7 @@ public:
 		case EStoryFlowVariableType::Enum:
 		case EStoryFlowVariableType::Image:
 		case EStoryFlowVariableType::Audio:
+		case EStoryFlowVariableType::DataAsset:
 		case EStoryFlowVariableType::Character:
 			return StringValue;
 		case EStoryFlowVariableType::Map:
@@ -1337,6 +1357,10 @@ USTRUCT(BlueprintType)
 struct STORYFLOWRUNTIME_API FStoryFlowCharacterData
 {
 	GENERATED_BODY()
+
+	/** Live speaker reference used by nested interpolation. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	FString CharacterPath;
 
 	/** Resolved character name */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")

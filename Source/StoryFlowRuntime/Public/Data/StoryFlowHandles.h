@@ -78,6 +78,8 @@ namespace StoryFlowHandles
 	inline constexpr const TCHAR* In_String = TEXT("string");
 	inline constexpr const TCHAR* In_Enum = TEXT("enum");
 	inline constexpr const TCHAR* In_Image = TEXT("image");
+	inline constexpr const TCHAR* In_DataAsset = TEXT("dataAsset");
+	inline constexpr const TCHAR* In_DataAssetArray = TEXT("dataAsset-array");
 	inline constexpr const TCHAR* In_Character = TEXT("character");
 	inline constexpr const TCHAR* In_Audio = TEXT("audio");
 
