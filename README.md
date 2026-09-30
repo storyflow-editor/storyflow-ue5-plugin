@@ -73,6 +73,14 @@ Subsystem->SaveToSlot("Slot1");
 Subsystem->LoadFromSlot("Slot1");
 ```
 
+Data Asset saves retain the bare `dataAssets` format. On load, each raw saved slot is checked against its current rootmost declaration before conversion. Compatible slots survive; an incompatible scalar, array element, map key/value, or specified enum option drops the entire slot and reveals the current inherited/default value. Empty containers remain valid. Unreal integers must fit Int32 and float values must remain finite in Float32; values outside those representations are dropped rather than coerced.
+
+Component and subsystem writes, resets, loads, and project replacements invalidate derived reads in every live context on its next evaluation. Completed array operations, script outputs, and loop state survive cache invalidation. `SetProject` rebinds project-based reads while retaining the running script and local-variable snapshot; start a new dialogue to replace that snapshot. C++ code modifying the exposed mutable state maps directly must call `NotifySharedStateChanged()` after its edits. The game still controls when its UI is refreshed.
+
+Set/Remove/Clear Map nodes reading detached Data Asset or character maps retain their executed result for downstream inputs. An explicit Data Asset Set writes that result back; the source is unchanged until then. Ordinary script/global map aliasing is unchanged.
+
+A Data Asset Set refuses an unresolved source along the input expression it evaluates, including deleted ordinary, character, and Data Asset variables. Valid zero/empty values and unwired internal expression defaults remain usable.
+
 ## Documentation
 
 Full documentation at [storyflow-editor.com/integrations/unreal-engine](https://storyflow-editor.com/integrations/unreal-engine).

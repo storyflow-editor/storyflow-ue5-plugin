@@ -5,38 +5,49 @@
 #include "Evaluation/StoryFlowExecutionContext.h"
 #include "Data/StoryFlowScriptAsset.h"
 #include "Data/StoryFlowHandles.h"
+#include "Data/StoryFlowDataAssetStore.h"
 
 #define SF_EVAL_TRACE(Format, ...) \
 	do { if (Context && Context->bTraceEnabled) { UE_LOG(LogStoryFlow, Log, TEXT("[SF-TRACE] " Format), ##__VA_ARGS__); } } while(0)
 
-static bool IsArrayModifyNode(EStoryFlowNodeType Type)
+static EStoryFlowVariableType ArrayModifyElementType(EStoryFlowNodeType Type)
 {
 	switch (Type)
 	{
 	case EStoryFlowNodeType::AddToBoolArray:
-	case EStoryFlowNodeType::AddToIntArray:
-	case EStoryFlowNodeType::AddToFloatArray:
-	case EStoryFlowNodeType::AddToStringArray:
-	case EStoryFlowNodeType::AddToImageArray:
-	case EStoryFlowNodeType::AddToCharacterArray:
-	case EStoryFlowNodeType::AddToAudioArray:
 	case EStoryFlowNodeType::RemoveFromBoolArray:
-	case EStoryFlowNodeType::RemoveFromIntArray:
-	case EStoryFlowNodeType::RemoveFromFloatArray:
-	case EStoryFlowNodeType::RemoveFromStringArray:
-	case EStoryFlowNodeType::RemoveFromImageArray:
-	case EStoryFlowNodeType::RemoveFromCharacterArray:
-	case EStoryFlowNodeType::RemoveFromAudioArray:
 	case EStoryFlowNodeType::ClearBoolArray:
+		return EStoryFlowVariableType::Boolean;
+	case EStoryFlowNodeType::AddToIntArray:
+	case EStoryFlowNodeType::RemoveFromIntArray:
 	case EStoryFlowNodeType::ClearIntArray:
+		return EStoryFlowVariableType::Integer;
+	case EStoryFlowNodeType::AddToFloatArray:
+	case EStoryFlowNodeType::RemoveFromFloatArray:
 	case EStoryFlowNodeType::ClearFloatArray:
+		return EStoryFlowVariableType::Float;
+	case EStoryFlowNodeType::AddToStringArray:
+	case EStoryFlowNodeType::RemoveFromStringArray:
 	case EStoryFlowNodeType::ClearStringArray:
+		return EStoryFlowVariableType::String;
+	case EStoryFlowNodeType::AddToImageArray:
+	case EStoryFlowNodeType::RemoveFromImageArray:
 	case EStoryFlowNodeType::ClearImageArray:
+		return EStoryFlowVariableType::Image;
+	case EStoryFlowNodeType::AddToDataAssetArray:
+	case EStoryFlowNodeType::RemoveFromDataAssetArray:
+	case EStoryFlowNodeType::ClearDataAssetArray:
+		return EStoryFlowVariableType::DataAsset;
+	case EStoryFlowNodeType::AddToCharacterArray:
+	case EStoryFlowNodeType::RemoveFromCharacterArray:
 	case EStoryFlowNodeType::ClearCharacterArray:
+		return EStoryFlowVariableType::Character;
+	case EStoryFlowNodeType::AddToAudioArray:
+	case EStoryFlowNodeType::RemoveFromAudioArray:
 	case EStoryFlowNodeType::ClearAudioArray:
-		return true;
+		return EStoryFlowVariableType::Audio;
 	default:
-		return false;
+		return EStoryFlowVariableType::None;
 	}
 }
 
@@ -51,6 +62,7 @@ static EStoryFlowNodeType SetArrayTwinOf(EStoryFlowNodeType GetArrayType)
 	case EStoryFlowNodeType::GetFloatArray:     return EStoryFlowNodeType::SetFloatArray;
 	case EStoryFlowNodeType::GetStringArray:    return EStoryFlowNodeType::SetStringArray;
 	case EStoryFlowNodeType::GetImageArray:     return EStoryFlowNodeType::SetImageArray;
+	case EStoryFlowNodeType::GetDataAssetRefArray: return EStoryFlowNodeType::SetDataAssetRefArray;
 	case EStoryFlowNodeType::GetCharacterArray: return EStoryFlowNodeType::SetCharacterArray;
 	case EStoryFlowNodeType::GetAudioArray:     return EStoryFlowNodeType::SetAudioArray;
 	default:                                    return GetArrayType;
@@ -121,6 +133,43 @@ void FStoryFlowEvaluator::MaybeWarnMissingMapTypes(const FStoryFlowNode* Node)
 // Boolean Evaluation
 // ============================================================================
 
+bool FStoryFlowEvaluator::TryReadDataAssetVariable(FStoryFlowNode* Node, FStoryFlowVariant& OutValue)
+{
+	if (!Context || !Node)
+	{
+		return false;
+	}
+
+	// The ladder owns every degraded reason AND the warn latch (contract §6), so the typed arms
+	// below stay one line each and cannot each grow their own subtly different idea of what a
+	// broken binding is. Note there is no character-style "path from an input pin, else the
+	// inline field" fallback here: the accessors persist NO assetId, so the wire is the only
+	// binding there is.
+	FString AssetId;
+	if (!Context->TryResolveDataAssetBinding(*Node, AssetId))
+	{
+		Context->MarkReadFailure();
+		return false;
+	}
+	return Context->TryResolveDataAsset(AssetId, Node->Data.VariableId, OutValue);
+}
+
+FString FStoryFlowEvaluator::ResolveCharacterTarget(FStoryFlowNode* Node)
+{
+	// The wire wins, exactly as before P4 — and it is checked FIRST so a wired-over embedded
+	// binding never resolves (or warns) at all.
+	if (const FStoryFlowConnection* CharEdge = Context->FindInputEdge(Node->Id, StoryFlowHandles::In_CharacterInput))
+	{
+		if (FStoryFlowNode* CharNode = Context->GetNode(CharEdge->Source))
+		{
+			return EvaluateStringFromNode(CharNode, Node->Id, CharEdge->SourceHandle);
+		}
+	}
+	// Unwired: the additive characterId first, the untouched path field as the contract §3
+	// fall-back (P4). Pre-migration nodes carry no id and flow through the path verbatim.
+	return Context->ResolveCharacterRef(Node->Data.CharacterId, Node->Data.CharacterPath);
+}
+
 bool FStoryFlowEvaluator::EvaluateBooleanInput(FStoryFlowNode* Node, const FString& HandleSuffix, bool Fallback)
 {
 	if (!Context || !Node)
@@ -154,8 +203,11 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 	FDepthGuard Guard(Context->EvaluationDepth, STORYFLOW_MAX_EVALUATION_DEPTH, bDepthValid);
 	if (!bDepthValid)
 	{
+		Context->MarkReadFailure();
 		return false;
 	}
+
+	Context->RefreshSharedState();
 
 	// Forward-compat: warn (once) and fall through to default if the source
 	// node is a type the plugin does not understand.
@@ -166,9 +218,18 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 	// on the next read. The HTML runtime recomputes map reads inline the same way.
 	const bool bIsMapRead = (Node->Type == EStoryFlowNodeType::GetMapValue || Node->Type == EStoryFlowNodeType::HasMapKey);
 
+	// Data Asset reads are LIVE for the same reason map reads are, and follow the same
+	// never-memoize precedent (contract §5): a Set writes the session overlay, and an ancestor's
+	// overlay entry cascades to every descendant, so the value behind one accessor can move
+	// without that accessor's own node ever executing. Never caching satisfies
+	// invalidate-on-write BY CONSTRUCTION — there is no cache left to go stale, which is why
+	// this and not a write-side sweep of every accessor node is the whole story.
+	const bool bIsDataAssetRead = IsDataAssetAccessor(Node->Type);
+	const bool bNeverCache = bIsMapRead || bIsDataAssetRead;
+
 	// Check cache first
 	FNodeRuntimeState& NodeState = Context->GetNodeState(Node->Id);
-	if (!bIsMapRead && NodeState.bHasCachedOutput && NodeState.CachedOutput.GetType() == EStoryFlowVariableType::Boolean)
+	if (!Context->bCaptureReadFailures && !bNeverCache && NodeState.bHasCachedOutput && NodeState.CachedOutput.GetType() == EStoryFlowVariableType::Boolean)
 	{
 		return NodeState.CachedOutput.GetBool();
 	}
@@ -181,6 +242,7 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 	case EStoryFlowNodeType::SetBool:
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
+		if (!Var || Var->bIsArray || Var->Type != EStoryFlowVariableType::Boolean) { Context->MarkReadFailure(); }
 		Result = Var ? Var->Value.GetBool() : false;
 		// HTML parity: the evaluator's get/set arm emits VAR GET on every data
 		// pull (runtime-evaluators.js), before the EVAL line below.
@@ -316,6 +378,14 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 		break;
 	}
 
+	case EStoryFlowNodeType::ArrayContainsDataAsset:
+	{
+		TArray<FStoryFlowVariant> Array = EvaluateDataAssetArrayInput(Node, StoryFlowHandles::In_DataAssetArray);
+		FString Value = EvaluateStringInput(Node, StoryFlowHandles::In_DataAsset, Node->Data.Value.GetString());
+		Result = Array.ContainsByPredicate([&Value](const FStoryFlowVariant& V) { return V.GetString().Equals(Value); });
+		break;
+	}
+
 	case EStoryFlowNodeType::ArrayContainsCharacter:
 	{
 		TArray<FStoryFlowVariant> Array = EvaluateCharacterArrayInput(Node, StoryFlowHandles::In_CharacterArray);
@@ -427,6 +497,7 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 
 	case EStoryFlowNodeType::RunScript:
 	{
+		bool bResolvedOutput = false;
 		if (NodeState.bHasOutputValues && !SourceHandle.IsEmpty())
 		{
 			int32 OutIdx = SourceHandle.Find(TEXT("-out-"));
@@ -439,7 +510,7 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 				{
 					if (Output.Id == VarId)
 					{
-						VarName = Output.Name;
+						if (!Output.bIsArray) { VarName = Output.Name; }
 						break;
 					}
 				}
@@ -447,42 +518,63 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 				{
 					if (const FStoryFlowVariant* Val = NodeState.OutputValues.Find(VarName))
 					{
+						bResolvedOutput = !Val->IsArray() && Val->GetType() == EStoryFlowVariableType::Boolean;
 						Result = Val->GetBool();
 					}
 				}
 			}
 		}
+		if (!bResolvedOutput) { Context->MarkReadFailure(); }
 		break;
 	}
 
 	case EStoryFlowNodeType::GetCharacterVar:
 	case EStoryFlowNodeType::SetCharacterVar:
 	{
-		FString CharPath = Node->Data.CharacterPath;
-		if (const FStoryFlowConnection* CharEdge = Context->FindInputEdge(Node->Id, StoryFlowHandles::In_CharacterInput))
-		{
-			if (FStoryFlowNode* CharNode = Context->GetNode(CharEdge->Source))
-			{
-				CharPath = EvaluateStringFromNode(CharNode, Node->Id, CharEdge->SourceHandle);
-			}
-		}
+		FString CharPath = ResolveCharacterTarget(Node);
 		FStoryFlowVariant CharVal = Context->GetCharacterVariableValue(CharPath, Node->Data.VariableName);
+		if (!CharVal.IsValid() || CharVal.IsArray() || CharVal.GetType() != EStoryFlowVariableType::Boolean) { Context->MarkReadFailure(); }
 		Result = CharVal.GetBool();
 		break;
 	}
 
+	// The two `.sfd` accessors — see TryReadDataAssetVariable.
+	case EStoryFlowNodeType::GetDataAssetVariable:
+	case EStoryFlowNodeType::SetDataAssetVariable:
+	{
+		FStoryFlowVariant DataAssetValue;
+		if (TryReadDataAssetVariable(Node, DataAssetValue))
+		{
+			if (DataAssetValue.IsArray() || DataAssetValue.GetType() != EStoryFlowVariableType::Boolean) { Context->MarkReadFailure(); }
+			Result = DataAssetValue.GetBool();
+		}
+		break;
+	}
+
 	default:
+		Context->MarkReadFailure();
 		Result = false;
 		break;
 	}
 
 	SF_EVAL_TRACE("EVAL %s %s result=%s", *Node->Id, *Node->TypeString, Result ? TEXT("true") : TEXT("false"));
 
-	// Cache result (map reads excluded — see bIsMapRead above)
-	if (!bIsMapRead)
+	// Cache result (map and data-asset reads excluded — see bNeverCache above).
+	//
+	// RE-TAKEN, not the NodeState above: every arm of the switch can recurse into another
+	// evaluation, and GetNodeState is a TMap FindOrAdd — one first-time node state anywhere down
+	// that recursion rehashes the table and moves every element, leaving the reference taken
+	// before the switch pointing into a freed block. Writing through it is not a dropped cache
+	// entry, it is a write into freed memory. The cache read above is safe as it stands: it
+	// happens before anything can grow the table.
+	if (!bNeverCache)
 	{
-		NodeState.CachedOutput.SetBool(Result);
-		NodeState.bHasCachedOutput = true;
+		FNodeRuntimeState& CacheState = Context->GetNodeState(Node->Id);
+		if (!CacheState.bIsExecutionOutput)
+		{
+			CacheState.CachedOutput.SetBool(Result);
+			CacheState.bHasCachedOutput = true;
+		}
 	}
 
 	return Result;
@@ -561,8 +653,11 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 	FDepthGuard Guard(Context->EvaluationDepth, STORYFLOW_MAX_EVALUATION_DEPTH, bDepthValid);
 	if (!bDepthValid)
 	{
+		Context->MarkReadFailure();
 		return 0;
 	}
+
+	Context->RefreshSharedState();
 
 	// Forward-compat: warn (once) and fall through to default if the source
 	// node is a type the plugin does not understand.
@@ -576,6 +671,7 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 	case EStoryFlowNodeType::SetInt:
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
+		if (!Var || Var->bIsArray || Var->Type != EStoryFlowVariableType::Integer) { Context->MarkReadFailure(); }
 		Result = Var ? Var->Value.GetInt() : 0;
 		// HTML parity: VAR GET on every data pull, before the EVAL line (see the
 		// boolean evaluator's arm). Pinned by the map-trace-fixture snapshot
@@ -725,6 +821,7 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 	case EStoryFlowNodeType::ForEachFloatLoop:
 	case EStoryFlowNodeType::ForEachStringLoop:
 	case EStoryFlowNodeType::ForEachImageLoop:
+	case EStoryFlowNodeType::ForEachDataAssetLoop:
 	case EStoryFlowNodeType::ForEachCharacterLoop:
 	case EStoryFlowNodeType::ForEachAudioLoop:
 	{
@@ -820,6 +917,13 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 		break;
 	}
 
+	case EStoryFlowNodeType::ArrayLengthDataAsset:
+	{
+		TArray<FStoryFlowVariant> Array = EvaluateDataAssetArrayInput(Node, StoryFlowHandles::In_DataAssetArray);
+		Result = Array.Num();
+		break;
+	}
+
 	case EStoryFlowNodeType::ArrayLengthCharacter:
 	{
 		TArray<FStoryFlowVariant> Array = EvaluateCharacterArrayInput(Node, StoryFlowHandles::In_CharacterArray);
@@ -842,6 +946,14 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 		break;
 	}
 
+	case EStoryFlowNodeType::FindInDataAssetArray:
+	{
+		TArray<FStoryFlowVariant> Array = EvaluateDataAssetArrayInput(Node, StoryFlowHandles::In_DataAssetArray);
+		FString Value = EvaluateStringInput(Node, StoryFlowHandles::In_DataAsset, Node->Data.Value.GetString());
+		Result = Array.IndexOfByPredicate([&Value](const FStoryFlowVariant& V) { return V.GetString().Equals(Value); });
+		break;
+	}
+
 	case EStoryFlowNodeType::FindInCharacterArray:
 	{
 		TArray<FStoryFlowVariant> Array = EvaluateCharacterArrayInput(Node, StoryFlowHandles::In_CharacterArray);
@@ -860,6 +972,7 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 
 	case EStoryFlowNodeType::RunScript:
 	{
+		bool bResolvedOutput = false;
 		FNodeRuntimeState& RSState = Context->GetNodeState(Node->Id);
 		if (RSState.bHasOutputValues && !SourceHandle.IsEmpty())
 		{
@@ -872,7 +985,7 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 				{
 					if (Output.Id == VarId)
 					{
-						VarName = Output.Name;
+						if (!Output.bIsArray) { VarName = Output.Name; }
 						break;
 					}
 				}
@@ -880,34 +993,41 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 				{
 					if (const FStoryFlowVariant* Val = RSState.OutputValues.Find(VarName))
 					{
+						bResolvedOutput = !Val->IsArray() && Val->GetType() == EStoryFlowVariableType::Integer;
 						Result = Val->GetInt();
 					}
 				}
 			}
 		}
+		if (!bResolvedOutput) { Context->MarkReadFailure(); }
 		break;
 	}
 
 	case EStoryFlowNodeType::GetCharacterVar:
 	case EStoryFlowNodeType::SetCharacterVar:
 	{
-		FString CharPath = Node->Data.CharacterPath;
-		if (UStoryFlowScriptAsset* Script = Context->CurrentScript.Get())
-		{
-			if (const FStoryFlowConnection* CharEdge = Script->FindInputEdge(Node->Id, StoryFlowHandles::In_CharacterInput))
-			{
-				if (FStoryFlowNode* CharNode = Context->GetNode(CharEdge->Source))
-				{
-					CharPath = EvaluateStringFromNode(CharNode, Node->Id, CharEdge->SourceHandle);
-				}
-			}
-		}
+		FString CharPath = ResolveCharacterTarget(Node);
 		FStoryFlowVariant CharVal = Context->GetCharacterVariableValue(CharPath, Node->Data.VariableName);
+		if (!CharVal.IsValid() || CharVal.IsArray() || CharVal.GetType() != EStoryFlowVariableType::Integer) { Context->MarkReadFailure(); }
 		Result = CharVal.GetInt();
 		break;
 	}
 
+	// The two `.sfd` accessors — see TryReadDataAssetVariable.
+	case EStoryFlowNodeType::GetDataAssetVariable:
+	case EStoryFlowNodeType::SetDataAssetVariable:
+	{
+		FStoryFlowVariant DataAssetValue;
+		if (TryReadDataAssetVariable(Node, DataAssetValue))
+		{
+			if (DataAssetValue.IsArray() || DataAssetValue.GetType() != EStoryFlowVariableType::Integer) { Context->MarkReadFailure(); }
+			Result = DataAssetValue.GetInt();
+		}
+		break;
+	}
+
 	default:
+		Context->MarkReadFailure();
 		Result = 0;
 		break;
 	}
@@ -954,8 +1074,11 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 	FDepthGuard Guard(Context->EvaluationDepth, STORYFLOW_MAX_EVALUATION_DEPTH, bDepthValid);
 	if (!bDepthValid)
 	{
+		Context->MarkReadFailure();
 		return 0.0f;
 	}
+
+	Context->RefreshSharedState();
 
 	// Forward-compat: warn (once) and fall through to default if the source
 	// node is a type the plugin does not understand.
@@ -969,6 +1092,7 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 	case EStoryFlowNodeType::SetFloat:
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
+		if (!Var || Var->bIsArray || Var->Type != EStoryFlowVariableType::Float) { Context->MarkReadFailure(); }
 		Result = Var ? Var->Value.GetFloat() : 0.0f;
 		// HTML parity: VAR GET on every data pull (see the boolean evaluator's arm)
 		if (Var)
@@ -1118,6 +1242,7 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 
 	case EStoryFlowNodeType::RunScript:
 	{
+		bool bResolvedOutput = false;
 		FNodeRuntimeState& RSState = Context->GetNodeState(Node->Id);
 		if (RSState.bHasOutputValues && !SourceHandle.IsEmpty())
 		{
@@ -1130,7 +1255,7 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 				{
 					if (Output.Id == VarId)
 					{
-						VarName = Output.Name;
+						if (!Output.bIsArray) { VarName = Output.Name; }
 						break;
 					}
 				}
@@ -1138,34 +1263,41 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 				{
 					if (const FStoryFlowVariant* Val = RSState.OutputValues.Find(VarName))
 					{
+						bResolvedOutput = !Val->IsArray() && Val->GetType() == EStoryFlowVariableType::Float;
 						Result = Val->GetFloat();
 					}
 				}
 			}
 		}
+		if (!bResolvedOutput) { Context->MarkReadFailure(); }
 		break;
 	}
 
 	case EStoryFlowNodeType::GetCharacterVar:
 	case EStoryFlowNodeType::SetCharacterVar:
 	{
-		FString CharPath = Node->Data.CharacterPath;
-		if (UStoryFlowScriptAsset* Script = Context->CurrentScript.Get())
-		{
-			if (const FStoryFlowConnection* CharEdge = Script->FindInputEdge(Node->Id, StoryFlowHandles::In_CharacterInput))
-			{
-				if (FStoryFlowNode* CharNode = Context->GetNode(CharEdge->Source))
-				{
-					CharPath = EvaluateStringFromNode(CharNode, Node->Id, CharEdge->SourceHandle);
-				}
-			}
-		}
+		FString CharPath = ResolveCharacterTarget(Node);
 		FStoryFlowVariant CharVal = Context->GetCharacterVariableValue(CharPath, Node->Data.VariableName);
+		if (!CharVal.IsValid() || CharVal.IsArray() || CharVal.GetType() != EStoryFlowVariableType::Float) { Context->MarkReadFailure(); }
 		Result = CharVal.GetFloat();
 		break;
 	}
 
+	// The two `.sfd` accessors — see TryReadDataAssetVariable.
+	case EStoryFlowNodeType::GetDataAssetVariable:
+	case EStoryFlowNodeType::SetDataAssetVariable:
+	{
+		FStoryFlowVariant DataAssetValue;
+		if (TryReadDataAssetVariable(Node, DataAssetValue))
+		{
+			if (DataAssetValue.IsArray() || DataAssetValue.GetType() != EStoryFlowVariableType::Float) { Context->MarkReadFailure(); }
+			Result = DataAssetValue.GetFloat();
+		}
+		break;
+	}
+
 	default:
+		Context->MarkReadFailure();
 		Result = 0.0f;
 		break;
 	}
@@ -1178,6 +1310,62 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 // ============================================================================
 // String Evaluation
 // ============================================================================
+
+FString FStoryFlowEvaluator::EvaluateDataAssetFromNode(FStoryFlowNode* Node, const FString& TargetNodeId, const FString& SourceHandle)
+{
+	if (!Node || !Context) { return FString(); }
+	bool bDepthValid;
+	FDepthGuard Guard(Context->EvaluationDepth, STORYFLOW_MAX_EVALUATION_DEPTH, bDepthValid);
+	if (!bDepthValid) { Context->MarkReadFailure(); return FString(); }
+	Context->RefreshSharedState();
+	switch (Node->Type) {
+	case EStoryFlowNodeType::GetDataAsset: return Node->Data.AssetId;
+	case EStoryFlowNodeType::GetDataAssetRef: case EStoryFlowNodeType::SetDataAssetRef: {
+		const auto* V = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
+		if (V && V->Type == EStoryFlowVariableType::DataAsset && !V->bIsArray) { return V->Value.GetString(); } break;
+	}
+	case EStoryFlowNodeType::GetCharacterVar: case EStoryFlowNodeType::SetCharacterVar: {
+		const FString Ref = ResolveCharacterTarget(Node);
+		const auto* V = Context->FindCharacterVariable(Ref, Node->Data.VariableName);
+		if (Node->Data.VariableType == TEXT("dataAsset") && V && V->Type == EStoryFlowVariableType::DataAsset && !V->bIsArray) { return V->Value.GetString(); } break;
+	}
+	case EStoryFlowNodeType::GetDataAssetVariable: case EStoryFlowNodeType::SetDataAssetVariable: {
+		FStoryFlowVariant Value;
+		if (Node->Data.VariableType == TEXT("dataAsset") && !Node->Data.bIsArray && TryReadDataAssetVariable(Node, Value)) { return Value.GetString(); } break;
+	}
+	case EStoryFlowNodeType::GetDataAssetArrayElement: case EStoryFlowNodeType::GetRandomDataAssetArrayElement: {
+		const auto Array = EvaluateDataAssetArrayInput(Node, StoryFlowHandles::In_DataAssetArray);
+		const int32 Index = Node->Type == EStoryFlowNodeType::GetDataAssetArrayElement ? EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer, Node->Data.Value.GetInt(0)) : (Array.IsEmpty() ? -1 : FMath::RandRange(0, Array.Num() - 1));
+		return Array.IsValidIndex(Index) ? Array[Index].GetString() : FString();
+	}
+	case EStoryFlowNodeType::GetMapValue: {
+		FStoryFlowVariant Value;
+		if (Node->Data.ValueType == TEXT("dataAsset") && ComputeGetMapValue(Node, Value)) { return Value.GetString(); } break;
+	}
+	case EStoryFlowNodeType::ForEachDataAssetLoop: {
+		FStoryFlowVariant Value;
+		return Context->GetNodeState(Node->Id).TryGetLoopElement(Value) ? Value.GetString() : FString();
+	}
+	case EStoryFlowNodeType::ForEachMap:
+		if (Node->Data.ValueType == TEXT("dataAsset") && SourceHandle.EndsWith(TEXT("-value"))) { return Context->GetNodeState(Node->Id).LoopValue.GetString(); } break;
+	case EStoryFlowNodeType::RunScript: {
+		const int32 At = SourceHandle.Find(TEXT("-out-"));
+		if (At != INDEX_NONE) {
+			for (const auto& Output : Node->Data.ScriptOutputs) {
+				if (Output.Id == SourceHandle.Mid(At + 5) && Output.Type == TEXT("dataAsset") && !Output.bIsArray) {
+					const auto& State = Context->GetNodeState(Node->Id);
+					const auto* Actual = State.OutputDeclarations.Find(Output.Name);
+					const auto* Value = State.OutputValues.Find(Output.Name);
+					if ((!Actual || (Actual->Key == EStoryFlowVariableType::DataAsset && !Actual->Value)) && State.bHasOutputValues && Value && !Value->IsArray() && Value->GetType() == EStoryFlowVariableType::DataAsset) { return Value->GetString(); }
+				}
+			}
+		} break;
+	}
+	default: break;
+	}
+	Context->MarkReadFailure(); return FString();
+}
+
 
 FString FStoryFlowEvaluator::EvaluateStringInput(FStoryFlowNode* Node, const FString& HandleSuffix, const FString& Fallback)
 {
@@ -1198,7 +1386,7 @@ FString FStoryFlowEvaluator::EvaluateStringInput(FStoryFlowNode* Node, const FSt
 		return Fallback;
 	}
 
-	return EvaluateStringFromNode(SourceNode, Node->Id, Edge->SourceHandle);
+	return HandleSuffix.StartsWith(TEXT("dataAsset")) ? EvaluateDataAssetFromNode(SourceNode, Node->Id, Edge->SourceHandle) : EvaluateStringFromNode(SourceNode, Node->Id, Edge->SourceHandle);
 }
 
 FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const FString& TargetNodeId, const FString& SourceHandle)
@@ -1212,8 +1400,11 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 	FDepthGuard Guard(Context->EvaluationDepth, STORYFLOW_MAX_EVALUATION_DEPTH, bDepthValid);
 	if (!bDepthValid)
 	{
+		Context->MarkReadFailure();
 		return TEXT("");
 	}
+
+	Context->RefreshSharedState();
 
 	// Forward-compat: warn (once) and fall through to default if the source
 	// node is a type the plugin does not understand.
@@ -1227,6 +1418,7 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 	case EStoryFlowNodeType::SetString:
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
+		if (!Var || Var->bIsArray || Var->Type != EStoryFlowVariableType::String) { Context->MarkReadFailure(); }
 		Result = Var ? Var->Value.GetString() : TEXT("");
 		// HTML parity: VAR GET on every data pull (see the boolean evaluator's arm)
 		if (Var)
@@ -1276,6 +1468,7 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 	case EStoryFlowNodeType::SetEnum:
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
+		if (!Var || Var->bIsArray || Var->Type != EStoryFlowVariableType::Enum) { Context->MarkReadFailure(); }
 		Result = Var ? Var->Value.GetString() : TEXT("");
 		// HTML parity: VAR GET on every data pull (see the boolean evaluator's arm)
 		if (Var)
@@ -1309,6 +1502,7 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 	case EStoryFlowNodeType::SetImage:
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
+		if (!Var || Var->bIsArray || Var->Type != EStoryFlowVariableType::Image) { Context->MarkReadFailure(); }
 		Result = Var ? Var->Value.GetString() : TEXT("");
 		// HTML parity: VAR GET on every data pull (see the boolean evaluator's arm)
 		if (Var)
@@ -1330,6 +1524,7 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 	case EStoryFlowNodeType::SetAudio:
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
+		if (!Var || Var->bIsArray || Var->Type != EStoryFlowVariableType::Audio) { Context->MarkReadFailure(); }
 		Result = Var ? Var->Value.GetString() : TEXT("");
 		// HTML parity: VAR GET on every data pull (see the boolean evaluator's arm)
 		if (Var)
@@ -1343,6 +1538,7 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 	case EStoryFlowNodeType::SetCharacter:
 	{
 		FStoryFlowVariable* Var = Context->FindVariable(Node->Data.Variable, Node->Data.bIsGlobal);
+		if (!Var || Var->bIsArray || Var->Type != EStoryFlowVariableType::Character) { Context->MarkReadFailure(); }
 		Result = Var ? Var->Value.GetString() : TEXT("");
 		// HTML parity: VAR GET on every data pull (see the boolean evaluator's arm)
 		if (Var)
@@ -1502,6 +1698,7 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 
 	case EStoryFlowNodeType::RunScript:
 	{
+		bool bResolvedOutput = false;
 		FNodeRuntimeState& RSState = Context->GetNodeState(Node->Id);
 		if (RSState.bHasOutputValues && !SourceHandle.IsEmpty())
 		{
@@ -1514,7 +1711,7 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 				{
 					if (Output.Id == VarId)
 					{
-						VarName = Output.Name;
+						if (!Output.bIsArray) { VarName = Output.Name; }
 						break;
 					}
 				}
@@ -1522,34 +1719,41 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 				{
 					if (const FStoryFlowVariant* Val = RSState.OutputValues.Find(VarName))
 					{
+						bResolvedOutput = !Val->IsArray() && (Val->GetType() == EStoryFlowVariableType::String || Val->GetType() == EStoryFlowVariableType::Enum);
 						Result = Val->GetString();
 					}
 				}
 			}
 		}
+		if (!bResolvedOutput) { Context->MarkReadFailure(); }
 		break;
 	}
 
 	case EStoryFlowNodeType::GetCharacterVar:
 	case EStoryFlowNodeType::SetCharacterVar:
 	{
-		FString CharPath = Node->Data.CharacterPath;
-		if (UStoryFlowScriptAsset* Script = Context->CurrentScript.Get())
-		{
-			if (const FStoryFlowConnection* CharEdge = Script->FindInputEdge(Node->Id, StoryFlowHandles::In_CharacterInput))
-			{
-				if (FStoryFlowNode* CharNode = Context->GetNode(CharEdge->Source))
-				{
-					CharPath = EvaluateStringFromNode(CharNode, Node->Id, CharEdge->SourceHandle);
-				}
-			}
-		}
+		FString CharPath = ResolveCharacterTarget(Node);
 		FStoryFlowVariant CharVal = Context->GetCharacterVariableValue(CharPath, Node->Data.VariableName);
+		if (!CharVal.IsValid() || CharVal.IsArray() || (CharVal.GetType() != EStoryFlowVariableType::String && CharVal.GetType() != EStoryFlowVariableType::Enum)) { Context->MarkReadFailure(); }
 		Result = CharVal.GetString();
 		break;
 	}
 
+	// The two `.sfd` accessors — see TryReadDataAssetVariable.
+	case EStoryFlowNodeType::GetDataAssetVariable:
+	case EStoryFlowNodeType::SetDataAssetVariable:
+	{
+		FStoryFlowVariant DataAssetValue;
+		if (TryReadDataAssetVariable(Node, DataAssetValue))
+		{
+			if (DataAssetValue.IsArray() || (DataAssetValue.GetType() != EStoryFlowVariableType::String && DataAssetValue.GetType() != EStoryFlowVariableType::Enum)) { Context->MarkReadFailure(); }
+			Result = DataAssetValue.GetString();
+		}
+		break;
+	}
+
 	default:
+		Context->MarkReadFailure();
 		Result = TEXT("");
 		break;
 	}
@@ -1656,11 +1860,15 @@ TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateArrayInputGeneric(FStoryF
 		return TArray<FStoryFlowVariant>();
 	}
 
+	const EStoryFlowVariableType ExpectedType = ParseVariableType(HandleSuffix.Left(HandleSuffix.Find(TEXT("-array"))));
 	FStoryFlowNode* SourceNode = Context->GetNode(Edge->Source);
 	if (!SourceNode)
 	{
+		Context->MarkReadFailure();
 		return TArray<FStoryFlowVariant>();
 	}
+
+	Context->RefreshSharedState();
 
 	// Forward-compat: warn (once) and fall through to empty-array default if
 	// the source node is a type the plugin does not understand.
@@ -1673,12 +1881,14 @@ TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateArrayInputGeneric(FStoryF
 
 		if (!RunScriptState.bHasOutputValues)
 		{
+			Context->MarkReadFailure();
 			return TArray<FStoryFlowVariant>();
 		}
 
 		const int32 OutIndex = Edge->SourceHandle.Find(TEXT("-out-"));
 		if (OutIndex == INDEX_NONE)
 		{
+			Context->MarkReadFailure();
 			return TArray<FStoryFlowVariant>();
 		}
 
@@ -1689,6 +1899,7 @@ TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateArrayInputGeneric(FStoryF
 		{
 			if (Output.Id == OutputId)
 			{
+				if (!Output.bIsArray || ParseVariableType(Output.Type) != ExpectedType) { Context->MarkReadFailure(); }
 				OutputName = Output.Name;
 				break;
 			}
@@ -1696,45 +1907,91 @@ TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateArrayInputGeneric(FStoryF
 
 		if (const FStoryFlowVariant* OutputValue = RunScriptState.OutputValues.Find(OutputName))
 		{
+			if (ExpectedType == EStoryFlowVariableType::DataAsset)
+			{
+				const auto* Actual = RunScriptState.OutputDeclarations.Find(OutputName);
+				if ((Actual && (Actual->Key != ExpectedType || !Actual->Value)) || !OutputValue->IsArray() || OutputValue->GetType() != ExpectedType
+					|| OutputValue->GetArray().ContainsByPredicate([](const FStoryFlowVariant& Element) { return Element.IsArray() || Element.GetType() != EStoryFlowVariableType::DataAsset; }))
+				{
+					Context->MarkReadFailure();
+					return {};
+				}
+			}
 			return OutputValue->GetArray();
 		}
 
+		Context->MarkReadFailure();
 		return TArray<FStoryFlowVariant>();
 	}
 
 	// Handle getCharacterVar/setCharacterVar nodes that can return arrays
 	if (SourceNode->Type == EStoryFlowNodeType::GetCharacterVar || SourceNode->Type == EStoryFlowNodeType::SetCharacterVar)
 	{
-		FString CharPath = SourceNode->Data.CharacterPath;
-		if (UStoryFlowScriptAsset* Script = Context->CurrentScript.Get())
-		{
-			if (const FStoryFlowConnection* CharEdge = Script->FindInputEdge(SourceNode->Id, StoryFlowHandles::In_CharacterInput))
-			{
-				if (FStoryFlowNode* CharNode = Context->GetNode(CharEdge->Source))
-				{
-					CharPath = EvaluateStringFromNode(CharNode, SourceNode->Id, CharEdge->SourceHandle);
-				}
-			}
-		}
+		FString CharPath = ResolveCharacterTarget(SourceNode);
 		FStoryFlowVariant CharVal = Context->GetCharacterVariableValue(CharPath, SourceNode->Data.VariableName);
+		const FStoryFlowVariable* CharacterVariable = Context->FindCharacterVariable(CharPath, SourceNode->Data.VariableName);
+		if (!CharVal.IsValid() || !CharVal.IsArray() || !CharacterVariable || !CharacterVariable->bIsArray || CharacterVariable->Type != ExpectedType) { Context->MarkReadFailure(); }
 		return CharVal.GetArray();
+	}
+
+	// A `.sfd` accessor bound to an ARRAY variable. Placed BEFORE the ExpectedGetArrayType gate
+	// and the name lookup at the tail: an accessor carries no isGlobal and its Data.Variable is
+	// the `.sfd` variable's display NAME, so falling through would read a same-named LOCAL script
+	// array instead. The value is already a copy (the store copies on read), so nothing
+	// downstream can reach the seed through it. Degraded bindings answer the empty-array default
+	// after warning once (contract §6).
+	if (IsDataAssetAccessor(SourceNode->Type))
+	{
+		FStoryFlowVariant DataAssetValue;
+		if (SourceNode->Data.bIsArray && ParseVariableType(SourceNode->Data.VariableType) == ExpectedType && TryReadDataAssetVariable(SourceNode, DataAssetValue))
+		{
+			return DataAssetValue.GetArray();
+		}
+		Context->MarkReadFailure();
+		return TArray<FStoryFlowVariant>();
+	}
+
+	// Get Variable Names (contract §11.1): the names the wired asset's chain DECLARES, as a
+	// string array. The asset arrives over the wire exactly as it does for the bound accessors
+	// (ResolveDataAssetId — the wire is the binding), and the list itself is the store's
+	// (StoryFlowDataAssets::VariableNames), derived from the SAME chain walk the resolver uses,
+	// so the list can never disagree with what an accessor then reads. Every degraded shape —
+	// an unwired pin, a dead ref, an unknown asset, an absent store — answers the empty array
+	// SILENTLY: the node has no variableId to be degraded about, so the §6 ladder does not
+	// apply, and the reference implementation warns nothing here either.
+	if (SourceNode->Type == EStoryFlowNodeType::GetDataAssetVariableNames)
+	{
+		if (ExpectedType != EStoryFlowVariableType::String) { Context->MarkReadFailure(); return {}; }
+		TArray<FStoryFlowVariant> Names;
+		for (const FString& Name : Context->GetDataAssetVariableNames(Context->ResolveDataAssetId(*SourceNode)))
+		{
+			Names.Add(FStoryFlowVariant::FromString(Name));
+		}
+		return Names;
 	}
 
 	// mapKeys / mapValues: pure ops that project a map into an array. Recomputed
 	// fresh on every pull — maps mutate in place, so a cached output would go
 	// stale (the HTML runtime recomputes these inline too). Entries are already
-	// typed variants (Int32 or string keys; per-ValueType values), so they copy
-	// straight into the result regardless of which typed wrapper the consumer
-	// used (int array for integer keys, string array for string/enum keys, etc.).
+	// typed variants (Int32 or string keys; per-ValueType values). Validate the
+	// projected element type even when empty; enum projections expose strings.
 	if (SourceNode->Type == EStoryFlowNodeType::MapKeys || SourceNode->Type == EStoryFlowNodeType::MapValues)
 	{
+		EStoryFlowVariableType ProjectedType = ParseVariableType(SourceNode->Type == EStoryFlowNodeType::MapKeys ? SourceNode->Data.KeyType : SourceNode->Data.ValueType);
+		if (ProjectedType == EStoryFlowVariableType::Enum) { ProjectedType = EStoryFlowVariableType::String; }
+		if (ProjectedType != ExpectedType)
+		{
+			Context->MarkReadFailure();
+			return {};
+		}
 		TArray<FStoryFlowVariant> Result;
 		if (const TArray<FStoryFlowMapEntry>* Map = EvaluateMapInput(SourceNode, TEXT("1")))
 		{
 			Result.Reserve(Map->Num());
 			for (const FStoryFlowMapEntry& Entry : *Map)
 			{
-				Result.Add(SourceNode->Type == EStoryFlowNodeType::MapKeys ? Entry.Key : Entry.Value);
+				const FStoryFlowVariant& Element = SourceNode->Type == EStoryFlowNodeType::MapKeys ? Entry.Key : Entry.Value;
+				Result.Add(Element.GetType() == EStoryFlowVariableType::Enum ? FStoryFlowVariant::FromString(Element.GetString()) : Element);
 			}
 		}
 		return Result;
@@ -1742,27 +1999,30 @@ TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateArrayInputGeneric(FStoryF
 
 	// Handle array modify nodes (add/remove/clear) that output their result array.
 	// These nodes store their result in CachedOutput rather than a variable field.
-	if (IsArrayModifyNode(SourceNode->Type))
+	if (ArrayModifyElementType(SourceNode->Type) != EStoryFlowVariableType::None)
 	{
 		FNodeRuntimeState& State = Context->GetNodeState(SourceNode->Id);
-		if (State.bHasCachedOutput)
+		if (State.bHasCachedOutput && State.CachedOutput.IsArray() && ArrayModifyElementType(SourceNode->Type) == ExpectedType)
 		{
 			return State.CachedOutput.GetArray();
 		}
+		Context->MarkReadFailure();
 		return TArray<FStoryFlowVariant>();
 	}
 
 	if (SourceNode->Type != ExpectedGetArrayType && SourceNode->Type != SetArrayTwinOf(ExpectedGetArrayType))
 	{
+		Context->MarkReadFailure();
 		return TArray<FStoryFlowVariant>();
 	}
 
 	FStoryFlowVariable* Var = Context->FindVariable(SourceNode->Data.Variable, SourceNode->Data.bIsGlobal);
-	if (Var && Var->bIsArray)
+	if (Var && Var->bIsArray && Var->Type == ExpectedType)
 	{
 		return Var->Value.GetArray();
 	}
 
+	Context->MarkReadFailure();
 	return TArray<FStoryFlowVariant>();
 }
 
@@ -1791,6 +2051,11 @@ TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateImageArrayInput(FStoryFlo
 	return EvaluateArrayInputGeneric(Node, HandleSuffix, EStoryFlowNodeType::GetImageArray);
 }
 
+TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateDataAssetArrayInput(FStoryFlowNode* Node, const FString& HandleSuffix)
+{
+	return EvaluateArrayInputGeneric(Node, HandleSuffix, EStoryFlowNodeType::GetDataAssetRefArray);
+}
+
 TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateCharacterArrayInput(FStoryFlowNode* Node, const FString& HandleSuffix)
 {
 	return EvaluateArrayInputGeneric(Node, HandleSuffix, EStoryFlowNodeType::GetCharacterArray);
@@ -1808,6 +2073,11 @@ TArray<FStoryFlowVariant> FStoryFlowEvaluator::EvaluateAudioArrayInput(FStoryFlo
 TArray<FStoryFlowMapEntry>* FStoryFlowEvaluator::EvaluateMapInput(FStoryFlowNode* Node, const FString& OptionId)
 {
 	FStoryFlowVariable* Var = ResolveMapInputVariable(Node, OptionId);
+	if (Context && Context->bCaptureReadFailures && Var && Node
+		&& (Var->KeyType != ParseVariableType(Node->Data.KeyType) || Var->ValueType != ParseVariableType(Node->Data.ValueType)))
+	{
+		Context->MarkReadFailure();
+	}
 	return Var ? &Var->Value.GetMapMutable() : nullptr;
 }
 
@@ -1863,7 +2133,8 @@ FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariableByHandle(FStoryF
 
 	// Walk upstream through chained mutators (mirrors the HTML runtime's
 	// evaluateMapFromNode chain arm): a mutator mutates the origin variable's
-	// live storage in place, so its map output IS its own map input ("2") —
+	// live storage in place, so its map output follows its own map input ("2") unless
+	// execution retained a detached result below —
 	// follow that edge until a terminal variable-bound node. Bounded to defend
 	// against cyclic graphs (HTML recursion has no guard; we fail to unresolved).
 	int32 Hops = 0;
@@ -1872,20 +2143,29 @@ FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariableByHandle(FStoryF
 		 SourceNode->Type == EStoryFlowNodeType::RemoveMapKey ||
 		 SourceNode->Type == EStoryFlowNodeType::ClearMap))
 	{
+		FNodeRuntimeState& State = Context->GetNodeState(SourceNode->Id);
+		if (State.bHasMapExecutionOutput)
+		{
+			if (OutSourceKind) { *OutSourceKind = EMapSourceKind::ExecutionOutput; }
+			return &State.MapExecutionOutput;
+		}
 		if (++Hops > STORYFLOW_MAX_EVALUATION_DEPTH)
 		{
 			UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Map mutator chain too deep at node %s - possible cycle"), *SourceNode->Id);
+			Context->MarkReadFailure();
 			return nullptr;
 		}
 		if (SourceNode->Data.KeyType.IsEmpty() || SourceNode->Data.ValueType.IsEmpty())
 		{
 			MaybeWarnMissingMapTypes(SourceNode);
+			Context->MarkReadFailure();
 			return nullptr;
 		}
 		const FString UpstreamSuffix = StoryFlowHandles::In_Map(SourceNode->Data.KeyType, SourceNode->Data.ValueType, TEXT("2"));
 		const FStoryFlowConnection* UpstreamEdge = Context->FindInputEdge(SourceNode->Id, UpstreamSuffix);
 		if (!UpstreamEdge)
 		{
+			Context->MarkReadFailure();
 			return nullptr;
 		}
 		Edge = UpstreamEdge; // keep the terminal edge — its SourceHandle carries the runScript "-out-" UUID
@@ -1894,8 +2174,11 @@ FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariableByHandle(FStoryF
 
 	if (!SourceNode)
 	{
+		Context->MarkReadFailure();
 		return nullptr;
 	}
+
+	Context->RefreshSharedState();
 
 	// Forward-compat: warn (once) and fall through to unresolved if the terminal
 	// node is a type the plugin does not understand.
@@ -1924,6 +2207,7 @@ FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariableByHandle(FStoryF
 			}
 			return Var;
 		}
+		Context->MarkReadFailure();
 		return nullptr;
 	}
 
@@ -1941,16 +2225,10 @@ FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariableByHandle(FStoryF
 		// character input wins over the inline dropdown path.
 		if (SourceNode->Data.VariableType != TEXT("map"))
 		{
+			Context->MarkReadFailure();
 			return nullptr;
 		}
-		FString CharPath = SourceNode->Data.CharacterPath;
-		if (const FStoryFlowConnection* CharEdge = Context->FindInputEdge(SourceNode->Id, StoryFlowHandles::In_CharacterInput))
-		{
-			if (FStoryFlowNode* CharNode = Context->GetNode(CharEdge->Source))
-			{
-				CharPath = EvaluateStringFromNode(CharNode, SourceNode->Id, CharEdge->SourceHandle);
-			}
-		}
+		FString CharPath = ResolveCharacterTarget(SourceNode);
 		FStoryFlowVariable* Var = Context->FindCharacterVariable(CharPath, SourceNode->Data.VariableName);
 		if (Var && Var->Type == EStoryFlowVariableType::Map)
 		{
@@ -1967,7 +2245,43 @@ FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariableByHandle(FStoryF
 			}
 			return Var;
 		}
+		Context->MarkReadFailure();
 		return nullptr;
+	}
+
+	case EStoryFlowNodeType::GetDataAssetVariable:
+	case EStoryFlowNodeType::SetDataAssetVariable:
+	{
+		// A map-typed `.sfd` accessor resolves to a DETACHED SNAPSHOT parked on the node's
+		// runtime state, never to live store storage: the store copies on read by contract §3,
+		// and handing a mutator a pointer into the seed is exactly what that rule forbids. HTML
+		// parity is exact — evaluateMapFromNode builds a fresh Map from the `.sfd` entry list, so
+		// the DataAsset kind makes mutators retain a detached execution result for explicit
+		// writeback instead of modifying the source store.
+		//
+		// The snapshot is refreshed on EVERY resolution, which is the map twin of the boolean
+		// arm's never-memoize rule: overlay writes and ancestor cascades must be visible on the
+		// next read.
+		FNodeRuntimeState& DataAssetState = Context->GetNodeState(SourceNode->Id);
+		FStoryFlowVariant DataAssetValue;
+		if (SourceNode->Data.VariableType != TEXT("map") || !TryReadDataAssetVariable(SourceNode, DataAssetValue))
+		{
+			Context->MarkReadFailure();
+			return nullptr;
+		}
+		DataAssetState.DataAssetMapSnapshot.Id = SourceNode->Data.VariableId;
+		DataAssetState.DataAssetMapSnapshot.Name = SourceNode->Data.VariableName;
+		DataAssetState.DataAssetMapSnapshot.Type = EStoryFlowVariableType::Map;
+		DataAssetState.DataAssetMapSnapshot.KeyType = ParseVariableType(SourceNode->Data.KeyType);
+		DataAssetState.DataAssetMapSnapshot.ValueType = ParseVariableType(SourceNode->Data.ValueType);
+		// SetMap, not assignment of the variant: an unresolved-but-declared read could be
+		// non-map-typed, and every reader below expects established map storage.
+		DataAssetState.DataAssetMapSnapshot.Value.SetMap(DataAssetValue.GetMap());
+		if (OutSourceKind)
+		{
+			*OutSourceKind = EMapSourceKind::DataAsset;
+		}
+		return &DataAssetState.DataAssetMapSnapshot;
 	}
 
 	case EStoryFlowNodeType::RunScript:
@@ -1978,18 +2292,20 @@ FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariableByHandle(FStoryF
 		// boundary. HandleEnd stores map-typed outputs as DETACHED variables in
 		// MapOutputVariables (keyed by Name), so this arm resolves against that
 		// and flags the source READ-ONLY like charvar chains (mutating a dead
-		// invocation's output is meaningless — HTML mutations land on the
-		// converted fresh Map and are lost). Missing outputs resolve to nullptr,
+		// invocation's output requires explicit writeback; mutations retain a separate
+		// execution result). Missing outputs resolve to nullptr,
 		// which readers treat as empty and HandleSetMap wipes to a fresh empty
 		// map — both match HTML's "missing _outputValues returns empty Map" pin.
 		FNodeRuntimeState& RSState = Context->GetNodeState(SourceNode->Id);
 		if (!RSState.bHasOutputValues || Edge->SourceHandle.IsEmpty())
 		{
+			Context->MarkReadFailure();
 			return nullptr;
 		}
 		const int32 OutIdx = Edge->SourceHandle.Find(TEXT("-out-"));
 		if (OutIdx == INDEX_NONE)
 		{
+			Context->MarkReadFailure();
 			return nullptr;
 		}
 		const FString VarId = Edge->SourceHandle.Mid(OutIdx + 5); // UUID from handle
@@ -2005,6 +2321,7 @@ FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariableByHandle(FStoryF
 		}
 		if (VarName.IsEmpty())
 		{
+			Context->MarkReadFailure();
 			return nullptr;
 		}
 		FStoryFlowVariable* Var = RSState.MapOutputVariables.Find(VarName);
@@ -2022,10 +2339,12 @@ FStoryFlowVariable* FStoryFlowEvaluator::ResolveMapInputVariableByHandle(FStoryF
 			}
 			return Var;
 		}
+		Context->MarkReadFailure();
 		return nullptr;
 	}
 
 	default:
+		Context->MarkReadFailure();
 		return nullptr;
 	}
 }
@@ -2079,14 +2398,21 @@ FStoryFlowVariant FStoryFlowEvaluator::EvaluateMapOpValueInput(FStoryFlowNode* N
 	{
 		Value.SetFloat(EvaluateFloatInput(Node, HandleSuffix, Node->Data.MapInlineValue.GetFloat(0.0f)));
 	}
+	else if (ValueType == TEXT("dataAsset"))
+	{
+		Value.SetDataAsset(EvaluateStringInput(Node, HandleSuffix, Node->Data.MapInlineValue.GetString()));
+	}
 	else if (ValueType == TEXT("enum"))
 	{
 		Value.SetEnum(EvaluateEnumInput(Node, HandleSuffix, Node->Data.MapInlineValue.GetString()));
 	}
+	else if (ValueType == TEXT("string"))
+	{
+		Value.SetString(EvaluateStringInput(Node, HandleSuffix, Context->GetString(Node->Data.MapInlineValue.GetString())));
+	}
 	else
 	{
-		// string, image, character, and audio values all flow through the string
-		// evaluator (matches the scalar Set* handler precedent)
+		// Asset identifiers remain raw; only authored string literals resolve through localization.
 		Value.SetString(EvaluateStringInput(Node, HandleSuffix, Node->Data.MapInlineValue.GetString()));
 	}
 	return Value;
@@ -2161,8 +2487,12 @@ void FStoryFlowEvaluator::ProcessBooleanChain(FStoryFlowNode* Node)
 		}
 		// Then evaluate
 		bool Input = EvaluateBooleanInput(Node, StoryFlowHandles::In_Boolean, Node->Data.Value.GetBool(false));
-		NodeState.CachedOutput.SetBool(!Input);
-		NodeState.bHasCachedOutput = true;
+		// Re-taken after the two calls above, for the reason EvaluateBooleanFromNode's tail
+		// spells out: either can add a node state, and a TMap rehash turns the reference held
+		// since the top of this function into a pointer at freed memory.
+		FNodeRuntimeState& NotState = Context->GetNodeState(Node->Id);
+		NotState.CachedOutput.SetBool(!Input);
+		NotState.bHasCachedOutput = true;
 		break;
 	}
 

@@ -1,14 +1,24 @@
-// Copyright 2026 StoryFlow. All Rights Reserved.
+﻿// Copyright 2026 StoryFlow. All Rights Reserved.
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "Data/StoryFlowTypes.h"
+#include "Data/StoryFlowDataAssetStore.h"
 #include "StoryFlowSubsystem.generated.h"
 
 class UStoryFlowProjectAsset;
 class UStoryFlowScriptAsset;
+class UStoryFlowDataAssetAsset;
+
+/**
+ * Fired when the language actually moves, carrying the NEW code.
+ *
+ * Unprefixed like the component's delegates (FOnDialogueStarted and its siblings), because a
+ * second naming convention in one plugin costs more than the collision risk it avoids.
+ */
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnLanguageChanged, const FString&, LanguageCode);
 
 /**
  * Game Instance Subsystem for StoryFlow
@@ -60,6 +70,189 @@ public:
 	TArray<FString> GetAllScriptPaths() const;
 
 	// ========================================================================
+	// Data Assets — finding one by id or by the name an author typed
+	// ========================================================================
+
+	/**
+	 * The `.sfd` Data Asset with this id, or with this display NAME when the string is not an id.
+	 *
+	 * Every Data Asset accessor takes an asset REFERENCE, which a Blueprint gets by wiring the
+	 * asset into a variable or pin. That is the right shape when the asset is known at design
+	 * time and no shape at all when it is not — a save-slot screen, a data-driven inventory, or
+	 * anything picking an asset from a string. The alternative was reaching into
+	 * ProjectAsset->DataAssets with a raw `da_` id, which is the id-only half of this and asks a
+	 * designer to paste hex.
+	 *
+	 * AN AMBIGUOUS NAME RESOLVES TO NOTHING, deliberately, and warns: two assets can share a
+	 * display name, and picking one of them would be picking silently and differently per import
+	 * order. Ids are unique, so an id never has this problem — which is what the warning tells the
+	 * caller to use. Null for an unknown string, with no warning: asking whether an asset exists
+	 * is a legitimate question, and this is how a Blueprint asks it.
+	 *
+	 * Matches the Godot plugin, whose accessors have always taken an id-or-name string.
+	 */
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Variables|Data Assets")
+	UStoryFlowDataAssetAsset* FindDataAsset(const FString& IdOrName) const;
+
+	// ========================================================================
+	// Data Asset Variable Access - the subsystem's own door (typed, with asset picker)
+	// ========================================================================
+	//
+	// THE SAME ACCESSORS UStoryFlowComponent CARRIES, reachable with no component object: a pause
+	// menu, an inventory screen or a save-slot list gets the subsystem in one line and reads its
+	// data tables there. Both surfaces run ONE ladder (StoryFlowDataAssetAccess), so they cannot
+	// answer a question two ways - the rule the engine contract states for mirrored surfaces.
+	//
+	// Component and subsystem writes advance the shared read generation. Each context drops
+	// derived memos at its next evaluation while retaining completed execution outputs.
+	// A component without a localization sidecar retains its legacy LanguageCode setting.
+
+	/** Get a Data Asset's boolean variable, resolved through its parent chain and this session's writes. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool GetDataAssetBoolVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound);
+
+	/** Set a Data Asset's boolean variable at the referenced asset's own level; cascades to descendants. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetBoolVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool bValue);
+
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	int32 GetDataAssetIntVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound);
+
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetIntVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, int32 Value);
+
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	float GetDataAssetFloatVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound);
+
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetFloatVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, float Value);
+
+	/** String-family read: string, image, audio or character. Enum is NOT reachable here. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	FString GetDataAssetStringVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound);
+
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetStringVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, const FString& Value);
+
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	FString GetDataAssetEnumVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound);
+
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetEnumVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, const FString& Value);
+
+	/** The untyped door: any declared type, the array and map route. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	FStoryFlowVariant GetDataAssetVariantVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound);
+
+	/** Every variable name the asset's chain declares, root-most first. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	TArray<FString> GetDataAssetVariableNames(UStoryFlowDataAssetAsset* DataAsset);
+
+	/** Replace an ARRAY variable's elements, shape-gated. See the component's twin for the rules. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetArrayVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, const TArray<FStoryFlowVariant>& Elements);
+
+	/** Replace a MAP variable's entries from parallel key/value lists, shape-gated. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetMapVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
+		const TArray<FStoryFlowVariant>& Keys, const TArray<FStoryFlowVariant>& Values);
+
+	// ========================================================================
+	// Localization (spec §9) — the player's language, game-wide
+	// ========================================================================
+
+	/**
+	 * Switch the language every StoryFlow string is read in. True when the game is now reading
+	 * `LanguageCode`.
+	 *
+	 * AN UNKNOWN CODE IS A NO-OP: it warns, changes nothing and returns false. Falling back to
+	 * the default instead would let a typo in a Blueprint silently move the player out of the
+	 * language they picked, and a caller that wants to know can read GetLanguage. The codes this
+	 * accepts are exactly the rows GetLanguages returns, matched case-insensitively; a project
+	 * with no localization sidecar accepts only its source language, so this is a no-op there by
+	 * construction rather than by a special case.
+	 *
+	 * WHAT MOVES, AND WHEN. Everything resolved AT READ TIME follows immediately: dialogue titles
+	 * and text, option labels, speaker names, character Name/Image doors, string values read
+	 * through the string table. What a script SEEDED stays as it was seeded — the initial values
+	 * of local, global and character string variables are resolved once when the script or the
+	 * project is loaded (the A5 seats the character contract pins), so a mid-session switch
+	 * reaches them at the next ResetGlobalVariables / ResetRuntimeCharacters / dialogue start,
+	 * not before. Switching from a menu before play begins therefore lands everywhere.
+	 *
+	 * PERSISTENCE IS THE GAME'S. This plugin keeps the choice for the SESSION only, deliberately.
+	 * It has no player-settings lane of its own: the save envelope carries story state (globals,
+	 * characters, once-only options, the .sfd overlay) that a slot owns, and a language is not
+	 * that kind of thing — it must survive with no save file at all, apply before any save is
+	 * loaded, and not differ per slot. The HTML runtime reaches the same conclusion and stores it
+	 * beside its volume settings rather than in the envelope. In Unreal that lane already exists
+	 * and belongs to the game: persist the code with your own settings (UGameUserSettings or your
+	 * own USaveGame) and call this once at boot.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Localization")
+	bool SetLanguage(const FString& LanguageCode);
+
+	/** The language code every StoryFlow string is currently read in. The source language until set. */
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Localization")
+	FString GetLanguage() const { return CurrentLanguage; }
+
+	/**
+	 * The same code as a LIVE reference, for the one caller that must see a SetLanguage it was not
+	 * told about: an execution context holds this by pointer (FStoryFlowExecutionContext's
+	 * ActiveLanguage) so that a `.sfd` read done by a graph node mid-dialogue resolves in the
+	 * language the player is in NOW, not the one the dialogue started in. C++ only, deliberately —
+	 * Blueprint gets the value copy above, which is what a Blueprint can hold safely.
+	 *
+	 * WHY IT IS SAFE, since a raw reference to mutable state is not obviously so: it binds to the
+	 * MEMBER, not to the string, and SetLanguage assigns through that member rather than replacing
+	 * it — so a reassignment leaves every holder valid and looking at the new code. It is valid for
+	 * the subsystem's lifetime (GameInstance scope) and NOT ONE MOMENT LONGER; nothing outliving the
+	 * subsystem may hold it.
+	 *
+	 * DO NOT DEFENSIVELY COPY IT. A copy taken once at wiring time is precisely the bug the pointer
+	 * exists to avoid: it freezes the language a context was initialized with, and every `.sfd` value
+	 * that context reads afterwards answers in it, silently, for the rest of the dialogue. Sparing
+	 * the per-read FString copy is a side benefit and never the reason.
+	 */
+	const FString& GetLanguageRef() const { return CurrentLanguage; }
+
+	/**
+	 * Every language the player can be switched to: the SOURCE language first, then the author's
+	 * registry order — the list a game's own language picker draws.
+	 *
+	 * The source row's Name is its Code: the registry stores a display label for target languages
+	 * only, because the source language is a label and its text lives in the documents themselves.
+	 * EMPTY for a project with no localization sidecar, which is how a game asks "is this project
+	 * localized at all" without reading a key count.
+	 */
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Localization")
+	TArray<FStoryFlowLanguage> GetLanguages() const;
+
+	/**
+	 * Fired when the language MOVES, with the code it moved to. The one signal a game's own
+	 * language menu needs: nothing in this plugin repaints text that is already on screen, so a
+	 * switch reaches a read at the next read and everything else is the game's to refresh.
+	 *
+	 * IT FIRES WHEN THE LANGUAGE ACTUALLY MOVES, AND NEVER OTHERWISE. A refused code broadcasts
+	 * nothing (it changed nothing) and neither does re-setting the language already active.
+	 * SetProject broadcasts only when the install MOVED the language — which happens when the
+	 * incoming project cannot carry the code the player was on, so it snaps to that project's
+	 * source language.
+	 *
+	 * ORDERING: whatever a handler can observe is already the new state. The language is assigned
+	 * before the broadcast, so GetLanguage answers the new code; and from SetProject the WHOLE
+	 * install has run first, so a handler reading a .sfd value, a global or a character sees the
+	 * project it was just told about. A handler that re-enters SetLanguage is measured against
+	 * the new value, so it either no-ops or changes again and fires again.
+	 *
+	 * It lives here rather than on StoryFlowComponent, where every other event lives, for the
+	 * same reason SetLanguage does: the language is one game-wide value, and a component-side
+	 * event would fire once per component for one change.
+	 */
+	UPROPERTY(BlueprintAssignable, Category = "StoryFlow|Localization")
+	FOnLanguageChanged OnLanguageChanged;
+
+	// ========================================================================
 	// Global Variables (shared across all components)
 	// ========================================================================
 
@@ -86,10 +279,64 @@ public:
 	const TMap<FString, FStoryFlowCharacterDef>& GetRuntimeCharacters() const { return RuntimeCharacters; }
 
 	/**
+	 * The character id bridge: character FILE id (`da_`) -> RuntimeCharacters key, copied
+	 * from the project's character-index.json (P4 contract §1.4). Empty on pre-P4 imports —
+	 * ids then resolve nothing and the path fields stay authoritative. Const-only: the
+	 * bridge is import data, never runtime state.
+	 */
+	const TMap<FString, FString>& GetCharacterIdToPath() const { return CharacterIdToPath; }
+
+	/**
 	 * Reset runtime characters to their default values from the project
 	 */
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Characters")
 	void ResetRuntimeCharacters();
+
+	// ========================================================================
+	// Data Assets (.sfd) — the seed + session overlay store (engine contract §3)
+	// ========================================================================
+
+	/**
+	 * The read-only Data Asset SEED, keyed by assetId. Rebuilt from the project's imported
+	 * assets at SetProject and NEVER mutated afterwards (contract §3) — session writes go to
+	 * the overlay. Const-only on purpose: that rule is the whole reason the overlay exists.
+	 */
+	const StoryFlowDataAssets::FSeed& GetDataAssetSeed() const { return DataAssetSeed; }
+
+	/** This session's Data Asset writes, keyed (assetId -> variableId). Cleared on reset. */
+	StoryFlowDataAssets::FOverlay& GetDataAssetOverlay() { return DataAssetOverlay; }
+	const StoryFlowDataAssets::FOverlay& GetDataAssetOverlay() const { return DataAssetOverlay; }
+
+	/**
+	 * Both halves as one non-owning reference, for everything that needs the pair.
+	 *
+	 * WRITES ARE SUBSYSTEM-WIDE, CACHE INVALIDATION IS COMPONENT-LOCAL. Every component shares
+	 * these two maps, so a write through one is immediately visible to a read through any other.
+	 * Store writes advance the shared generation. Every context invalidates derived memos on
+	 * its next evaluation; completed operation outputs and active loop/call state survive.
+
+	 */
+	StoryFlowDataAssets::FStoreRef GetDataAssetStore() { return { &DataAssetSeed, &DataAssetOverlay, &SharedState }; }
+
+	/** Invalidate derived reads in every live context on its next evaluation. */
+	void NotifySharedStateChanged() { ++SharedState.Revision; }
+
+	/**
+	 * Rebuild the seed from the project's imported Data Assets and clear the overlay
+	 * (contract §3 init). Called by SetProject; a game restart wants ResetDataAssetOverlay.
+	 */
+	void ResetDataAssetSeed();
+
+	/**
+	 * Drop every session Data Asset write, leaving the seed alone (contract §3 reset).
+	 * This is the game-restart semantic; the seed only changes when the project does.
+	 *
+	 * Clears session writes and advances the shared read generation. Live contexts re-evaluate
+	 * derived conditions at their next read; the game owns presentation refresh timing.
+
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|DataAssets")
+	void ResetDataAssetOverlay();
 
 	// ========================================================================
 	// Once-Only Options (persists across dialogues)
@@ -168,12 +415,25 @@ public:
 	void ResolveStringVariableValues(TMap<FString, FStoryFlowVariable>& Variables);
 
 private:
+	StoryFlowDataAssets::FSharedState SharedState;
 	/** Try to auto-load project from default location */
 	void TryAutoLoadProject();
 
 	/** The loaded project asset */
 	UPROPERTY()
 	TObjectPtr<UStoryFlowProjectAsset> ProjectAsset;
+
+	/**
+	 * The language every string lookup runs in (spec §9). "en" before a project is loaded, which
+	 * is what every pre-localization export's strings are keyed by; SetProject then points it at
+	 * the project's SOURCE language unless the player has already chosen a language the new
+	 * project also carries.
+	 */
+	UPROPERTY()
+	FString CurrentLanguage = TEXT("en");
+
+	/** Before the first install, the default code does not represent a language choice. */
+	bool bHasInitializedLanguage = false;
 
 	/** Runtime copy of global variables (shared across all dialogues) */
 	UPROPERTY()
@@ -182,6 +442,21 @@ private:
 	/** Runtime copy of characters (mutable, for character variable modifications) */
 	UPROPERTY()
 	TMap<FString, FStoryFlowCharacterDef> RuntimeCharacters;
+
+	/** Character id -> RuntimeCharacters key bridge (read-only copy of the project's index) */
+	UPROPERTY()
+	TMap<FString, FString> CharacterIdToPath;
+
+	/** Read-only Data Asset seed, keyed by assetId (contract §2.1 / §3) */
+	UPROPERTY()
+	TMap<FString, FStoryFlowDataAssetDef> DataAssetSeed;
+
+	/**
+	 * Session Data Asset writes, keyed (assetId -> variableId). Not a UPROPERTY: UHT rejects
+	 * a nested TMap, and there is nothing here for the GC to keep alive — FStoryFlowVariant
+	 * holds no UObject references. Serialization is manual either way (contract §7).
+	 */
+	StoryFlowDataAssets::FOverlay DataAssetOverlay;
 
 	/** Tracks which once-only dialogue options have been used (NodeId-OptionId keys) */
 	UPROPERTY()

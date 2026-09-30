@@ -219,6 +219,18 @@ enum class EStoryFlowNodeType : uint8
 	GetCharacterVar,
 	SetCharacterVar,
 
+	// Data Assets (.sfd) — the reference pill plus its two bound accessors.
+	// GetDataAsset carries the assetId; the accessors carry NO assetId of their
+	// own, because THE WIRE IS THE BINDING (engine contract §2.2): each reaches
+	// its asset by following its `dataAsset` input pin back to a pill.
+	GetDataAsset,
+	GetDataAssetVariable,
+	SetDataAssetVariable,
+	// Get Variable Names (contract §11.1): pure, NO fields of its own — it reaches
+	// its asset over the same `dataAsset` pin the accessors use and answers the
+	// names the chain DECLARES as a string array.
+	GetDataAssetVariableNames,
+
 	// Map Variables
 	GetMap,
 	SetMap,
@@ -233,7 +245,23 @@ enum class EStoryFlowNodeType : uint8
 	ForEachMap,
 
 	// Unknown/Custom
-	Unknown UMETA(Hidden)
+	Unknown UMETA(Hidden),
+
+	// Appended to preserve all existing serialized enum ordinals.
+	GetDataAssetRef,
+	SetDataAssetRef,
+	GetDataAssetRefArray,
+	SetDataAssetRefArray,
+	GetDataAssetArrayElement,
+	SetDataAssetArrayElement,
+	GetRandomDataAssetArrayElement,
+	AddToDataAssetArray,
+	RemoveFromDataAssetArray,
+	ClearDataAssetArray,
+	ArrayLengthDataAsset,
+	ArrayContainsDataAsset,
+	FindInDataAssetArray,
+	ForEachDataAssetLoop
 };
 
 /**
@@ -251,7 +279,8 @@ enum class EStoryFlowVariableType : uint8
 	Image,
 	Audio,
 	Character,
-	Map
+	Map,
+	DataAsset
 };
 
 /**
@@ -294,6 +323,10 @@ private:
 	UPROPERTY()
 	EStoryFlowVariableType Type = EStoryFlowVariableType::None;
 
+	// Arrays carry their element type, so shape is tracked separately (including empty arrays).
+	UPROPERTY()
+	uint8 ValueShape = 0; // 0: legacy/unspecified, 1: scalar or map, 2: array
+
 	UPROPERTY()
 	bool bBoolValue = false;
 
@@ -327,6 +360,9 @@ private:
 public:
 	// Type checking
 	bool IsValid() const { return Type != EStoryFlowVariableType::None; }
+	bool IsArray() const { return ValueShape == 2; }
+	/** Restore shape from a declaration when reading legacy assets without shape metadata. */
+	void SetArrayShape(bool bIsArray) { ValueShape = bIsArray ? 2 : 1; }
 	// Note: In Blueprint, use FStoryFlowVariable.Type instead (BlueprintReadOnly).
 	// GetType() is C++ only — not a UFUNCTION, and FStoryFlowVariant's members are private.
 	EStoryFlowVariableType GetType() const { return Type; }
@@ -335,35 +371,43 @@ public:
 	void SetBool(bool Value)
 	{
 		Type = EStoryFlowVariableType::Boolean;
+		ValueShape = 1;
 		bBoolValue = Value;
 	}
 
 	void SetInt(int32 Value)
 	{
 		Type = EStoryFlowVariableType::Integer;
+		ValueShape = 1;
 		IntValue = Value;
 	}
 
 	void SetFloat(float Value)
 	{
 		Type = EStoryFlowVariableType::Float;
+		ValueShape = 1;
 		FloatValue = Value;
 	}
 
 	void SetString(const FString& Value)
 	{
 		Type = EStoryFlowVariableType::String;
+		ValueShape = 1;
 		StringValue = Value;
 	}
+
+	void SetDataAsset(const FString& Value) { SetString(Value); Type = EStoryFlowVariableType::DataAsset; }
 
 	void SetEnum(const FString& Value)
 	{
 		Type = EStoryFlowVariableType::Enum;
+		ValueShape = 1;
 		StringValue = Value;
 	}
 
 	void SetArray(const TArray<FStoryFlowVariant>& Value)
 	{
+		ValueShape = 2;
 		ArrayValue = Value;
 		MapValue.Reset(); // a variant holds either array or map data, never both
 		// Infer type from first element, or keep current type
@@ -371,6 +415,21 @@ public:
 		{
 			Type = Value[0].GetType();
 		}
+	}
+
+	/**
+	 * SetArray with the element type STATED rather than inferred. An empty array carries no
+	 * element to infer from, so the overload above leaves the variant typed None — harmless for a
+	 * script variable, whose FStoryFlowVariable carries the declared type in the field beside the
+	 * value, but wrong for a value that travels on its own. A `.sfd` read resolves through a
+	 * declaration the caller already holds, so it can state the type and must: otherwise the same
+	 * variable reads back typed or untyped depending only on whether the last writer happened to
+	 * leave the array empty.
+	 */
+	void SetArray(const TArray<FStoryFlowVariant>& Value, EStoryFlowVariableType ElementType)
+	{
+		SetArray(Value);
+		Type = ElementType;
 	}
 
 	// Defined below FStoryFlowMapEntry (assigning the entry array needs the complete type)
@@ -422,7 +481,7 @@ public:
 		// Image, Audio, and Character types also store their values in StringValue
 		if (Type == EStoryFlowVariableType::String || Type == EStoryFlowVariableType::Enum ||
 			Type == EStoryFlowVariableType::Image || Type == EStoryFlowVariableType::Audio ||
-			Type == EStoryFlowVariableType::Character)
+			Type == EStoryFlowVariableType::Character || Type == EStoryFlowVariableType::DataAsset)
 		{
 			return StringValue;
 		}
@@ -436,6 +495,7 @@ public:
 
 	TArray<FStoryFlowVariant>& GetArrayMutable()
 	{
+		ValueShape = 2;
 		return ArrayValue;
 	}
 
@@ -470,6 +530,7 @@ public:
 		case EStoryFlowVariableType::Enum:
 		case EStoryFlowVariableType::Image:
 		case EStoryFlowVariableType::Audio:
+		case EStoryFlowVariableType::DataAsset:
 		case EStoryFlowVariableType::Character:
 			return StringValue;
 		case EStoryFlowVariableType::Map:
@@ -545,6 +606,7 @@ struct FStoryFlowMapEntry
 
 inline void FStoryFlowVariant::SetMap(const TArray<FStoryFlowMapEntry>& Value)
 {
+	ValueShape = 1;
 	Type = EStoryFlowVariableType::Map;
 	MapValue = MakeShared<TArray<FStoryFlowMapEntry>>(Value); // fresh storage — never aliases
 	ArrayValue.Empty(); // a variant holds either array or map data, never both
@@ -568,6 +630,7 @@ inline TArray<FStoryFlowMapEntry>& FStoryFlowVariant::GetMapMutable()
 inline void FStoryFlowVariant::AliasMap(FStoryFlowVariant& Source)
 {
 	Source.GetMapMutable(); // ensure Source has storage so the alias holds while empty
+	ValueShape = 1;
 	Type = EStoryFlowVariableType::Map;
 	MapValue = Source.MapValue; // SHARE the live storage (see MapValue doc)
 	ArrayValue.Empty(); // a variant holds either array or map data, never both
@@ -583,6 +646,7 @@ inline void FStoryFlowVariant::DeepCopyMap()
 
 inline void FStoryFlowVariant::Reset()
 {
+	ValueShape = 1;
 	Type = EStoryFlowVariableType::None;
 	bBoolValue = false;
 	IntValue = 0;
@@ -663,6 +727,24 @@ STORYFLOWRUNTIME_API void PackVariablesForSerialization(TMap<FString, FStoryFlow
 STORYFLOWRUNTIME_API void UnpackVariablesFromSerialization(TMap<FString, FStoryFlowVariable>& Variables);
 
 /**
+ * Same pack/unpack contract for an ORDERED variable list. Data Asset declarations keep the
+ * seed's authored order (contract §2.1 — map values are ordered entry lists and the editor's
+ * declaration order is what the debugger and the details panel show), so they live in a
+ * TArray rather than the TMap the character/global variable stores use.
+ */
+STORYFLOWRUNTIME_API void PackVariablesForSerialization(TArray<FStoryFlowVariable>& Variables);
+STORYFLOWRUNTIME_API void UnpackVariablesFromSerialization(TArray<FStoryFlowVariable>& Variables);
+
+/**
+ * Same contract again for a bare variant table — the Data Asset OVERRIDE blob
+ * ({ variableId: value }, contract §2.1), whose values carry no declaration of their own.
+ * The variants themselves are ordinary UPROPERTYs; only their non-UPROPERTY ArrayValue /
+ * MapValue internals need the blob treatment, exactly as the variable helpers above do.
+ */
+STORYFLOWRUNTIME_API void PackVariantsForSerialization(TMap<FString, FStoryFlowVariant>& Variants);
+STORYFLOWRUNTIME_API void UnpackVariantsFromSerialization(TMap<FString, FStoryFlowVariant>& Variants);
+
+/**
  * Detach every map variable's shared entry storage in a variable map (see
  * FStoryFlowVariant::DeepCopyMap). Call right after copying variables out of an
  * asset (script locals, subsystem globals, runtime characters) so runtime map
@@ -671,6 +753,12 @@ STORYFLOWRUNTIME_API void UnpackVariablesFromSerialization(TMap<FString, FStoryF
  * (runtime-state.js SWITCH_SCRIPT / LOAD_CONTENT).
  */
 STORYFLOWRUNTIME_API void DeepCopyMapVariables(TMap<FString, FStoryFlowVariable>& Variables);
+
+/** Ordered-list twin of DeepCopyMapVariables (see the TArray pack helpers above). */
+STORYFLOWRUNTIME_API void DeepCopyMapVariables(TArray<FStoryFlowVariable>& Variables);
+
+/** Bare-variant twin of DeepCopyMapVariables, for the Data Asset override blob. */
+STORYFLOWRUNTIME_API void DeepCopyMapVariants(TMap<FString, FStoryFlowVariant>& Variants);
 
 // ============================================================================
 // Text Block
@@ -894,6 +982,14 @@ struct STORYFLOWRUNTIME_API FStoryFlowNodeData
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Character;
 
+	/**
+	 * Character FILE id (`da_`) of this dialogue's speaker (editor 1.8+, additive — P4
+	 * contract §1.3). Empty on pre-migration content; Character above remains the
+	 * authoritative fallback whenever the id is empty or resolves nothing.
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	FString CharacterRefId;
+
 	/** Text blocks (non-interactive text displayed in dialogue) */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TArray<FStoryFlowTextBlock> TextBlocks;
@@ -942,6 +1038,16 @@ struct STORYFLOWRUNTIME_API FStoryFlowNodeData
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString CharacterPath;
 
+	/**
+	 * Character FILE id (`da_`) bound to a character variable node (editor 1.8+, additive —
+	 * P4 contract §1.3). NOT AssetId below: that vocabulary is scoped to data-asset nodes,
+	 * and a character id never names a `.sfd` seed entry. Empty on pre-migration content;
+	 * CharacterPath above remains the authoritative fallback whenever the id is empty or
+	 * resolves nothing.
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	FString CharacterId;
+
 	/** Variable name for character variable nodes */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString VariableName;
@@ -953,6 +1059,24 @@ struct STORYFLOWRUNTIME_API FStoryFlowNodeData
 	/** Array flag for character variable nodes */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bIsArray = false;
+
+	// === Data Asset Fields (.sfd — engine contract §2.2) ===
+	// The accessors reuse VariableName / VariableType / bIsArray / KeyType /
+	// ValueType above as their SPAWN-TIME SNAPSHOT (what the node's pins were
+	// built from), which §6.1 compares against the chain's live declaration.
+	// Only these two are new.
+
+	/** The `.sfd` asset a getDataAsset reference pill is bound to. Empty = unbound pill. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	FString AssetId;
+
+	/**
+	 * The variable id a get/setDataAssetVariable accessor reads or writes. The
+	 * STABLE id, not the name — renaming a `.sfd` variable must not break a node,
+	 * so VariableName above is only a display snapshot.
+	 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	FString VariableId;
 
 	// === Map Fields (for map variable nodes) ===
 
@@ -1124,6 +1248,28 @@ struct STORYFLOWRUNTIME_API FStoryFlowStringTable
 	}
 };
 
+/**
+ * One TARGET language of the localization sidecar (localization spec §9): the code its table is
+ * keyed by, and the display label the author registered for it.
+ *
+ * The SOURCE language is not one of these. It is a code with no table at all — the artifacts
+ * themselves carry the source text — so it appears in UStoryFlowSubsystem::GetLanguages as a row
+ * whose Name is its Code, exactly as the HTML runtime's getLanguages builds it.
+ */
+USTRUCT(BlueprintType)
+struct STORYFLOWRUNTIME_API FStoryFlowLanguage
+{
+	GENERATED_BODY()
+
+	/** The language code, and the key of this language's table ("fr", "es") */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	FString Code;
+
+	/** The display label the author registered ("French"), for a game's own language picker */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	FString Name;
+};
+
 // ============================================================================
 // Character System
 // ============================================================================
@@ -1136,9 +1282,13 @@ struct STORYFLOWRUNTIME_API FStoryFlowCharacterDef
 {
 	GENERATED_BODY()
 
-	/** String table key for name */
+	/** Authored string table key or runtime-written display name. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Name;
+
+	/** Runtime writes stay literal even when their text equals an authored string key. */
+	UPROPERTY()
+	bool bNameIsLiteral = false;
 
 	/** Asset key for default image */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
@@ -1153,6 +1303,53 @@ struct STORYFLOWRUNTIME_API FStoryFlowCharacterDef
 	TMap<FString, FStoryFlowVariable> Variables;
 };
 
+// ============================================================================
+// Data Asset System (.sfd)
+// ============================================================================
+
+/**
+ * One level of a Data Asset chain, as the runtime SEED carries it (engine contract §2.1,
+ * mirroring the HTML runtime's seed entries in runtime-data-assets.js).
+ *
+ * This is the runtime twin of UStoryFlowDataAssetAsset, the same way FStoryFlowCharacterDef
+ * is the runtime twin of UStoryFlowCharacterAsset: the subsystem copies the imported assets
+ * into these at SetProject so map storage can be detached from the asset (see
+ * DeepCopyMapVariables) and so the store can be built from raw JSON in tests without
+ * creating UObjects.
+ *
+ * Unlike the character twin, this one is NEVER MUTATED — contract §3: session writes land in
+ * the overlay, and "the seed is never mutated by anything, ever".
+ *
+ * Not BlueprintType: nothing exposes the seed to Blueprint. Blueprint reads and writes go
+ * through the accessor node arms and the typed component API, both of which resolve through
+ * the chain — handing out a raw seed level would hand out pre-inheritance values.
+ */
+USTRUCT()
+struct STORYFLOWRUNTIME_API FStoryFlowDataAssetDef
+{
+	GENERATED_BODY()
+
+	/** Stable da_<32 hex> id — the key everything in the contract is keyed by */
+	UPROPERTY()
+	FString Id;
+
+	/** Display name (the .sfd filename base). Carried for tooling; nothing resolves through it. */
+	UPROPERTY()
+	FString Name;
+
+	/** Parent asset id, empty for a root asset */
+	UPROPERTY()
+	FString Parent;
+
+	/** Declarations in the seed's authored order, each carrying its own declared default */
+	UPROPERTY()
+	TArray<FStoryFlowVariable> Variables;
+
+	/** This level's file overrides, keyed by variable id (contract §2.1) */
+	UPROPERTY()
+	TMap<FString, FStoryFlowVariant> Overrides;
+};
+
 /**
  * Resolved character data for runtime display
  */
@@ -1160,6 +1357,10 @@ USTRUCT(BlueprintType)
 struct STORYFLOWRUNTIME_API FStoryFlowCharacterData
 {
 	GENERATED_BODY()
+
+	/** Live speaker reference used by nested interpolation. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	FString CharacterPath;
 
 	/** Resolved character name */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
@@ -1359,6 +1560,24 @@ struct STORYFLOWRUNTIME_API FStoryFlowProjectMetadata
  * Parse node type string to enum
  */
 STORYFLOWRUNTIME_API EStoryFlowNodeType ParseNodeType(const FString& TypeString);
+
+/**
+ * Parse an exported WIRE type string ("boolean", "map", ...) to enum. None for anything else,
+ * including "category" — a declaration the editor refuses to give a value, so nothing downstream
+ * ever resolves one.
+ *
+ * MATCHING IS CASE-SENSITIVE (ordinal) on the nine exact lowercase tokens — the wire rule of the
+ * data-asset engine contract §2.1, ruled 2026-08-24, mirroring the Unity port's ordinal table.
+ * The exporter writes those tokens and only those, so a differently cased string is not a type
+ * this format has; accepting one would resolve payloads the other runtimes call unknown.
+ *
+ * THE table, not a copy of it. It used to exist twice: privately in the importer, and again in
+ * the data-asset store for the accessor snapshot gate. The two were character-identical, which is
+ * exactly what made the drift expensive — adding a wire type to the importer alone would import
+ * variables of that type correctly and then degrade every accessor bound to one with a "type
+ * changed" warning naming a type that had not changed.
+ */
+STORYFLOWRUNTIME_API EStoryFlowVariableType ParseVariableType(const FString& TypeString);
 
 /**
  * Parse handle string to components

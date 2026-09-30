@@ -10,6 +10,7 @@
 class UStoryFlowProjectAsset;
 class UStoryFlowScriptAsset;
 class UStoryFlowCharacterAsset;
+class UStoryFlowDataAssetAsset;
 
 /**
  * JSON importer for StoryFlow project and script files
@@ -72,6 +73,35 @@ public:
 	static UStoryFlowScriptAsset* ImportScriptFromJson(const TSharedPtr<FJsonObject>& JsonObject, const FString& ScriptPath, const FString& ContentPath, bool* bOutSkippedUnchanged = nullptr, bool bDeferSave = false);
 
 private:
+	// === Import Sections ===
+
+	/**
+	 * Import the export's Data Asset (.sfd) seed into per-asset assets under
+	 * ContentPath/DataAssets, keyed onto the project by assetId (engine contract §2.1).
+	 * Appends the seed JSON to InOutProjectHashParts so the project's skip hash covers it,
+	 * exactly as the characters and global-variables sections do.
+	 */
+	static void ImportDataAssets(const FString& BuildDirectory, const FString& ContentPath, UStoryFlowProjectAsset* ProjectAsset, TArray<FString>& InOutProjectHashParts);
+
+	/**
+	 * Import character-index.json (the character id bridge, P4 contract §1.4) onto the
+	 * project's CharacterIdToPath map. Absent file = pre-P4 export, empty bridge, no
+	 * warning; unknown schemaVersion = warn and skip the file, empty bridge. Appends the
+	 * index JSON to InOutProjectHashParts so the project's skip hash covers it, exactly
+	 * as the characters and data-asset sections do.
+	 */
+	static void ImportCharacterIndex(const FString& BuildDirectory, UStoryFlowProjectAsset* ProjectAsset, TArray<FString>& InOutProjectHashParts);
+
+	/**
+	 * Import localization.json (the translations sidecar, localization spec §9) onto the
+	 * project's language tables. THE FILE-PRESENCE MARKER: an absent file is a
+	 * pre-localization export and leaves the project source-only with zero behavior change
+	 * and no warning; an unusable one warns and degrades the same way, exactly as the
+	 * character index does. Appends the sidecar JSON to InOutProjectHashParts so the
+	 * project's skip hash covers it, like every other project-level input.
+	 */
+	static void ImportLocalization(const FString& BuildDirectory, UStoryFlowProjectAsset* ProjectAsset, TArray<FString>& InOutProjectHashParts);
+
 	// === Parsing Helpers ===
 
 	/** Parse nodes from JSON object */
@@ -123,6 +153,9 @@ private:
 
 	/** Create a new character asset */
 	static UStoryFlowCharacterAsset* CreateCharacterAsset(const FString& ContentPath, const FString& AssetName);
+
+	/** Create a new Data Asset (.sfd seed level) asset */
+	static UStoryFlowDataAssetAsset* CreateDataAssetAsset(const FString& ContentPath, const FString& AssetName);
 
 	// === File Helpers ===
 

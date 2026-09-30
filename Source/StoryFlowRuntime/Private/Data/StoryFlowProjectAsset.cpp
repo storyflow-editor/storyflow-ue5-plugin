@@ -75,11 +75,81 @@ void UStoryFlowProjectAsset::PreSave(FObjectPreSaveContext SaveContext)
 	PackVariablesForSerialization(GlobalVariables);
 }
 
+const FString* UStoryFlowProjectAsset::FindLocalizedString(const FString& Key, const FString& LanguageCode) const
+{
+	const FStoryFlowStringTable* Table = LanguageStrings.Find(LanguageCode);
+	if (!Table)
+	{
+		return nullptr;
+	}
+	const FString* Text = Table->Entries.Find(Key);
+	return (Text && !Text->IsEmpty()) ? Text : nullptr;
+}
+
+FString UStoryFlowProjectAsset::ResolveLanguageCode(const FString& Code) const
+{
+	if (Code.IsEmpty())
+	{
+		return FString();
+	}
+	if (!SourceLanguage.IsEmpty() && SourceLanguage.Equals(Code, ESearchCase::IgnoreCase))
+	{
+		return SourceLanguage;
+	}
+	for (const FStoryFlowLanguage& Language : Languages)
+	{
+		if (Language.Code.Equals(Code, ESearchCase::IgnoreCase))
+		{
+			return Language.Code;
+		}
+	}
+	return FString();
+}
+
 FString UStoryFlowProjectAsset::GetGlobalString(const FString& Key, const FString& LanguageCode) const
 {
-	// Lookup with language prefix
+	// TIER 1, the localization overlay (spec §9): the sidecar's row for this id in the language
+	// being read. Absent for a pre-localization export, for the source language and for an id
+	// the sidecar does not carry — all of which fall through to the artifact's own table below.
+	//
+	// THE LOOKUP RUNS ON THE AUTHORED TEMPLATE here too: a caller that interpolates `{Variable}`
+	// tokens must do it on the RESULT of this call, never before it, or it hands this lookup a
+	// string no table was ever keyed by. See the full paragraph on
+	// FStoryFlowExecutionContext::GetString for why that failure is invisible.
+	//
+	// TRIPWIRE: this ladder and FStoryFlowExecutionContext::GetString's are deliberately
+	// separate — that one probes the current script's table before these globals, this one has
+	// no script to probe — but the probes themselves must stay in lockstep. A probe ADDED or
+	// REORDERED here must move there, and the reverse, or a string resolves one way inside
+	// dialogue and another way outside it.
+	if (const FString* Localized = FindLocalizedString(Key, LanguageCode))
+	{
+		return *Localized;
+	}
+
+	// TIER 2, the artifact's own table. The language-prefixed probe comes first and is the
+	// PRE-LOCALIZATION behavior, kept exactly as it was: an artifact `strings` block may itself
+	// carry more than one language block, and the importer flattens each to `<code>.<key>`.
 	const FString FullKey = FString::Printf(TEXT("%s.%s"), *LanguageCode, *Key);
 	if (const FString* Value = GlobalStrings.Find(FullKey))
+	{
+		return *Value;
+	}
+
+	// Still tier 2, and the step the sidecar makes necessary: the SOURCE table. Every export this
+	// editor writes keys its artifact strings by the source language alone, so once the language
+	// being read is a target language the probe above cannot hit and this is the fall-through the
+	// contract names ("-> the keying artifact's own strings.en"). Identical to the probe above
+	// whenever the two codes agree, which is every pre-localization project.
+	const FString SourceKey = FString::Printf(TEXT("%s.%s"), *SourceLanguage, *Key);
+	if (const FString* Value = GlobalStrings.Find(SourceKey))
+	{
+		return *Value;
+	}
+
+	// Older localized exports used en for the source bucket even with another source label.
+	const FString LegacySourceKey = FString::Printf(TEXT("en.%s"), *Key);
+	if (const FString* Value = GlobalStrings.Find(LegacySourceKey))
 	{
 		return *Value;
 	}
@@ -90,5 +160,7 @@ FString UStoryFlowProjectAsset::GetGlobalString(const FString& Key, const FStrin
 		return *Value;
 	}
 
+	// TIER 3: the raw stored value. NEVER an empty string by accident and never a lookup failure
+	// a caller has to test for — a value that never keyed a table is its own text.
 	return Key;
 }

@@ -12,6 +12,7 @@
 class UStoryFlowProjectAsset;
 class UStoryFlowScriptAsset;
 class UStoryFlowCharacterAsset;
+class UStoryFlowDataAssetAsset;
 class UStoryFlowSubsystem;
 class UStoryFlowDialogueWidget;
 class UAudioComponent;
@@ -70,7 +71,15 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow", meta=(GetOptions="GetAvailableScripts"))
 	FString Script;
 
-	/** Language code for string lookup (empty = use default "en") */
+	/**
+	 * Language code for string lookup (empty = use default "en").
+	 *
+	 * PRE-LOCALIZATION ONLY. It is the prefix into an artifact `strings` block that carries more
+	 * than one language, and it is still honored for a project exported before localization
+	 * existed. Once a project ships a `localization.json`, the language is the PLAYER'S and is
+	 * game-wide: UStoryFlowSubsystem::SetLanguage owns it and this field is ignored. See
+	 * ActiveLanguageCode.
+	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow")
 	FString LanguageCode = TEXT("en");
 
@@ -159,7 +168,16 @@ public:
 	UPROPERTY(BlueprintAssignable, Category = "StoryFlow|Events")
 	FOnVariableChanged OnVariableChanged;
 
-	/** Called when a character variable changes (Name, Image, or custom). Lets non-speaker UIs react to setCharacterVar mutations. */
+	/**
+	 * Called when a character variable changes (Name, Image, or custom). Lets non-speaker UIs
+	 * react to setCharacterVar mutations. NODE-lane writes only, a contract property per P4
+	 * amendment A2(b): Blueprint/script-API writes — SetCharacterVariable and its ById twin,
+	 * the typed setters, and the data-asset surface's character branch — never raise it.
+	 * CharacterPath is the RESOLVED record key: an id-bound write (P4) broadcasts the key its
+	 * character id bridged to (so a handler comparing the payload against a da_ id never
+	 * matches), path-bound and wired writes broadcast the string the node carried exactly as
+	 * before.
+	 */
 	UPROPERTY(BlueprintAssignable, Category = "StoryFlow|Events")
 	FOnCharacterVariableChanged OnCharacterVariableChanged;
 
@@ -236,9 +254,46 @@ public:
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")
 	FStoryFlowDialogueState GetCurrentDialogue() const;
 
+	/** Changes on each fresh line entry, including repeated nodes and script calls; stable on redraws. */
+	uint64 GetDialogueEntrySerial() const { return DialogueEntrySerial; }
+
+	/**
+	 * The character PATH the current line's speaker was resolved to, empty when the line has no speaker.
+	 *
+	 * The dialogue state carries the speaker's resolved DATA (name, portrait, variables) but nothing that
+	 * identifies WHICH character it is, and the display name is localized, so it cannot be matched against.
+	 * This is the id-native answer: pair it with GetCharacterPathById to ask "is my character speaking",
+	 * which is what the lipsync component does. Read-only, and additive — the dialogue state's shape, which
+	 * every engine plugin mirrors, is untouched.
+	 */
+	UFUNCTION(BlueprintPure, Category = "StoryFlow")
+	FString GetCurrentSpeakerPath() const { return CurrentSpeakerPath; }
+
+	/**
+	 * True while the audio THIS component started for the current line is still playing.
+	 *
+	 * The cue lipsync closes a mouth on. A two second line sits on a screen the player reads for twelve, and
+	 * a face that keeps moving for the other ten is mouthing whatever else the mix is carrying. Answers
+	 * false — not "unknown" — when the game overrode PlayDialogueAudio, which is why the audio component
+	 * itself is exposed beside this: a caller that must tell "silent" from "not mine to know" can ask.
+	 */
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Audio")
+	bool IsDialogueAudioPlaying() const;
+
+	/** The audio component playing the current line, null when nothing is playing or the game plays its own. */
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Audio")
+	UAudioComponent* GetCurrentDialogueAudio() const { return CurrentDialogueAudio; }
+
 	/** Get the current dialogue's presentation tags (empty when untagged) */
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")
 	TArray<FString> GetCurrentDialogueTags() const;
+
+	/**
+	 * How many character id warnings this component's execution context has emitted — a TEST
+	 * SEAM mirroring FStoryFlowExecutionContext::CharacterIdWarningsEmitted (the context member
+	 * is private here, and the pre-P4 pins assert a component-driven run warned nothing).
+	 */
+	int32 GetCharacterIdWarningsEmitted() const { return ExecutionContext.CharacterIdWarningsEmitted; }
 
 	/** Check if dialogue is currently active */
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")
@@ -577,6 +632,60 @@ public:
 	UTexture2D* GetCharacterPortrait(const FString& CharacterPath, const FString& AssetKey = TEXT(""));
 
 	// ========================================================================
+	// Character Access (by character FILE id — P4)
+	// ========================================================================
+	//
+	// The id-taking twins of the path APIs above (P4 contract §4). THIN WRAPPERS by rule:
+	// FindCharacter already routes a `da_` id through ResolveCharacterKey (bridge lookup,
+	// warn-once degraded fall-back), so these delegate to the path APIs and must never
+	// re-resolve or normalize the id themselves — a wrapper that does resolves twice, the
+	// exact drift the IdAndPathReachOneDef pin exists to catch.
+	//
+	// Per amendment A2(b), none of these raise OnCharacterVariableChanged — that delegate
+	// is node-lane only (see its declaration above).
+
+	/**
+	 * The live runtime character a character FILE id resolves to, through the id bridge.
+	 * bFound is false for a dangling id (no bridge entry) and for an id whose record is not
+	 * among the loaded runtime characters (the post-save-load shape) — GetCharacterPathById
+	 * can still answer in that second case, because the bridge itself is project-derived.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character (By Id)")
+	void GetCharacterById(const FString& CharacterId, FStoryFlowCharacterDef& OutCharacter, bool& bFound);
+
+	/**
+	 * The character record key (the path the runtime keys the record by) for a character
+	 * FILE id — a PURE BRIDGE LOOKUP, deliberately unlike GetCharacterById: it requires no
+	 * loaded runtime record, so after a save load it still answers for a character the save
+	 * did not carry. The key comes back verbatim (lowercase, backslashes) and is valid
+	 * input to every path-taking character API.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character (By Id)")
+	void GetCharacterPathById(const FString& CharacterId, FString& OutPath, bool& bFound);
+
+	/**
+	 * Record keys of every LOADED character, in map order (no sort promise) — the amendment A4
+	 * enumeration surface. Ids serve stable BINDING, record keys serve enumeration and the
+	 * path-taking APIs above, so by-id enumeration is deliberately not provided: the bridge is
+	 * an implementation mapping, not an enumeration surface. After a save load this reflects
+	 * the LOADED set — which the asset registry cannot tell you, because the project's
+	 * character assets outlive what a save carried.
+	 *
+	 * The block's one NON-wrapper (a direct read of the loaded set, no resolution involved),
+	 * and pure: a list query mutates nothing and warrants no exec pins.
+	 */
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Variables|Character (By Id)")
+	TArray<FString> GetCharacterPaths() const;
+
+	/** Id twin of GetCharacterVariable. cf_name / cf_image alias the Name / Image builtins here too (amendment A2a). */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character (By Id)")
+	FStoryFlowVariant GetCharacterVariableById(const FString& CharacterId, const FString& VariableName);
+
+	/** Id twin of SetCharacterVariable. Warns and no-ops when the character does not declare the variable. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character (By Id)")
+	void SetCharacterVariableById(const FString& CharacterId, const FString& VariableName, const FStoryFlowVariant& Value);
+
+	// ========================================================================
 	// Character Variable Access (typed, with asset picker)
 	// ========================================================================
 
@@ -619,6 +728,154 @@ public:
 	/** Set a character's enum variable (as string) */
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Character")
 	void SetCharacterEnumVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName, const FString& Value);
+
+	// ========================================================================
+	// Data Asset Variable Access (typed, with asset picker)
+	// ========================================================================
+	//
+	// The Blueprint half of the .sfd system (engine contract §4/§5), mirroring the character
+	// accessors above: an asset reference plus the variable NAME an author typed in the editor.
+	//
+	// Four things differ from the character shape, on purpose:
+	//  - READS GO THROUGH THE RESOLVER, so a Blueprint sees the same value a dialogue does:
+	//    inherited defaults, ancestor overrides, and this session's writes, with an ancestor's
+	//    write cascading down. Never a cached copy of anything.
+	//  - FAILURE IS REPORTED, not logged. A Blueprint call has no node id, so it cannot join the
+	//    graph accessors' warn-once ladder (contract §6, which is latched PER NODE) — an
+	//    unlatched log line on a getter a Blueprint ticks would be a line per frame. The `bFound`
+	//    / return-value flag is the whole report.
+	//  - THE DECLARED TYPE MUST MATCH the accessor, with no coercion (the §6.1 rule at this
+	//    surface): reading an integer variable through the float getter reports not-found rather
+	//    than converting, because within the string family especially a value carries no
+	//    evidence of the type it was declared as.
+	//  - THE SURFACE IS ASYMMETRIC: read ANY type, write SCALARS ONLY. Every declaration is
+	//    readable (scalars typed, arrays and maps through GetDataAssetVariantVariable), but there
+	//    is no SetDataAssetVariantVariable — arrays and maps are written by the graph's Set node
+	//    alone. A variant setter cannot use the scalar gate: it would have to check the
+	//    declaration's SHAPE too (isArray, and a map's key/value types) or a Blueprint could drop
+	//    a scalar over a declared map and leave a value nothing can read. That gate is buildable
+	//    and was deliberately left out of V2 scope rather than half-built.
+	//
+	// Writes land at the referenced asset's OWN level and cascade to its descendants (§5), which
+	// is also why there is no "write to the base" variant: reference the base to write there.
+
+	/** Get a Data Asset's boolean variable, resolved through its parent chain and this session's writes */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool GetDataAssetBoolVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound);
+
+	/** Set a Data Asset's boolean variable for this session. False when the variable is unknown or not a boolean. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetBoolVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool bValue);
+
+	/** Get a Data Asset's integer variable, resolved through its parent chain and this session's writes */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	int32 GetDataAssetIntVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound);
+
+	/** Set a Data Asset's integer variable for this session. False when the variable is unknown or not an integer. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetIntVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, int32 Value);
+
+	/** Get a Data Asset's float variable, resolved through its parent chain and this session's writes */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	float GetDataAssetFloatVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound);
+
+	/** Set a Data Asset's float variable for this session. False when the variable is unknown or not a float. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetFloatVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, float Value);
+
+	/**
+	 * Get a Data Asset's string variable, resolved through its parent chain and this session's writes.
+	 *
+	 * Also serves image, character and audio variables: all four are declared distinctly in the
+	 * editor but hold a plain string (an asset key or a path) at runtime. ENUM is the exception —
+	 * it stores a distinct type tag, so it has its own accessor rather than being coerced here.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	FString GetDataAssetStringVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound);
+
+	/** Set a Data Asset's string (or image / character / audio) variable for this session. False when the variable is unknown or a different type. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetStringVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, const FString& Value);
+
+	/** Get a Data Asset's enum variable (as string), resolved through its parent chain and this session's writes */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	FString GetDataAssetEnumVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound);
+
+	/** Set a Data Asset's enum variable (as string) for this session. False when the variable is unknown or not an enum. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetEnumVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, const FString& Value);
+
+	/**
+	 * Get a Data Asset's variable as a raw variant — the ARRAY and MAP path.
+	 *
+	 * Arrays and maps have no typed accessor of their own: feed the variant to
+	 * UStoryFlowVariantLibrary (GetVariantArray / GetVariantMap / GetVariantAs*), the same
+	 * library the character and script variable nodes use, rather than growing a second set of
+	 * container nodes here. Scalars come through it too, untyped.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	FStoryFlowVariant GetDataAssetVariantVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool& bFound);
+
+	/**
+	 * Every variable name the asset's chain DECLARES, root-most ancestor first (contract §11.1).
+	 *
+	 * The accessors above all need a name the caller already knew. This is how a Blueprint learns
+	 * the names — driving an inventory row per variable, a debug readout, a data-driven UI — and
+	 * it is the SAME answer the Get Variable Names graph node gives, because both forward to
+	 * StoryFlowDataAssets::VariableNames, which owns every rule: root-first order, declarations
+	 * only (overrides shadow a name, they never add one), dedupe by id and then by name.
+	 *
+	 * Walking `Parent` yourself is the thing this exists to prevent: that walk re-implements those
+	 * rules, and a re-implementation that disagrees produces a plausible list nobody notices is
+	 * wrong. Empty when the asset is null, there is no store, or the seed does not carry it.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	TArray<FString> GetDataAssetVariableNames(UStoryFlowDataAssetAsset* DataAsset);
+
+	/**
+	 * Replace a Data Asset's ARRAY variable with these elements. True when the write landed.
+	 *
+	 * The container half of the surface, which used to be read-only: every type could be READ
+	 * (scalars typed, arrays and maps through GetDataAssetVariantVariable) and only scalars could
+	 * be written, so a Data Asset holding a list was a list a Blueprint could not edit.
+	 *
+	 * TWO SETTERS, NOT ONE VARIANT SETTER, and that is the whole design. A variant cannot say
+	 * whether it is an array: FStoryFlowVariant::SetArray infers its Type from the FIRST element,
+	 * so an empty array and a scalar of that type are the same value. A variant setter would
+	 * therefore be unable to tell "write an empty array" from "the caller passed a scalar by
+	 * mistake" — and writing the second over an array declaration leaves a value nothing can
+	 * read, which is exactly why the V2 contract left it out rather than half-building it. Here
+	 * the shape is in the SIGNATURE, so there is nothing to infer.
+	 *
+	 * THE SHAPE GATE. The declaration must be an array (never a map, never a scalar) and every
+	 * element must match its declared type, with the same string-family tolerance the scalar
+	 * accessors use. A mismatch refuses the whole write rather than landing a partial one: half a
+	 * list is a shape no author declared.
+	 *
+	 * An EMPTY array is a legitimate write and clears the variable. Writes land at the referenced
+	 * asset's own level and cascade to its descendants, like every other Data Asset write.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetArrayVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, const TArray<FStoryFlowVariant>& Elements);
+
+	/**
+	 * Replace a Data Asset's MAP variable with these entries. True when the write landed.
+	 *
+	 * The map twin of SetDataAssetArrayVariable — see it for why the shape lives in the signature
+	 * rather than in a variant.
+	 *
+	 * THE SHAPE GATE is one step wider here: the declaration must be a map, every KEY must match
+	 * its declared key type and every VALUE its declared value type. Key order is the caller's and
+	 * is preserved, matching the ordered entry lists the format ships.
+	 *
+	 * PARALLEL ARRAYS, mirroring GetMapVariable's out-params rather than taking entry structs:
+	 * FStoryFlowMapEntry is a plain struct and cannot cross the Blueprint boundary. Keys and
+	 * Values must be the same length; a mismatch refuses the write rather than truncating to the
+	 * shorter one, which would silently drop entries the caller listed.
+	 */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Variables|Data Assets")
+	bool SetDataAssetMapVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
+		const TArray<FStoryFlowVariant>& Keys, const TArray<FStoryFlowVariant>& Values);
 
 	// ========================================================================
 	// Utility Functions
@@ -677,6 +934,18 @@ protected:
 
 	// Array Handlers
 	void HandleArraySet(FStoryFlowNode* Node);
+
+	/**
+	 * Set Array Element, resolved EDGE-FIRST rather than by variable name.
+	 *
+	 * These nodes carry no `variable` field in the export at all, so the name lookup
+	 * HandleArraySet uses for whole-array writes cannot resolve one and every such node was a
+	 * silent no-op. The array comes off the `<type>-array-2` pin and the result is written back
+	 * through whatever that pin is wired to (a `.sfd` accessor, a character array, or a script
+	 * variable), mirroring the reference runtime's updateConnectedArrayVariable.
+	 */
+	void HandleArraySetElement(FStoryFlowNode* Node);
+
 	void HandleArrayModify(FStoryFlowNode* Node);
 
 	// Loop Handlers
@@ -693,11 +962,31 @@ protected:
 	void HandleSetBackgroundImage(FStoryFlowNode* Node);
 	void HandleSetAudio(FStoryFlowNode* Node);
 	void HandlePlayAudio(FStoryFlowNode* Node);
+	void HandleSetDataAssetRef(FStoryFlowNode* Node);
 	void HandleSetCharacter(FStoryFlowNode* Node);
 
 	// Character Variable Handlers
 	void HandleGetCharacterVar(FStoryFlowNode* Node);
 	void HandleSetCharacterVar(FStoryFlowNode* Node);
+
+	// Data Asset (.sfd) Handlers
+	/**
+	 * Execute a Set Data Asset Variable node: record the wired value in the session overlay
+	 * (engine contract §5). Every degraded path is a NO-OP that still continues exec — writing
+	 * anything would be worse than doing nothing, because an overlay entry SHADOWS the declared
+	 * default for the rest of the session, and cascades to every descendant when it lands on a
+	 * base.
+	 */
+	void HandleSetDataAssetVariable(FStoryFlowNode* Node);
+
+	/**
+	 * The value a Set Data Asset Variable node is writing, or false when its value pin is
+	 * unwired (contract §5 REFUSES that — there is no inline literal to fall back to, unlike
+	 * setCharacterVar). The unwired check is an explicit FindInputEdge on every branch,
+	 * deliberately: the typed evaluators substitute their own type zero for an unwired pin, so
+	 * trusting one here would write a 0 / "" / false over the declared default.
+	 */
+	bool TryReadDataAssetSetInput(FStoryFlowNode* Node, FStoryFlowVariant& OutValue);
 
 	// Map Variable Handlers
 	void HandleSetMap(FStoryFlowNode* Node);
@@ -705,13 +994,15 @@ protected:
 	void HandleMapPureNode(FStoryFlowNode* Node);
 
 	/**
-	 * Evaluate the wired array input of a setCharacterVar node, dispatching to the
-	 * evaluator's typed array reader for the variable's element type. TArray value
-	 * semantics return a container copy, so the character variable never aliases
-	 * the source array (matches the HTML runtime's .slice() semantics).
+	 * Evaluate a node's wired array input, dispatching to the evaluator's typed array reader for
+	 * the given element type. TArray value semantics return a container copy, so the destination
+	 * never aliases the source array (matches the HTML runtime's .slice() semantics).
 	 * Caller must ensure Evaluator is valid.
+	 *
+	 * Shared by the setCharacterVar and setDataAssetVariable handlers — it knows nothing of
+	 * either, only of element types and handle suffixes.
 	 */
-	TArray<FStoryFlowVariant> EvaluateCharacterVarArrayInput(FStoryFlowNode* Node, const FString& VariableType, const FString& HandleSuffix);
+	TArray<FStoryFlowVariant> EvaluateTypedArrayInput(FStoryFlowNode* Node, const FString& VariableType, const FString& HandleSuffix);
 
 	// === Helper Functions ===
 
@@ -746,7 +1037,27 @@ protected:
 	/** Find a character def from an asset reference */
 	FStoryFlowCharacterDef* FindCharacterFromAsset(UStoryFlowCharacterAsset* CharacterAsset);
 
-	/** Resolve a string table key to localized text using LanguageCode */
+	/**
+	 * The one thing this surface still does itself after a Data Asset write: drop the evaluator's
+	 * memo so a condition above the written value re-evaluates. Returns what it was given, so the
+	 * setters can return it in one expression. The ladder itself lives in StoryFlowDataAssetAccess,
+	 * shared with the subsystem's mirror of these accessors.
+	 */
+	bool DropCachesAfterDataAssetWrite(bool bWritten);
+	void InvalidateVariableReads();
+
+	/**
+	 * THE LANGUAGE every lookup on this component runs in (localization spec §9).
+	 *
+	 * The SUBSYSTEM owns it whenever the loaded project carries a localization sidecar, because a
+	 * language is the player's and game-wide, not a per-actor setting. Without a sidecar there is
+	 * nothing to switch to and the per-component LanguageCode keeps its pre-localization meaning,
+	 * so a project exported before localization existed behaves EXACTLY as it did — the presence
+	 * of the file is the only branch, never a key count.
+	 */
+	FString ActiveLanguageCode() const;
+
+	/** Resolve a string table key to localized text using ActiveLanguageCode */
 	FString ResolveString(const FString& Key) const;
 
 	/** Build dialogue state from current node */
@@ -783,6 +1094,16 @@ protected:
 	void OnDialogueAudioFinished();
 
 private:
+
+	/**
+	 * The character path the CURRENT line's speaker resolved to — see GetCurrentSpeakerPath. Set wherever
+	 * the state is built, from the same resolution the character data itself came from, so the two can never
+	 * disagree about who is talking.
+	 */
+	FString CurrentSpeakerPath;
+
+	/** Component-lifetime identity; not restored from saves or reset between conversations. */
+	uint64 DialogueEntrySerial = 0;
 	/** Member function pointer type for node handlers */
 	using FNodeHandler = void (UStoryFlowComponent::*)(FStoryFlowNode*);
 
@@ -794,6 +1115,21 @@ private:
 
 	/** Evaluator instance */
 	TUniquePtr<FStoryFlowEvaluator> Evaluator;
+
+	/**
+	 * Has this component contributed to the subsystem's ActiveDialogueCount?
+	 *
+	 * The counter is a REFERENCE COUNT across components and it gates LoadFromSlot, so the
+	 * start/end notify pair has to be idempotent per component: restarting a dialogue starts a
+	 * second one without ending the first (deliberately — no end event fires, existing projects
+	 * depend on that), and an unconditional increment would leave the count stuck above zero
+	 * after the single stop that eventually follows, permanently refusing every load.
+	 *
+	 * Not a substitute for ExecutionContext.bIsExecuting: that flag is cleared by Reset() from
+	 * paths which never touch the counter, so it cannot be trusted to say whether the increment
+	 * happened.
+	 */
+	bool bCountedActiveDialogue = false;
 
 	/** Cached subsystem reference */
 	UPROPERTY()

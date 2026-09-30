@@ -1,10 +1,12 @@
 // Copyright 2026 StoryFlow. All Rights Reserved.
 
 #include "Evaluation/StoryFlowExecutionContext.h"
+#include "Evaluation/StoryFlowEvaluator.h"
 #include "StoryFlowRuntime.h"
 #include "Data/StoryFlowScriptAsset.h"
 #include "Data/StoryFlowProjectAsset.h"
 #include "Data/StoryFlowCharacterAsset.h"
+#include "Data/StoryFlowHandles.h"
 
 void FStoryFlowExecutionContext::Initialize(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript)
 {
@@ -29,7 +31,7 @@ void FStoryFlowExecutionContext::Initialize(UStoryFlowProjectAsset* InProject, U
 	RebuildGlobalNameIndex();
 }
 
-void FStoryFlowExecutionContext::InitializeWithSubsystem(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript, TMap<FString, FStoryFlowVariable>* InGlobalVariables, TMap<FString, FStoryFlowCharacterDef>* InCharacters, TSet<FString>* InUsedOnceOnlyOptions)
+void FStoryFlowExecutionContext::InitializeWithSubsystem(UStoryFlowProjectAsset* InProject, UStoryFlowScriptAsset* InScript, TMap<FString, FStoryFlowVariable>* InGlobalVariables, TMap<FString, FStoryFlowCharacterDef>* InCharacters, TSet<FString>* InUsedOnceOnlyOptions, StoryFlowDataAssets::FStoreRef InDataAssetStore, const TMap<FString, FString>* InCharacterIdToPath, const FString* InActiveLanguage)
 {
 	Reset();
 
@@ -38,6 +40,10 @@ void FStoryFlowExecutionContext::InitializeWithSubsystem(UStoryFlowProjectAsset*
 	ExternalGlobalVariables = InGlobalVariables;
 	ExternalCharacters = InCharacters;
 	ExternalUsedOnceOnlyOptions = InUsedOnceOnlyOptions;
+	DataAssetStore = InDataAssetStore;
+	SeenSharedRevision = InDataAssetStore.SharedState ? InDataAssetStore.SharedState->Revision : 0;
+	CharacterIdToPath = InCharacterIdToPath;
+	ActiveLanguage = InActiveLanguage;
 
 	if (InScript)
 	{
@@ -76,8 +82,15 @@ void FStoryFlowExecutionContext::Reset()
 	NodeRuntimeStates.Empty();
 	WarnedUnknownNodes.Empty();
 	WarnedMapNodes.Empty();
+	WarnedDataAssetNodes.Empty();
+	DataAssetWarningsEmitted = 0;
+	WarnedCharacterIds.Empty();
+	CharacterIdWarningsEmitted = 0;
 	ExternalGlobalVariables = nullptr;
 	ExternalCharacters = nullptr;
+	CharacterIdToPath = nullptr;
+	DataAssetStore = StoryFlowDataAssets::FStoreRef();
+	ActiveLanguage = nullptr;
 }
 
 FStoryFlowNode* FStoryFlowExecutionContext::GetCurrentNode()
@@ -94,6 +107,7 @@ FStoryFlowNode* FStoryFlowExecutionContext::GetNode(const FString& NodeId)
 			return Node;
 		}
 	}
+	MarkReadFailure();
 	return nullptr;
 }
 
@@ -121,6 +135,7 @@ void FStoryFlowExecutionContext::SetVariable(const FString& VariableId, const FS
 	if (FStoryFlowVariable* Variable = FindVariable(VariableId, bIsGlobal))
 	{
 		Variable->Value = Value;
+		NotifyStateChanged();
 	}
 	else
 	{
@@ -137,6 +152,199 @@ FStoryFlowVariant FStoryFlowExecutionContext::GetVariableValue(const FString& Va
 	return FStoryFlowVariant();
 }
 
+bool FStoryFlowExecutionContext::TryResolveDataAsset(const FString& AssetId, const FString& VariableId, FStoryFlowVariant& OutValue) const
+{
+	// TryRead, not TryResolve: a `.sfd` value read by graph code is read by a PLAYER, so a
+	// declared string one resolves through the string tables here exactly as it does through the
+	// Blueprint accessors (localization spec §2's amendment). The store's own null-check is
+	// TryRead's, so the guard the other accessors here repeat is not repeated.
+	//
+	// This deliberately does NOT go through GetString: that ladder probes the current SCRIPT's
+	// table first, and a `.sfd` id is keyed by data-assets.json, which the importer merges into
+	// the project globals. TryRead consults the project's ladder directly, so a `.sfd` value
+	// reads the same inside a dialogue and outside one — which is why the tripwire on the two
+	// GetString ladders does not extend to a third here.
+	const UStoryFlowProjectAsset* ReadProject = DataAssetStore.SharedState ? DataAssetStore.SharedState->Project.Get() : Project.Get();
+	return StoryFlowDataAssets::TryRead(DataAssetStore, ReadProject, ActiveLanguage ? *ActiveLanguage : FString(), AssetId, VariableId, OutValue);
+}
+
+bool FStoryFlowExecutionContext::TrySetDataAsset(const FString& AssetId, const FString& VariableId, const FStoryFlowVariant& Value)
+{
+	if (!DataAssetStore.IsValid())
+	{
+		return false;
+	}
+	return StoryFlowDataAssets::TrySet(DataAssetStore, AssetId, VariableId, Value);
+}
+
+TArray<FString> FStoryFlowExecutionContext::GetDataAssetVariableNames(const FString& AssetId) const
+{
+	// Null-check-and-forward, the same shape as the accessors above: a context with no store
+	// answers "no names" instead of making the caller repeat the guard.
+	if (!DataAssetStore.IsValid())
+	{
+		return TArray<FString>();
+	}
+	return StoryFlowDataAssets::VariableNames(*DataAssetStore.Seed, AssetId);
+}
+
+void FStoryFlowExecutionContext::MaybeWarnDataAsset(const FString& NodeId, const TCHAR* Reason, const FString& Message)
+{
+	// The key is node AND reason, so a node with two problems reports both once,
+	// and a fixed-then-broken-again node stays quiet until the next game restart.
+	const FString Key = NodeId + TEXT("|") + Reason;
+	if (WarnedDataAssetNodes.Contains(Key))
+	{
+		return;
+	}
+	WarnedDataAssetNodes.Add(Key);
+	++DataAssetWarningsEmitted;
+	UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: %s"), *Message);
+}
+
+FString FStoryFlowExecutionContext::ResolveDataAssetId(const FStoryFlowNode& Accessor) const
+{
+	const FStoryFlowConnection* Edge = FindInputEdge(Accessor.Id, StoryFlowHandles::In_DataAssetRef);
+	if (!Edge)
+	{
+		return FString();
+	}
+
+	FStoryFlowExecutionContext* Mutable = const_cast<FStoryFlowExecutionContext*>(this);
+	FStoryFlowEvaluator Evaluator(Mutable);
+	return Evaluator.EvaluateDataAssetFromNode(Mutable->GetNode(Edge->Source), Accessor.Id, Edge->SourceHandle);
+}
+
+bool FStoryFlowExecutionContext::TryResolveDataAssetBinding(const FStoryFlowNode& Accessor, FString& OutAssetId)
+{
+	if (Accessor.Data.VariableId.IsEmpty())
+	{
+		MaybeWarnDataAsset(Accessor.Id, TEXT("nodata"),
+			FString::Printf(TEXT("Data Asset accessor has no variable binding: node %s"), *Accessor.Id));
+		return false;
+	}
+
+	const FString AssetId = ResolveDataAssetId(Accessor);
+	if (AssetId.IsEmpty())
+	{
+		MaybeWarnDataAsset(Accessor.Id, TEXT("unwired"),
+			FString::Printf(TEXT("Data Asset accessor has no Data Asset connected: node %s"), *Accessor.Id));
+		return false;
+	}
+
+	if (!DataAssetStore.IsValid())
+	{
+		// No store at all (a context that never met a subsystem). Latched under the dead-reference
+		// reason: from the node's point of view its asset is not there, and the alternative is a
+		// silent false that reads exactly like a healthy miss.
+		MaybeWarnDataAsset(Accessor.Id, TEXT("deadref"),
+			FString::Printf(TEXT("Data Asset store unavailable: %s (node %s)"), *AssetId, *Accessor.Id));
+		return false;
+	}
+
+	// Dead REFERENCE vs stale BINDING: FindDeclaration answers null for both, so ask the seed
+	// which one this is and name it — the two have different fixes (rebind the pill vs rebind
+	// the accessor).
+	if (!StoryFlowDataAssets::HasAsset(*DataAssetStore.Seed, AssetId))
+	{
+		MaybeWarnDataAsset(Accessor.Id, TEXT("deadref"),
+			FString::Printf(TEXT("Data Asset not found: %s (node %s)"), *AssetId, *Accessor.Id));
+		return false;
+	}
+
+	const FStoryFlowVariable* Declaration = StoryFlowDataAssets::FindDeclaration(*DataAssetStore.Seed, AssetId, Accessor.Data.VariableId);
+	if (!Declaration)
+	{
+		MaybeWarnDataAsset(Accessor.Id, TEXT("missing"),
+			FString::Printf(TEXT("Data Asset variable not found: %s.%s (node %s)"), *AssetId, *Accessor.Data.VariableId, *Accessor.Id));
+		return false;
+	}
+
+	// §6.1: the declaration moved under a live node. Treated as MISSING, never coerced — within
+	// the string family a value carries no evidence of its declared type, which is exactly why
+	// the check is on the DECLARATION. The character-variable node lane carries the same gate
+	// on its write side now (HandleSetCharacterVar, the §5 type-mismatch pin).
+	if (!StoryFlowDataAssets::DeclMatchesNodeData(*Declaration, Accessor.Data))
+	{
+		MaybeWarnDataAsset(Accessor.Id, TEXT("changed"),
+			FString::Printf(TEXT("Data Asset variable type changed since this node was made: %s.%s (node %s)"), *AssetId, *Accessor.Data.VariableId, *Accessor.Id));
+		return false;
+	}
+
+	OutAssetId = AssetId;
+	return true;
+}
+
+FString FStoryFlowExecutionContext::ResolveCharacterKeyIn(const TMap<FString, FString>* IdToPath, const TMap<FString, FStoryFlowCharacterDef>* Characters, const FString& IdOrPath, FStoryFlowExecutionContext& WarnLatch)
+{
+	if (IsCharacterIdRef(IdOrPath))
+	{
+		const FString* RecordKey = IdToPath ? IdToPath->Find(IdOrPath) : nullptr;
+		if (RecordKey)
+		{
+			if (Characters && Characters->Contains(*RecordKey))
+			{
+				// VERBATIM, never re-normalized: the bridge value IS the record key (the
+				// export contract guarantees the normalized shape), and a normalize pass
+				// here could only mask an exporter that broke that guarantee.
+				return *RecordKey;
+			}
+			// A bridge hit whose record is not loaded is a MISS of the WHOLE resolution:
+			// after LoadFromSlot the character store holds only what the save carried,
+			// while the bridge is project-derived — falling through to path treatment
+			// (and the caller's path field) is what keeps that mismatch survivable.
+			WarnLatch.MaybeWarnCharacterId(IdOrPath, TEXT("unloaded"),
+				FString::Printf(TEXT("Character id %s maps to '%s', which is not among the loaded runtime characters - falling back to path resolution"), *IdOrPath, **RecordKey));
+		}
+		else
+		{
+			WarnLatch.MaybeWarnCharacterId(IdOrPath, TEXT("dangling"),
+				FString::Printf(TEXT("Character id %s is not in this project's character index - falling back to path resolution"), *IdOrPath));
+		}
+		// Fall through: the id is treated as a path from here. That lookup will normally
+		// miss too, which is exactly the contract's degraded posture — the caller's path
+		// field (via ResolveCharacterRef) or the existing missing-character behavior takes
+		// over, never a crash.
+	}
+	return NormalizeCharacterPath(IdOrPath);
+}
+
+FString FStoryFlowExecutionContext::ResolveCharacterKey(const FString& IdOrPath)
+{
+	return ResolveCharacterKeyIn(CharacterIdToPath, ExternalCharacters, IdOrPath, *this);
+}
+
+FString FStoryFlowExecutionContext::ResolveCharacterRef(const FString& CharacterId, const FString& CharacterPath)
+{
+	if (!CharacterId.IsEmpty())
+	{
+		const FString RecordKey = ResolveCharacterKey(CharacterId);
+		if (ExternalCharacters && ExternalCharacters->Contains(RecordKey))
+		{
+			return RecordKey;
+		}
+		// Dangling or unloaded id (warned once inside ResolveCharacterKey): contract §3 —
+		// the path field is the fall-back.
+	}
+	// VERBATIM, not normalized: pre-P4 content must flow byte-identically through the path
+	// lane, warnings included (they print the authored spelling, as they always have).
+	return CharacterPath;
+}
+
+void FStoryFlowExecutionContext::MaybeWarnCharacterId(const FString& CharacterId, const TCHAR* Reason, const FString& Message)
+{
+	// Id AND reason, like MaybeWarnDataAsset above: an id that is dangling now and unloaded
+	// after a save load names both problems once each.
+	const FString Key = CharacterId + TEXT("|") + Reason;
+	if (WarnedCharacterIds.Contains(Key))
+	{
+		return;
+	}
+	WarnedCharacterIds.Add(Key);
+	++CharacterIdWarningsEmitted;
+	UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: %s"), *Message);
+}
+
 FStoryFlowCharacterDef* FStoryFlowExecutionContext::FindCharacter(const FString& CharacterPath)
 {
 	if (CharacterPath.IsEmpty())
@@ -144,13 +352,14 @@ FStoryFlowCharacterDef* FStoryFlowExecutionContext::FindCharacter(const FString&
 		return nullptr;
 	}
 
-	// Normalize path for lookup
-	FString NormalizedPath = NormalizeCharacterPath(CharacterPath);
+	// The one resolution point (P4): a character id answers its bridged record key verbatim,
+	// anything else normalizes as a path exactly as before P4.
+	FString RecordKey = ResolveCharacterKey(CharacterPath);
 
 	// Use external characters (from subsystem - mutable runtime copies)
 	if (ExternalCharacters)
 	{
-		return ExternalCharacters->Find(NormalizedPath);
+		return ExternalCharacters->Find(RecordKey);
 	}
 
 	// No external characters available - characters are now stored as UStoryFlowCharacterAsset*
@@ -167,6 +376,11 @@ FStoryFlowVariable* FStoryFlowExecutionContext::FindCharacterVariable(const FStr
 		return nullptr;
 	}
 
+	// The builtin rows (Name/Image and their cf_ aliases, amendment A1) have no
+	// FStoryFlowVariable storage — they live as plain fields on the def — so they can never
+	// be answered here. That is correct for every caller: this function serves the map and
+	// array paths, and the builtins are scalar strings. Builtin-aware access goes through
+	// SetCharacterVariable / GetCharacterVariableValue below.
 	return CharDef->Variables.Find(VariableName);
 }
 
@@ -179,17 +393,21 @@ void FStoryFlowExecutionContext::SetCharacterVariable(const FString& CharacterPa
 		return;
 	}
 
-	// Handle built-in "Name" field
-	if (VariableName.Equals(TEXT("Name"), ESearchCase::IgnoreCase))
+	// Handle built-in "Name" field (or its reserved cf_name id — amendment A1: the cf_ ids
+	// alias the builtin rows; all other character-variable access stays name-keyed)
+	if (IsCharacterNameBuiltin(VariableName))
 	{
 		CharDef->Name = Value.ToString();
+		CharDef->bNameIsLiteral = true;
+		NotifyStateChanged();
 		return;
 	}
 
-	// Handle built-in "Image" field
-	if (VariableName.Equals(TEXT("Image"), ESearchCase::IgnoreCase))
+	// Handle built-in "Image" field (or cf_image — amendment A1)
+	if (IsCharacterImageBuiltin(VariableName))
 	{
 		CharDef->Image = Value.GetString();
+		NotifyStateChanged();
 		return;
 	}
 
@@ -197,6 +415,7 @@ void FStoryFlowExecutionContext::SetCharacterVariable(const FString& CharacterPa
 	if (FStoryFlowVariable* Variable = CharDef->Variables.Find(VariableName))
 	{
 		Variable->Value = Value;
+		NotifyStateChanged();
 	}
 	else
 	{
@@ -213,16 +432,16 @@ FStoryFlowVariant FStoryFlowExecutionContext::GetCharacterVariableValue(const FS
 		return FStoryFlowVariant();
 	}
 
-	// Handle built-in "Name" field
-	if (VariableName.Equals(TEXT("Name"), ESearchCase::IgnoreCase))
+	// Handle built-in "Name" field (or cf_name — amendment A1, see SetCharacterVariable)
+	if (IsCharacterNameBuiltin(VariableName))
 	{
 		FStoryFlowVariant Result;
-		Result.SetString(CharDef->Name);
+		Result.SetString(CharDef->bNameIsLiteral ? CharDef->Name : GetString(CharDef->Name));
 		return Result;
 	}
 
-	// Handle built-in "Image" field
-	if (VariableName.Equals(TEXT("Image"), ESearchCase::IgnoreCase))
+	// Handle built-in "Image" field (or cf_image — amendment A1)
+	if (IsCharacterImageBuiltin(VariableName))
 	{
 		FStoryFlowVariant Result;
 		Result.SetString(CharDef->Image);
@@ -283,7 +502,7 @@ bool FStoryFlowExecutionContext::PushScript(const FString& ScriptPath, const FSt
 		return false;
 	}
 
-	UStoryFlowProjectAsset* Proj = Project.Get();
+	UStoryFlowProjectAsset* Proj = DataAssetStore.SharedState ? DataAssetStore.SharedState->Project.Get() : Project.Get();
 	if (!Proj)
 	{
 		return false;
@@ -361,13 +580,63 @@ bool FStoryFlowExecutionContext::PopScript()
 	return true;
 }
 
+FString FStoryFlowExecutionContext::GetString(const FString& Key) const
+{
+	const UStoryFlowProjectAsset* Proj = DataAssetStore.SharedState ? DataAssetStore.SharedState->Project.Get() : Project.Get();
+	return GetString(Key, Proj && Proj->bHasLocalization && ActiveLanguage ? *ActiveLanguage : SeedLanguageCode);
+}
+
 FString FStoryFlowExecutionContext::GetString(const FString& Key, const FString& LanguageCode) const
 {
-	// Try current script first (check map directly to avoid key-echo fragility)
+	UStoryFlowProjectAsset* Proj = DataAssetStore.SharedState ? DataAssetStore.SharedState->Project.Get() : Project.Get();
+
+	// TIER 1, the localization overlay (spec §9). PROJECT-WIDE and ahead of the script table
+	// because the sidecar's id namespace is project-wide: the export keys one row per shipped id
+	// across every artifact it wrote, and nothing can key an id another artifact already claimed
+	// for different text. The tables are FULL and PRE-RESOLVED, so this plugin computes no status
+	// and no hash; a miss here simply means the source tiers answer.
+	//
+	// TRIPWIRE: this ladder and UStoryFlowProjectAsset::GetGlobalString's are deliberately
+	// separate — this one probes the current script's table before the project globals, that one
+	// has no script to probe — but the probes themselves must stay in lockstep. A probe ADDED or
+	// REORDERED here must move there, and the reverse, or a string resolves one way inside
+	// dialogue and another way outside it.
+	//
+	// THE LOOKUP RUNS ON THE AUTHORED TEMPLATE. Every caller that interpolates `{Variable}` tokens
+	// calls InterpolateVariables on the RESULT of this function, never the other way round — a
+	// translated line is authored with the same tokens as the source line, so interpolating first
+	// would hand this lookup a string no table was ever keyed by. That failure is invisible: the
+	// text still renders, in the source language, only for lines that happen to carry a token.
+	if (Proj)
+	{
+		if (const FString* Localized = Proj->FindLocalizedString(Key, LanguageCode))
+		{
+			return *Localized;
+		}
+	}
+
+	// TIER 2, the keying artifact's own source table — current script first (check map directly
+	// to avoid key-echo fragility), then the project globals characters.json merges into. The
+	// language-prefixed probe is the pre-localization behavior, unchanged; the source-language
+	// probe beside it is what makes the fall-through work once the language being read is a
+	// target language, since every artifact this editor exports keys its strings by the source
+	// language alone. The two probes are the same key whenever the codes agree.
+	const FString FullKey = FString::Printf(TEXT("%s.%s"), *LanguageCode, *Key);
+	const FString SourceKey = Proj ? FString::Printf(TEXT("%s.%s"), *Proj->SourceLanguage, *Key) : FullKey;
+	// Older localized exports stored source text under en, regardless of their source label.
+	const FString LegacySourceKey = FString::Printf(TEXT("en.%s"), *Key);
+
 	if (UStoryFlowScriptAsset* Script = CurrentScript.Get())
 	{
-		const FString FullKey = FString::Printf(TEXT("%s.%s"), *LanguageCode, *Key);
 		if (const FString* Value = Script->Strings.Find(FullKey))
+		{
+			return *Value;
+		}
+		if (const FString* Value = Script->Strings.Find(SourceKey))
+		{
+			return *Value;
+		}
+		if (const FString* Value = Script->Strings.Find(LegacySourceKey))
 		{
 			return *Value;
 		}
@@ -378,10 +647,17 @@ FString FStoryFlowExecutionContext::GetString(const FString& Key, const FString&
 	}
 
 	// Try project global strings
-	if (UStoryFlowProjectAsset* Proj = Project.Get())
+	if (Proj)
 	{
-		const FString FullKey = FString::Printf(TEXT("%s.%s"), *LanguageCode, *Key);
 		if (const FString* Value = Proj->GlobalStrings.Find(FullKey))
+		{
+			return *Value;
+		}
+		if (const FString* Value = Proj->GlobalStrings.Find(SourceKey))
+		{
+			return *Value;
+		}
+		if (const FString* Value = Proj->GlobalStrings.Find(LegacySourceKey))
 		{
 			return *Value;
 		}
@@ -391,156 +667,93 @@ FString FStoryFlowExecutionContext::GetString(const FString& Key, const FString&
 		}
 	}
 
+	// TIER 3: the raw stored value, never an accidental empty string (see GetGlobalString).
 	return Key;
 }
 
 FString FStoryFlowExecutionContext::InterpolateVariables(const FString& Text) const
 {
-	FString Result = Text;
-
-	// Early out if no interpolation needed
-	if (!Result.Contains(TEXT("{")))
-	{
-		return Result;
-	}
-
-	// Build display-name -> variable lookup maps once (O(n) total instead of O(n) per token)
-	// Each entry maps display name AND id to the variable pointer
-	TMap<FString, const FStoryFlowVariable*> VarLookup;
-
-	// Local variables (higher priority - added first, won't be overwritten)
-	for (const auto& Pair : LocalVariables)
-	{
-		VarLookup.Add(Pair.Value.Name, &Pair.Value);
-		VarLookup.Add(Pair.Value.Id, &Pair.Value);
-	}
-
-	// Global variables (lower priority - only added if key not already present)
-	const TMap<FString, FStoryFlowVariable>* GlobalVars = ExternalGlobalVariables;
-	if (!GlobalVars && Project.IsValid())
-	{
-		GlobalVars = &Project->GlobalVariables;
-	}
-
-	if (GlobalVars)
-	{
-		for (const auto& Pair : *GlobalVars)
-		{
-			if (!VarLookup.Contains(Pair.Value.Name))
-			{
-				VarLookup.Add(Pair.Value.Name, &Pair.Value);
+	TMap<FString, const FStoryFlowVariable*> Roots;
+	const auto* Globals = ExternalGlobalVariables ? ExternalGlobalVariables : (Project.IsValid() ? &Project->GlobalVariables : nullptr);
+	if (Globals) { for (const auto& Pair : *Globals) { Roots.Add(Pair.Value.Name, &Pair.Value); Roots.Add(Pair.Value.Id, &Pair.Value); } }
+	for (const auto& Pair : LocalVariables) { Roots.Add(Pair.Value.Name, &Pair.Value); Roots.Add(Pair.Value.Id, &Pair.Value); }
+	auto Leaf = [](const FStoryFlowVariable& V, FString& Out) {
+		if (V.bIsArray || V.Value.IsArray()) { return false; }
+		switch (V.Type) {
+		case EStoryFlowVariableType::Boolean: case EStoryFlowVariableType::Integer:
+		case EStoryFlowVariableType::Float: case EStoryFlowVariableType::String: case EStoryFlowVariableType::Enum:
+			Out = V.Value.ToString(); return true;
+		default: return false;
+		}
+	};
+	auto Field = [&](EStoryFlowVariableType Type, const FString& Ref, const FString& Name, FStoryFlowVariable& Out) {
+		if (Type == EStoryFlowVariableType::DataAsset) {
+			if (!DataAssetStore.IsValid()) { return false; }
+			const auto* Decl = StoryFlowDataAssets::FindDeclarationByName(*DataAssetStore.Seed, Ref, Name);
+			if (!Decl) { return false; }
+			Out = *Decl; return TryResolveDataAsset(Ref, Decl->Id, Out.Value);
+		}
+		if (Type != EStoryFlowVariableType::Character) { return false; }
+		FString Key = NormalizeCharacterPath(Ref);
+		if (IsCharacterIdRef(Ref)) {
+			const FString* Path = CharacterIdToPath ? CharacterIdToPath->Find(Ref) : nullptr;
+			if (!Path) { return false; } Key = *Path;
+		}
+		const auto* Character = ExternalCharacters ? ExternalCharacters->Find(Key) : nullptr;
+		if (!Character) {
+			// Legacy callers can provide a presentation-only speaker without a live ref.
+			if (!Ref.IsEmpty() || !CurrentDialogueState.Character.CharacterPath.IsEmpty()) { return false; }
+			if (Name.Equals(TEXT("name"), ESearchCase::IgnoreCase)) {
+				Out.Type = EStoryFlowVariableType::String; Out.Value.SetString(CurrentDialogueState.Character.Name); return true;
 			}
-			if (!VarLookup.Contains(Pair.Value.Id))
-			{
-				VarLookup.Add(Pair.Value.Id, &Pair.Value);
-			}
+			if (const auto* Value = CurrentDialogueState.Character.Variables.Find(Name)) { Out.Type = Value->GetType(); Out.Value = *Value; return true; }
+			return false;
 		}
-	}
-
-	// Pattern: {variableName}
-	int32 StartIndex = 0;
-	while (true)
-	{
-		int32 OpenBrace = Result.Find(TEXT("{"), ESearchCase::CaseSensitive, ESearchDir::FromStart, StartIndex);
-		if (OpenBrace == INDEX_NONE)
-		{
-			break;
+		if (IsCharacterNameBuiltin(Name)) {
+			Out.Type = EStoryFlowVariableType::String;
+			Out.Value.SetString(Character->bNameIsLiteral ? Character->Name : GetString(Character->Name)); return true;
 		}
-
-		int32 CloseBrace = Result.Find(TEXT("}"), ESearchCase::CaseSensitive, ESearchDir::FromStart, OpenBrace);
-		if (CloseBrace == INDEX_NONE)
-		{
-			break;
+		for (const auto& Pair : Character->Variables) {
+			if (Pair.Value.Name.Equals(Name, ESearchCase::CaseSensitive) || Pair.Value.Id.Equals(Name, ESearchCase::CaseSensitive)) { Out = Pair.Value; return true; }
 		}
-
-		FString VarName = Result.Mid(OpenBrace + 1, CloseBrace - OpenBrace - 1);
+		return false;
+	};
+	auto Resolve = [&](const FString& Path, FString& Out) {
+		EStoryFlowVariableType Type; FString Ref, Remaining;
+		if (Path.StartsWith(TEXT("Character."), ESearchCase::CaseSensitive)) {
+			Type = EStoryFlowVariableType::Character; Ref = CurrentDialogueState.Character.CharacterPath; Remaining = Path.Mid(10).TrimStartAndEnd();
+		} else {
+			int32 Dot = INDEX_NONE;
+			if (!Path.FindChar(TEXT('.'), Dot)) { const auto* V = Roots.Find(Path); return V && Leaf(**V, Out); }
+			const auto* V = Roots.Find(Path.Left(Dot));
+			if (!V || (*V)->bIsArray || (*V)->Value.IsArray()) { return false; }
+			Type = (*V)->Type; Ref = (*V)->Value.GetString(); Remaining = Path.Mid(Dot + 1);
+			if (Ref.IsEmpty()) { return false; }
+		}
+		while (!Remaining.IsEmpty()) {
+			FStoryFlowVariable V;
+			if (Field(Type, Ref, Remaining, V)) { return Leaf(V, Out); }
+			int32 Dot = INDEX_NONE;
+			if (!Remaining.FindChar(TEXT('.'), Dot) || !Field(Type, Ref, Remaining.Left(Dot), V) || V.bIsArray || V.Value.IsArray()) { return false; }
+			Type = V.Type; Ref = V.Value.GetString(); Remaining = Remaining.Mid(Dot + 1);
+			if (Ref.IsEmpty()) { return false; }
+		}
+		return false;
+	};
+	FString Result; int32 Position = 0;
+	while (Position < Text.Len()) {
+		const int32 Open = Text.Find(TEXT("{"), ESearchCase::CaseSensitive, ESearchDir::FromStart, Position);
+		const int32 Close = Open == INDEX_NONE ? INDEX_NONE : Text.Find(TEXT("}"), ESearchCase::CaseSensitive, ESearchDir::FromStart, Open + 1);
+		if (Close == INDEX_NONE) { Result += Text.Mid(Position); break; }
+		Result += Text.Mid(Position, Open - Position);
 		FString Replacement;
-
-		// Check for Character.property pattern
-		if (VarName.StartsWith(TEXT("Character.")))
-		{
-			FString PropertyName = VarName.RightChop(10);
-			if (PropertyName.Equals(TEXT("name"), ESearchCase::IgnoreCase))
-			{
-				Replacement = CurrentDialogueState.Character.Name;
-			}
-			else if (const FStoryFlowVariant* CharVar = CurrentDialogueState.Character.Variables.Find(PropertyName))
-			{
-				Replacement = CharVar->ToString();
-			}
-		}
-		else if (VarName.Contains(TEXT(".")))
-		{
-			// Handle nested variable (charVar.innerVar)
-			// This is for character-type variables: {protagonist.Health}
-			int32 DotIndex;
-			VarName.FindChar(TEXT('.'), DotIndex);
-			FString CharVarName = VarName.Left(DotIndex);
-			FString InnerVarName = VarName.RightChop(DotIndex + 1);
-
-			// Find the character-type variable via lookup map
-			const FStoryFlowVariable* const* FoundVar = VarLookup.Find(CharVarName);
-			if (FoundVar && *FoundVar && (*FoundVar)->Type == EStoryFlowVariableType::Character)
-			{
-				FString CharacterPath = (*FoundVar)->Value.GetString();
-				if (!CharacterPath.IsEmpty())
-				{
-					// Normalize path for lookup
-					FString NormalizedPath = NormalizeCharacterPath(CharacterPath);
-
-					// Find character definition from runtime characters
-					const FStoryFlowCharacterDef* CharDef = nullptr;
-					if (ExternalCharacters)
-					{
-						CharDef = ExternalCharacters->Find(NormalizedPath);
-					}
-
-					if (CharDef)
-					{
-						// Handle built-in "Name" property (resolve through string table)
-						if (InnerVarName.Equals(TEXT("Name"), ESearchCase::IgnoreCase))
-						{
-							Replacement = GetString(CharDef->Name);
-						}
-						// Handle built-in "Image" property
-						else if (InnerVarName.Equals(TEXT("Image"), ESearchCase::IgnoreCase))
-						{
-							Replacement = CharDef->Image;
-						}
-						else
-						{
-							// Look up custom variable by name
-							for (const auto& VarPair : CharDef->Variables)
-							{
-								if (VarPair.Value.Name == InnerVarName || VarPair.Value.Id == InnerVarName)
-								{
-									Replacement = VarPair.Value.Value.ToString();
-									break;
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-		else
-		{
-			// Regular variable lookup via pre-built map (O(1) instead of O(n))
-			if (const FStoryFlowVariable* const* FoundVar = VarLookup.Find(VarName))
-			{
-				Replacement = (*FoundVar)->Value.ToString();
-			}
-		}
-
-		// Replace the pattern
-		FString Pattern = FString::Printf(TEXT("{%s}"), *VarName);
-		Result = Result.Replace(*Pattern, *Replacement);
-
-		StartIndex = OpenBrace + Replacement.Len();
+		const FString Path = Text.Mid(Open + 1, Close - Open - 1).TrimStartAndEnd();
+		Result += Resolve(Path, Replacement) ? Replacement : Text.Mid(Open, Close - Open + 1);
+		Position = Close + 1;
 	}
-
 	return Result;
 }
+
 
 void FStoryFlowExecutionContext::ResolveStringVariableValues(TMap<FString, FStoryFlowVariable>& Variables) const
 {
@@ -555,7 +768,7 @@ void FStoryFlowExecutionContext::ResolveStringVariableValues(TMap<FString, FStor
 					FString Key = Element.GetString();
 					if (!Key.IsEmpty())
 					{
-						Element.SetString(GetString(Key));
+						Element.SetString(GetString(Key, SeedLanguageCode));
 					}
 				}
 			}
@@ -564,7 +777,7 @@ void FStoryFlowExecutionContext::ResolveStringVariableValues(TMap<FString, FStor
 				FString Key = VarPair.Value.Value.GetString();
 				if (!Key.IsEmpty())
 				{
-					VarPair.Value.Value.SetString(GetString(Key));
+					VarPair.Value.Value.SetString(GetString(Key, SeedLanguageCode));
 				}
 			}
 		}
@@ -584,7 +797,7 @@ void FStoryFlowExecutionContext::ResolveStringVariableValues(TMap<FString, FStor
 					FString Key = Entry.Value.GetString();
 					if (!Key.IsEmpty())
 					{
-						Entry.Value.SetString(GetString(Key));
+						Entry.Value.SetString(GetString(Key, SeedLanguageCode));
 					}
 				}
 			}
@@ -631,6 +844,7 @@ void FStoryFlowExecutionContext::RebuildGlobalNameIndex()
 
 FStoryFlowVariable* FStoryFlowExecutionContext::FindVariableByName(const FString& VariableName, bool bIsGlobal)
 {
+	RefreshSharedState();
 	TMap<FString, FString>& Index = bIsGlobal ? GlobalVariableNameIndex : LocalVariableNameIndex;
 
 	// Fast path: O(1) index lookup
@@ -680,7 +894,26 @@ void FStoryFlowExecutionContext::ClearEvaluationCache()
 {
 	for (auto& Pair : NodeRuntimeStates)
 	{
+		if (Pair.Value.bIsExecutionOutput) { continue; }
 		Pair.Value.bHasCachedOutput = false;
 		Pair.Value.CachedOutput.Reset();
 	}
+}
+
+void FStoryFlowExecutionContext::RefreshSharedState()
+{
+	if (DataAssetStore.SharedState && SeenSharedRevision != DataAssetStore.SharedState->Revision)
+	{
+		SeenSharedRevision = DataAssetStore.SharedState->Revision;
+		// Retain the running script/local snapshot, but rebind every project-based read together.
+		Project = DataAssetStore.SharedState->Project;
+		RebuildGlobalNameIndex();
+		ClearEvaluationCache();
+	}
+}
+
+void FStoryFlowExecutionContext::NotifyStateChanged()
+{
+	DataAssetStore.NotifyChanged();
+	ClearEvaluationCache();
 }

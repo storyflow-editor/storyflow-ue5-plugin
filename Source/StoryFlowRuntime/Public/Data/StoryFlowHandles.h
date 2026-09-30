@@ -78,6 +78,8 @@ namespace StoryFlowHandles
 	inline constexpr const TCHAR* In_String = TEXT("string");
 	inline constexpr const TCHAR* In_Enum = TEXT("enum");
 	inline constexpr const TCHAR* In_Image = TEXT("image");
+	inline constexpr const TCHAR* In_DataAsset = TEXT("dataAsset");
+	inline constexpr const TCHAR* In_DataAssetArray = TEXT("dataAsset-array");
 	inline constexpr const TCHAR* In_Character = TEXT("character");
 	inline constexpr const TCHAR* In_Audio = TEXT("audio");
 
@@ -104,6 +106,32 @@ namespace StoryFlowHandles
 	inline constexpr const TCHAR* In_ImageArray = TEXT("image-array");
 	inline constexpr const TCHAR* In_CharacterArray = TEXT("character-array");
 	inline constexpr const TCHAR* In_AudioArray = TEXT("audio-array");
+
+	// ========================================================================
+	// Data Asset (.sfd) Handles
+	// ========================================================================
+	// The reference pill (getDataAsset) exposes ONE output, and the two accessors
+	// (get/setDataAssetVariable) ONE target pin for it:
+	//   Source: "source-{pillId}-dataAsset-"          (SecondaryHandle, empty optionId)
+	//   Target: "target-{accessorId}-dataAsset-asset" (optionId "asset")
+	// The optionId is "asset", not a digit — see the note on map optionIds above.
+	// Following that ONE edge is the whole binding (contract §2.2): the accessors
+	// persist no assetId, and reroute elbows are collapsed before export, so a
+	// single hop always lands on the pill.
+	//
+	// The accessors' VALUE pins are ordinary typed pins built from the node's
+	// snapshot, so they need no constants of their own — only their optionIds are
+	// fixed (SetDataAssetVariableNode.tsx):
+	//   Get  output   optionId ""  -> "{type}-" / "{type}-array-" / map source
+	//   Set  value in optionId "2" -> "{type}-2" / "{type}-array-2" / In_Map(K,V,"2")
+	//   Set  pass-thru optionId "3" (an output; the runtime never reads it)
+	//   Set  exec in/out are the primary handles "0" / "1" (Out_Flow above).
+
+	/** The accessor's Data Asset target pin: "dataAsset-asset" */
+	inline constexpr const TCHAR* In_DataAssetRef = TEXT("dataAsset-asset");
+
+	/** OptionId of a Set Data Asset Variable node's value INPUT pin */
+	inline constexpr const TCHAR* DataAssetValueOptionId = TEXT("2");
 
 	// Media node inputs
 	inline constexpr const TCHAR* In_ImageInput = TEXT("image-image-input");

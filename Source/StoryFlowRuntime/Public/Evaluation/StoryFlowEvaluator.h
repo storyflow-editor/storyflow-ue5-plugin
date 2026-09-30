@@ -10,12 +10,10 @@ struct FStoryFlowNode;
 class UStoryFlowScriptAsset;
 
 /**
- * Where a resolved map input chain terminated (see ResolveMapInputVariable).
- * CharacterVariable and RunScriptOutput sources are READ-ONLY per the
- * cross-runtime contract: the HTML runtime hands mutators a throwaway/converted
- * Map for both (mutations never persist), and setMap SNAPSHOTS rather than
- * aliases. ScriptVariable vs GlobalVariable carries the terminal node's scope
- * flag for variable-change notifications.
+ * Terminal storage for a resolved map input. Ordinary script/global maps stay live and alias
+ * through SetMap. Character, RunScript, Data Asset, and completed detached outputs are copied
+ * by mutators: execution retains the produced map for downstream reads, without implicitly
+ * writing back to the source. Explicit SetDataAssetVariable/SetCharacterVar performs writeback.
  */
 enum class EMapSourceKind : uint8
 {
@@ -23,7 +21,9 @@ enum class EMapSourceKind : uint8
 	ScriptVariable,
 	GlobalVariable,
 	CharacterVariable,
-	RunScriptOutput
+	RunScriptOutput,
+	DataAsset,
+	ExecutionOutput
 };
 
 /**
@@ -92,6 +92,8 @@ public:
 	TArray<FStoryFlowVariant> EvaluateImageArrayInput(FStoryFlowNode* Node, const FString& HandleSuffix);
 
 	/** Evaluate character array from a connected input */
+	TArray<FStoryFlowVariant> EvaluateDataAssetArrayInput(FStoryFlowNode* Node, const FString& HandleSuffix);
+	FString EvaluateDataAssetFromNode(FStoryFlowNode* Node, const FString& TargetNodeId = FString(), const FString& SourceHandle = FString());
 	TArray<FStoryFlowVariant> EvaluateCharacterArrayInput(FStoryFlowNode* Node, const FString& HandleSuffix);
 
 	/** Evaluate audio array from a connected input */
@@ -193,6 +195,41 @@ public:
 
 	/** Clear all evaluation caches */
 	void ClearCache();
+
+	// === Data Asset (.sfd) Reads ===
+
+	/** Is this one of the two bound `.sfd` accessors (contract §2.2)? */
+	static bool IsDataAssetAccessor(EStoryFlowNodeType Type)
+	{
+		return Type == EStoryFlowNodeType::GetDataAssetVariable || Type == EStoryFlowNodeType::SetDataAssetVariable;
+	}
+
+	/**
+	 * Read the `.sfd` variable a bound accessor points at (contract §4), or false for EVERY
+	 * degraded case — the ladder on the context warns once per node and this returns false, so
+	 * each typed caller substitutes its OWN type default (§6). OutValue is untouched on false.
+	 *
+	 * The value arrives COPIED (the store copies on read), so graph code that mutates an array
+	 * or entry list it read cannot corrupt the seed for the rest of the session.
+	 *
+	 * The Set accessor reads through here too: its pass-through output is the same value its Get
+	 * twin would answer, which is why every typed evaluator below carries ONE arm listing both
+	 * node types. Those arms are deliberately three lines each and point back here rather than
+	 * restating this: four copies of a paragraph drift, and the arms have nothing of their own to
+	 * say beyond which type default they leave Result at when this returns false (contract §6).
+	 */
+	bool TryReadDataAssetVariable(FStoryFlowNode* Node, FStoryFlowVariant& OutValue);
+
+	// === Character Variable Reads ===
+
+	/**
+	 * The character string a char-var node's read or write targets — ONE resolution for every
+	 * typed arm (P4). A WIRED character input still overrides the embedded binding, exactly as
+	 * before P4; the wire carries a string that may be a path or a character id, and either
+	 * resolves inside the character accessors through ResolveCharacterKey. Unwired nodes pick
+	 * id-first with the contract §3 path-field fall-back (ResolveCharacterRef).
+	 */
+	FString ResolveCharacterTarget(FStoryFlowNode* Node);
 
 private:
 	/** Evaluate an integer comparison (GT, GTE, LT, LTE, EQ) */

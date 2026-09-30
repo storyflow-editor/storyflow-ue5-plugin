@@ -82,6 +82,7 @@ namespace
 		case EStoryFlowVariableType::Enum:
 		case EStoryFlowVariableType::Image:
 		case EStoryFlowVariableType::Audio:
+		case EStoryFlowVariableType::DataAsset:
 		case EStoryFlowVariableType::Character:
 		{
 			FString s = Variant.GetString();
@@ -157,11 +158,12 @@ namespace
 		}
 		case EStoryFlowVariableType::Image:
 		case EStoryFlowVariableType::Audio:
+		case EStoryFlowVariableType::DataAsset:
 		case EStoryFlowVariableType::Character:
 		{
 			FString s;
 			Reader << s;
-			OutVariant.SetString(s);
+			if (VarType == EStoryFlowVariableType::DataAsset) { OutVariant.SetDataAsset(s); } else { OutVariant.SetString(s); }
 			break;
 		}
 		case EStoryFlowVariableType::Map:
@@ -243,6 +245,7 @@ void FStoryFlowVariant::UnpackArrayFromSerialization()
 		// Corrupt or forward-format blob — degrade to an empty array instead of crashing
 		return;
 	}
+	if (ValueShape == 0) { ValueShape = 2; }
 	ArrayValue.SetNum(Num);
 	for (int32 i = 0; i < Num; ++i)
 	{
@@ -263,6 +266,40 @@ void UnpackVariablesFromSerialization(TMap<FString, FStoryFlowVariable>& Variabl
 	for (auto& Pair : Variables)
 	{
 		Pair.Value.Value.UnpackArrayFromSerialization();
+		Pair.Value.Value.SetArrayShape(Pair.Value.bIsArray);
+	}
+}
+
+void PackVariablesForSerialization(TArray<FStoryFlowVariable>& Variables)
+{
+	for (FStoryFlowVariable& Variable : Variables)
+	{
+		Variable.Value.PackArrayForSerialization();
+	}
+}
+
+void UnpackVariablesFromSerialization(TArray<FStoryFlowVariable>& Variables)
+{
+	for (FStoryFlowVariable& Variable : Variables)
+	{
+		Variable.Value.UnpackArrayFromSerialization();
+		Variable.Value.SetArrayShape(Variable.bIsArray);
+	}
+}
+
+void PackVariantsForSerialization(TMap<FString, FStoryFlowVariant>& Variants)
+{
+	for (auto& Pair : Variants)
+	{
+		Pair.Value.PackArrayForSerialization();
+	}
+}
+
+void UnpackVariantsFromSerialization(TMap<FString, FStoryFlowVariant>& Variants)
+{
+	for (auto& Pair : Variants)
+	{
+		Pair.Value.UnpackArrayFromSerialization();
 	}
 }
 
@@ -272,6 +309,59 @@ void DeepCopyMapVariables(TMap<FString, FStoryFlowVariable>& Variables)
 	{
 		Pair.Value.Value.DeepCopyMap();
 	}
+}
+
+void DeepCopyMapVariables(TArray<FStoryFlowVariable>& Variables)
+{
+	for (FStoryFlowVariable& Variable : Variables)
+	{
+		Variable.Value.DeepCopyMap();
+	}
+}
+
+void DeepCopyMapVariants(TMap<FString, FStoryFlowVariant>& Variants)
+{
+	for (auto& Pair : Variants)
+	{
+		Pair.Value.DeepCopyMap();
+	}
+}
+
+EStoryFlowVariableType ParseVariableType(const FString& TypeString)
+{
+	// A scanned table, not a TMap, BECAUSE it must be exact: FString's TMap key funcs hash and
+	// compare case-INSENSITIVELY, so a lookup here happily resolved "Boolean" and the plugin
+	// accepted payloads the other runtimes reject. The nine tokens match case-sensitively per
+	// the data-asset engine contract §2.1 (ruled 2026-08-24) — the Unity port's table is
+	// StringComparer.Ordinal for the same reason. Nine compares that mostly die on their first
+	// character, against a hash that read the whole string anyway: not a path that needs a map.
+	struct FWireType
+	{
+		FString Token;
+		EStoryFlowVariableType Type;
+	};
+
+	static const FWireType WireTypes[] = {
+		{ TEXT("boolean"),   EStoryFlowVariableType::Boolean },
+		{ TEXT("integer"),   EStoryFlowVariableType::Integer },
+		{ TEXT("float"),     EStoryFlowVariableType::Float },
+		{ TEXT("string"),    EStoryFlowVariableType::String },
+		{ TEXT("enum"),      EStoryFlowVariableType::Enum },
+		{ TEXT("image"),     EStoryFlowVariableType::Image },
+		{ TEXT("audio"),     EStoryFlowVariableType::Audio },
+		{ TEXT("character"), EStoryFlowVariableType::Character },
+		{ TEXT("dataAsset"), EStoryFlowVariableType::DataAsset },
+		{ TEXT("map"),       EStoryFlowVariableType::Map },
+	};
+
+	for (const FWireType& WireType : WireTypes)
+	{
+		if (TypeString.Equals(WireType.Token, ESearchCase::CaseSensitive))
+		{
+			return WireType.Type;
+		}
+	}
+	return EStoryFlowVariableType::None;
 }
 
 EStoryFlowNodeType ParseNodeType(const FString& TypeString)
@@ -427,6 +517,21 @@ EStoryFlowNodeType ParseNodeType(const FString& TypeString)
 		{ TEXT("arrayContainsImage"), EStoryFlowNodeType::ArrayContainsImage },
 		{ TEXT("findInImageArray"), EStoryFlowNodeType::FindInImageArray },
 
+		// Data reference variables and arrays
+		{ TEXT("getDataAssetRef"), EStoryFlowNodeType::GetDataAssetRef },
+		{ TEXT("setDataAssetRef"), EStoryFlowNodeType::SetDataAssetRef },
+		{ TEXT("getDataAssetRefArray"), EStoryFlowNodeType::GetDataAssetRefArray },
+		{ TEXT("setDataAssetRefArray"), EStoryFlowNodeType::SetDataAssetRefArray },
+		{ TEXT("getDataAssetArrayElement"), EStoryFlowNodeType::GetDataAssetArrayElement },
+		{ TEXT("setDataAssetArrayElement"), EStoryFlowNodeType::SetDataAssetArrayElement },
+		{ TEXT("getRandomDataAssetArrayElement"), EStoryFlowNodeType::GetRandomDataAssetArrayElement },
+		{ TEXT("addToDataAssetArray"), EStoryFlowNodeType::AddToDataAssetArray },
+		{ TEXT("removeFromDataAssetArray"), EStoryFlowNodeType::RemoveFromDataAssetArray },
+		{ TEXT("clearDataAssetArray"), EStoryFlowNodeType::ClearDataAssetArray },
+		{ TEXT("arrayLengthDataAsset"), EStoryFlowNodeType::ArrayLengthDataAsset },
+		{ TEXT("arrayContainsDataAsset"), EStoryFlowNodeType::ArrayContainsDataAsset },
+		{ TEXT("findInDataAssetArray"), EStoryFlowNodeType::FindInDataAssetArray },
+		{ TEXT("forEachDataAssetLoop"), EStoryFlowNodeType::ForEachDataAssetLoop },
 		// Character Arrays
 		{ TEXT("getCharacterArray"), EStoryFlowNodeType::GetCharacterArray },
 		{ TEXT("setCharacterArray"), EStoryFlowNodeType::SetCharacterArray },
@@ -475,6 +580,12 @@ EStoryFlowNodeType ParseNodeType(const FString& TypeString)
 		// Character Variables
 		{ TEXT("getCharacterVar"), EStoryFlowNodeType::GetCharacterVar },
 		{ TEXT("setCharacterVar"), EStoryFlowNodeType::SetCharacterVar },
+
+		// Data Assets (.sfd)
+		{ TEXT("getDataAsset"), EStoryFlowNodeType::GetDataAsset },
+		{ TEXT("getDataAssetVariable"), EStoryFlowNodeType::GetDataAssetVariable },
+		{ TEXT("setDataAssetVariable"), EStoryFlowNodeType::SetDataAssetVariable },
+		{ TEXT("getDataAssetVariableNames"), EStoryFlowNodeType::GetDataAssetVariableNames },
 
 		// Map Variables
 		{ TEXT("getMap"), EStoryFlowNodeType::GetMap },

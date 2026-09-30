@@ -5,6 +5,8 @@
 #include "Data/StoryFlowProjectAsset.h"
 #include "Data/StoryFlowScriptAsset.h"
 #include "Data/StoryFlowCharacterAsset.h"
+#include "Data/StoryFlowDataAssetAsset.h"
+#include "Data/StoryFlowDataAssetStore.h"
 #include "Misc/FileHelper.h"
 #include "Misc/PackageName.h"
 #include "Misc/Crc.h"
@@ -107,8 +109,17 @@ namespace
 	}
 
 	/** Bump when import parsing or asset population changes, so assets written
-	    by older plugin versions re-save once even if their source is unchanged. */
-	constexpr const TCHAR* ImportHashSchemaVersion = TEXT("2");
+	    by older plugin versions re-save once even if their source is unchanged.
+	    6: character-index.json joins the import and dialogue / character-variable
+	    nodes gain the characterRefId / characterId fields (P4), so assets imported
+	    under 5 must re-parse to pick them up.
+	    7: localization.json joins the import (spec §9), so a project asset written
+	    under 6 must re-parse to pick up its language tables.
+	    8: ParseNodeType learns getDataAssetVariableNames (contract §11.1), so a
+	    script imported under 7 that carries one — parsed then as Unknown, and
+	    Node.Type persists in the .uasset — must re-parse or the node answers
+	    empty arrays forever. */
+	constexpr const TCHAR* ImportHashSchemaVersion = TEXT("9");
 
 	FString SerializeJsonCondensed(const TSharedRef<FJsonObject>& JsonObject)
 	{
@@ -152,47 +163,6 @@ namespace
 		return TryGetPackageFilename(Package, Filename) && FPaths::FileExists(Filename);
 	}
 
-	/** Map an exported type string to EStoryFlowVariableType. Returns None for unknown strings. */
-	EStoryFlowVariableType VariableTypeFromString(const FString& TypeString)
-	{
-		if (TypeString == TEXT("boolean"))
-		{
-			return EStoryFlowVariableType::Boolean;
-		}
-		if (TypeString == TEXT("integer"))
-		{
-			return EStoryFlowVariableType::Integer;
-		}
-		if (TypeString == TEXT("float"))
-		{
-			return EStoryFlowVariableType::Float;
-		}
-		if (TypeString == TEXT("string"))
-		{
-			return EStoryFlowVariableType::String;
-		}
-		if (TypeString == TEXT("enum"))
-		{
-			return EStoryFlowVariableType::Enum;
-		}
-		if (TypeString == TEXT("image"))
-		{
-			return EStoryFlowVariableType::Image;
-		}
-		if (TypeString == TEXT("audio"))
-		{
-			return EStoryFlowVariableType::Audio;
-		}
-		if (TypeString == TEXT("character"))
-		{
-			return EStoryFlowVariableType::Character;
-		}
-		if (TypeString == TEXT("map"))
-		{
-			return EStoryFlowVariableType::Map;
-		}
-		return EStoryFlowVariableType::None;
-	}
 }
 
 UStoryFlowProjectAsset* UStoryFlowImporter::ImportProject(const FString& BuildDirectory, const FString& ContentPath)
@@ -222,6 +192,489 @@ UStoryFlowScriptAsset* UStoryFlowImporter::ImportScript(const FString& JsonPath,
 	return ImportScriptFromJson(ScriptJson, ScriptPath, ContentPath);
 }
 
+/**
+ * Its own function rather than another inline block in ImportProjectFromJson: the two-pass
+ * shape below is the only part of the import that has to resolve data ACROSS entries, and it
+ * reads as an algorithm rather than as one more section of a long procedure.
+ */
+void UStoryFlowImporter::ImportDataAssets(const FString& BuildDirectory, const FString& ContentPath, UStoryFlowProjectAsset* ProjectAsset, TArray<FString>& InOutProjectHashParts)
+{
+	// Load Data Assets (.sfd seed) — engine contract §2.1. The seed is TRUSTED: the editor's
+	// export collector already stripped orphan and stale overrides and collapsed duplicate map
+	// keys, so nothing below re-validates or re-sanitizes it (a plugin that "fixes" the seed
+	// diverges from the other three runtimes).
+	FString DataAssetsPath = FPaths::Combine(BuildDirectory, TEXT("data-assets.json"));
+	if (FPaths::FileExists(DataAssetsPath))
+	{
+		TSharedPtr<FJsonObject> DataAssetsJson = LoadJsonFile(DataAssetsPath);
+		if (DataAssetsJson.IsValid())
+		{
+			InOutProjectHashParts.Add(SerializeJsonCondensed(DataAssetsJson.ToSharedRef()));
+
+			// data-assets.json's OWN strings table, merged into the project's global table
+			// exactly as characters.json's is — same call, same collision warning, same
+			// `<code>.<key>` shape. Since localization spec §2's amendment (2026-08-27, which
+			// supersedes engine-contract 2.1's literal-value posture) a Data Asset's declared
+			// string values ship as keys into this table, and it is the SOURCE TIER the read
+			// door falls through to when the language being read carries no row. ABSENT for a
+			// pre-amendment export, and then every .sfd value is its own text again — the same
+			// thing this plugin did before the table existed, with no branch for it.
+			if (DataAssetsJson->HasField(TEXT("strings")))
+			{
+				TMap<FString, FString> DataAssetStrings;
+				ParseStrings(DataAssetsJson->GetObjectField(TEXT("strings")), DataAssetStrings);
+				for (const auto& Pair : DataAssetStrings)
+				{
+					if (ProjectAsset->GlobalStrings.Contains(Pair.Key))
+					{
+						UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: Data Asset string key '%s' overwrites existing global string"), *Pair.Key);
+					}
+					ProjectAsset->GlobalStrings.Add(Pair.Key, Pair.Value);
+				}
+			}
+
+			// .sfd MEDIA (engine contract §2.1's amendment of 2026-09-04): image and audio values
+			// ship as asset KEYS with their files beside them, so this artifact carries an
+			// `assets` registry of its own exactly as characters.json does above. Imported into
+			// the PROJECT's resolved-asset pool through the same call, which is what makes a key
+			// handed back by GetDataAssetStringVariable resolve to something the build contains —
+			// before the amendment a `.sfd` portrait was a path to a file that was never copied.
+			//
+			// ABSENT for a pre-amendment export, and then `.sfd` media is a bare path again with
+			// no branch for it, exactly like the strings table above.
+			if (DataAssetsJson->HasField(TEXT("assets")))
+			{
+				TMap<FString, FStoryFlowAsset> DataAssetMedia;
+				ParseAssets(DataAssetsJson->GetObjectField(TEXT("assets")), DataAssetMedia);
+				ImportMediaAssets(BuildDirectory, ContentPath, DataAssetMedia, ProjectAsset->ResolvedAssets);
+			}
+
+			if (DataAssetsJson->HasField(TEXT("dataAssets")))
+			{
+				TSharedPtr<FJsonObject> AssetsObject = DataAssetsJson->GetObjectField(TEXT("dataAssets"));
+				FString DataAssetContentPath = FPaths::Combine(ContentPath, TEXT("DataAssets"));
+
+				// TWO PASSES, because an OVERRIDE value carries no type of its own: a map
+				// override is an ordered entry list and an enum override is a bare string, and
+				// telling either from a plain array/string needs the DECLARATION — which the
+				// contract puts on whichever chain level declares the id, root-most winning
+				// (§4.3). So pass 1 reads every level's declarations into an in-memory seed,
+				// and pass 2 resolves each override against that seed before parsing its value.
+				// One pass could not do it: an ancestor may be parsed after its descendant.
+				StoryFlowDataAssets::FSeed ParsedSeed;
+
+				// Pass 1 — declarations, in the seed's authored order.
+				for (const auto& AssetPair : AssetsObject->Values)
+				{
+					TSharedPtr<FJsonObject> AssetObject = AssetPair.Value->AsObject();
+					if (!AssetObject.IsValid())
+					{
+						continue;
+					}
+
+					FStoryFlowDataAssetDef Def;
+					// The MAP KEY is the authoritative id everywhere in the contract (pills bind
+					// it, the resolver walks it, saves persist it); the entry's own "id" field is
+					// the same value.
+					Def.Id = AssetPair.Key;
+					if (AssetObject->HasField(TEXT("name")))
+					{
+						Def.Name = AssetObject->GetStringField(TEXT("name"));
+					}
+					// A null parent is a ROOT asset — TryGetStringField leaves Parent empty for
+					// both a JSON null and an absent field, which is the same thing here.
+					AssetObject->TryGetStringField(TEXT("parent"), Def.Parent);
+
+					const TArray<TSharedPtr<FJsonValue>>* VariablesArray = nullptr;
+					if (AssetObject->TryGetArrayField(TEXT("variables"), VariablesArray))
+					{
+						for (const TSharedPtr<FJsonValue>& VariableValue : *VariablesArray)
+						{
+							TSharedPtr<FJsonObject> VariableObject = VariableValue->AsObject();
+							if (!VariableObject.IsValid())
+							{
+								continue;
+							}
+							FString VariableId;
+							if (!VariableObject->TryGetStringField(TEXT("id"), VariableId) || VariableId.IsEmpty())
+							{
+								continue;
+							}
+							// CATEGORY rows are section headers with no value and are never
+							// resolved (contract §2.1) — ParseVariableType already answers
+							// None for them, and skipping here keeps them out of every place
+							// variables are enumerated. ParseVariable would otherwise leave the
+							// row at the enum's default type and make it look declarable.
+							FString TypeString;
+							VariableObject->TryGetStringField(TEXT("type"), TypeString);
+							if (ParseVariableType(TypeString) == EStoryFlowVariableType::None)
+							{
+								if (TypeString != TEXT("category"))
+								{
+									// category is the one type that is MEANT to fall out here. Anything
+									// else reaching this branch is a type the editor added and this
+									// plugin does not know yet, and it would otherwise vanish from the
+									// seed without a trace.
+									UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Data Asset '%s' declares '%s' with unsupported type '%s' - skipping the row"), *AssetPair.Key, *VariableId, *TypeString);
+								}
+								continue;
+							}
+							FStoryFlowVariable Declaration = ParseVariable(VariableId, VariableObject);
+							// STATE the element type on an array declaration instead of letting
+							// SetArray infer it from element [0]. An EMPTY array has no element
+							// to infer from and would land typed None, while the save path always
+							// restores an array from its declaration — so seed and load would
+							// disagree about the same variable depending only on whether anyone
+							// had emptied it. The elements themselves already agree (ParseVariant
+							// and VariantFromJson type the string family identically); this is
+							// the container's own tag.
+							if (Declaration.bIsArray)
+							{
+								const TArray<FStoryFlowVariant> Elements = Declaration.Value.GetArray();
+								Declaration.Value.SetArray(Elements, Declaration.Type);
+							}
+							Def.Variables.Add(MoveTemp(Declaration));
+						}
+					}
+
+					ParsedSeed.Add(AssetPair.Key, MoveTemp(Def));
+				}
+
+				// Pass 2 — overrides against the now-complete chain, then the assets themselves.
+				for (const auto& AssetPair : AssetsObject->Values)
+				{
+					TSharedPtr<FJsonObject> AssetObject = AssetPair.Value->AsObject();
+					FStoryFlowDataAssetDef* Def = ParsedSeed.Find(AssetPair.Key);
+					if (!AssetObject.IsValid() || !Def)
+					{
+						continue;
+					}
+
+					// Every override's TYPE comes from an ANCESTOR's declaration, so the asset's
+					// own JSON is not the whole of its input: a base that flips a declaration
+					// from enum to string (or integer to float — the collector sanitizes neither
+					// across levels) leaves this asset's JSON byte-identical while changing how
+					// its override must be parsed. Collect the declarations each override
+					// actually resolved against and fold them into the skip hash below, so the
+					// parent's change dirties the child. Same spirit as the characters block's
+					// bPortraitOutstanding: a skip must never certify a payload that something
+					// else in this same import invalidated.
+					TArray<FString> OverrideDeclarationParts;
+
+					const TSharedPtr<FJsonObject>* OverridesObject = nullptr;
+					if (AssetObject->TryGetObjectField(TEXT("overrides"), OverridesObject))
+					{
+						for (const auto& OverridePair : (*OverridesObject)->Values)
+						{
+							const FStoryFlowVariable* Declaration = StoryFlowDataAssets::FindDeclaration(ParsedSeed, AssetPair.Key, OverridePair.Key);
+							if (!Declaration)
+							{
+								// The collector strips orphan overrides, so this is a legacy or
+								// hand-edited export. Trusting the seed means not repairing it —
+								// but an untyped value cannot be parsed, and the resolver ignores
+								// an override no level declares anyway (§4.3), so drop it.
+								UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Data Asset '%s' overrides '%s', which nothing on its chain declares - ignoring"), *AssetPair.Key, *OverridePair.Key);
+								continue;
+							}
+
+							// Type and the map K/V steer the parse below; isArray steers nothing
+							// there but is a clause of the §6.1 declMatches gate the accessors
+							// run, so a stale one degrades a live node just as loudly. All four
+							// therefore belong in the hash. An orphan override contributes no
+							// part at all, so an ancestor that later declares the id also
+							// dirties this asset.
+							OverrideDeclarationParts.Add(FString::Printf(TEXT("decl:%s:%d:%d:%d:%d"),
+								*OverridePair.Key,
+								static_cast<int32>(Declaration->Type),
+								Declaration->bIsArray ? 1 : 0,
+								static_cast<int32>(Declaration->KeyType),
+								static_cast<int32>(Declaration->ValueType)));
+
+							FStoryFlowVariant OverrideValue;
+							if (Declaration->Type == EStoryFlowVariableType::Map)
+							{
+								// Map values are ORDERED ENTRY LISTS in every direction
+								// (contract §2.1), overrides included
+								const TArray<TSharedPtr<FJsonValue>>* EntriesArray = nullptr;
+								if (!OverridePair.Value->TryGetArray(EntriesArray))
+								{
+									// Not an entry list, so there is no map here to store. DROP it
+									// rather than record an unset variant: the store's contract is
+									// that a successful resolve yields a usable value, and an unset
+									// one would reach the accessor arms as a silent type default
+									// with nothing to distinguish it from a real read. Dropping
+									// instead falls through to the declared default, which is what
+									// an override the seed cannot express should do. Same posture
+									// as the orphan drop above.
+									UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Data Asset '%s' overrides map '%s' with a value that is not an entry list - ignoring"), *AssetPair.Key, *OverridePair.Key);
+									continue;
+								}
+								TArray<FStoryFlowMapEntry> Entries;
+								ParseMapEntries(*EntriesArray, Declaration->KeyType, Declaration->ValueType, Declaration->Name.IsEmpty() ? Declaration->Id : Declaration->Name, Entries);
+								OverrideValue.SetMap(Entries);
+							}
+							else
+							{
+								OverrideValue = ParseVariant(OverridePair.Value, Declaration->Type);
+								// Same element-type stamp the declaration above gets: an override
+								// is read back through the same declaration and must not carry a
+								// different container tag than the value it shadows.
+								if (Declaration->bIsArray)
+								{
+									const TArray<FStoryFlowVariant> Elements = OverrideValue.GetArray();
+									OverrideValue.SetArray(Elements, Declaration->Type);
+								}
+							}
+							Def->Overrides.Add(OverridePair.Key, MoveTemp(OverrideValue));
+						}
+					}
+
+					// The asset is named by ID, not by display name: ids are unique and stable
+					// across re-imports while names are neither (two .sfd files in different
+					// folders can share a filename base, and the seed carries no path). A
+					// name-derived asset name would silently make two ids share one UObject.
+					UStoryFlowDataAssetAsset* DataAsset = CreateDataAssetAsset(DataAssetContentPath, NormalizeAssetPath(AssetPair.Key));
+					if (!DataAsset)
+					{
+						continue;
+					}
+
+					// Skip unchanged data assets (same pattern as scripts and characters), with
+					// the resolved ancestor declarations folded in. Sorted case-sensitively for
+					// the reason the project hash is: JSON object order is not map order, and an
+					// unstable part order would change the hash between identical runs.
+					OverrideDeclarationParts.Sort([](const FString& A, const FString& B) { return A.Compare(B, ESearchCase::CaseSensitive) < 0; });
+					TArray<FString> DataAssetHashParts;
+					DataAssetHashParts.Add(SerializeJsonCondensed(AssetObject.ToSharedRef()));
+					DataAssetHashParts.Add(AssetPair.Key);
+					DataAssetHashParts.Append(OverrideDeclarationParts);
+					const FString DataAssetSourceHash = HashImportSource(DataAssetHashParts);
+					if (DataAsset->ImportedSourceHash == DataAssetSourceHash && PackageFileExists(DataAsset->GetOutermost()))
+					{
+						DataAsset->GetOutermost()->SetDirtyFlag(false);
+						ProjectAsset->DataAssets.Add(AssetPair.Key, DataAsset);
+						UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Data Asset '%s' unchanged since last import, skipping save"), *AssetPair.Key);
+						continue;
+					}
+
+					// Clear containers for in-place update
+					DataAsset->Variables.Empty();
+					DataAsset->Overrides.Empty();
+
+					DataAsset->AssetId = Def->Id;
+					DataAsset->Name = Def->Name;
+					DataAsset->Parent = Def->Parent;
+					DataAsset->Variables = Def->Variables;
+					DataAsset->Overrides = Def->Overrides;
+
+					DataAsset->ImportedSourceHash = DataAssetSourceHash;
+					SaveAssetRecordingHash(DataAsset->GetOutermost(), DataAsset, DataAsset->ImportedSourceHash);
+
+					ProjectAsset->DataAssets.Add(AssetPair.Key, DataAsset);
+					UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Created data asset '%s' at %s"), *AssetPair.Key, *DataAsset->GetPathName());
+				}
+			}
+		}
+	}
+}
+
+/**
+ * Its own function rather than another inline block in ImportProjectFromJson: the index is a
+ * whole-file artifact with its own validity gate (the schemaVersion check below), and inlining
+ * it would bury that gate's degraded posture inside an already long procedure.
+ */
+void UStoryFlowImporter::ImportCharacterIndex(const FString& BuildDirectory, UStoryFlowProjectAsset* ProjectAsset, TArray<FString>& InOutProjectHashParts)
+{
+	// Load the character id bridge (P4 contract §1.4): character FILE id -> the exact key
+	// characters.json records (and therefore ProjectAsset->Characters) are stored under.
+	// An ABSENT file is a pre-P4 export, not an error: the bridge stays empty and every
+	// character keeps resolving by path, so no log line either.
+	FString CharacterIndexPath = FPaths::Combine(BuildDirectory, TEXT("character-index.json"));
+	if (!FPaths::FileExists(CharacterIndexPath))
+	{
+		return;
+	}
+
+	TSharedPtr<FJsonObject> CharacterIndexJson = LoadJsonFile(CharacterIndexPath);
+	if (!CharacterIndexJson.IsValid())
+	{
+		// A file that EXISTS but does not parse is corruption, not a pre-P4 export — the
+		// contract defines only absence as absence. Same degraded posture as the version
+		// gate below, and the same named consequence, so the two ways an existing index
+		// can be unusable read identically in the log.
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: character-index.json exists but could not be read as JSON - ignoring the index (characters keep resolving by path)"));
+		return;
+	}
+
+	// Fold the file in BEFORE the version gate: once the file parses the fold is
+	// unconditional, so a gate added below it later can never sit above the fold and make
+	// an input invisible to the skip hash. Folding a file the gate then rejects is merely
+	// conservative (an unknown-to-unknown change re-imports a bridge that stays empty
+	// either way).
+	InOutProjectHashParts.Add(SerializeJsonCondensed(CharacterIndexJson.ToSharedRef()));
+
+	// Unknown or missing schemaVersion: warn and skip the whole file — the degraded
+	// posture. The bridge stays empty and paths keep working; never a crash, never a
+	// guess at a format this plugin does not know. The two messages differ because the
+	// repairs differ: a missing version is a malformed artifact, a wrong one is a
+	// version skew.
+	FString SchemaVersion;
+	if (!CharacterIndexJson->TryGetStringField(TEXT("schemaVersion"), SchemaVersion))
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: character-index.json declares no schemaVersion - ignoring the index (characters keep resolving by path)"));
+		return;
+	}
+	if (SchemaVersion != TEXT("1"))
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: character-index.json declares schemaVersion '%s', which this plugin does not support - ignoring the index (characters keep resolving by path)"), *SchemaVersion);
+		return;
+	}
+
+	// The last rung of the exists-but-unusable ladder: a version this plugin supports
+	// must carry a characters OBJECT, so anything else (absent, or an array/string) is
+	// the same corruption posture as the parse failure above, one level down.
+	const TSharedPtr<FJsonObject>* CharactersObject = nullptr;
+	if (!CharacterIndexJson->TryGetObjectField(TEXT("characters"), CharactersObject))
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: character-index.json has no readable characters object - ignoring the index (characters keep resolving by path)"));
+		return;
+	}
+
+	for (const auto& IndexPair : (*CharactersObject)->Values)
+	{
+		FString RecordKey;
+		if (!IndexPair.Value.IsValid() || !IndexPair.Value->TryGetString(RecordKey))
+		{
+			continue;
+		}
+		// Stored VERBATIM: the export contract guarantees the value is already
+		// the exact NormalizeCharacterPath shape (lowercase, backslashes), so a
+		// re-normalization here could only mask an exporter that broke that
+		// guarantee — better that such a key visibly misses.
+		ProjectAsset->CharacterIdToPath.Add(IndexPair.Key, RecordKey);
+	}
+}
+
+/**
+ * THE TRANSLATIONS SIDECAR (localization spec §9), on the same degraded ladder as the character
+ * index above and for the same reason: absence is a FORMAT VERSION, not a fault.
+ *
+ * THE FILE-PRESENCE MARKER is the only branch this contract has. No localization.json beside the
+ * artifacts means a pre-localization export — source-only, byte-for-byte the behavior of every
+ * release before this one — and never a count of anything: a project whose author registered a
+ * language and translated nothing still exports FULL tables of source text, and that is a
+ * localized project. bHasLocalization records which of the two a project is, because an absent
+ * sidecar and a sidecar with no rows are the same empty TMap once they are in C++.
+ *
+ * THE TABLES ARE FULL AND PRE-RESOLVED. Every §7 fallback was applied at export: an outdated row
+ * carries the OLD translation (user ruling 2), an untranslated or cleared one carries the source
+ * text, an orphan has no row at all. So nothing here computes a status or compares a hash, and
+ * the lookup that reads these tables holds no rule beyond the three tiers in GetGlobalString.
+ *
+ * THE ID SET IS THE SHIPPED SET — the ids that KEYED an artifact this export wrote. `.sfui`
+ * widget and dropdown strings have no rows here: `.sfui` documents never reach a plugin, and
+ * their text localizes in the HTML lane. Their absence is the contract, not a missing feature,
+ * and nothing downstream should infer a bug from it.
+ */
+void UStoryFlowImporter::ImportLocalization(const FString& BuildDirectory, UStoryFlowProjectAsset* ProjectAsset, TArray<FString>& InOutProjectHashParts)
+{
+	const FString LocalizationPath = FPaths::Combine(BuildDirectory, TEXT("localization.json"));
+	if (!FPaths::FileExists(LocalizationPath))
+	{
+		return;
+	}
+
+	TSharedPtr<FJsonObject> LocalizationJson = LoadJsonFile(LocalizationPath);
+	if (!LocalizationJson.IsValid())
+	{
+		// Exists but does not parse: corruption, not a pre-localization export. Same posture
+		// and the same named consequence as the character index's parse failure.
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: localization.json exists but could not be read as JSON - ignoring it (strings keep resolving to their source text)"));
+		return;
+	}
+
+	// Folded in BEFORE the version gate, for the reason ImportCharacterIndex spells out: a gate
+	// added below the fold could otherwise make an input invisible to the skip hash.
+	InOutProjectHashParts.Add(SerializeJsonCondensed(LocalizationJson.ToSharedRef()));
+
+	FString SchemaVersion;
+	if (!LocalizationJson->TryGetStringField(TEXT("schemaVersion"), SchemaVersion))
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: localization.json declares no schemaVersion - ignoring it (strings keep resolving to their source text)"));
+		return;
+	}
+	if (SchemaVersion != TEXT("1"))
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: localization.json declares schemaVersion '%s', which this plugin does not support - ignoring it (strings keep resolving to their source text)"), *SchemaVersion);
+		return;
+	}
+
+	const TSharedPtr<FJsonObject>* StringsObject = nullptr;
+	if (!LocalizationJson->TryGetObjectField(TEXT("strings"), StringsObject))
+	{
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: localization.json has no readable strings object - ignoring it (strings keep resolving to their source text)"));
+		return;
+	}
+
+	// Past every rung of the ladder: this project IS localized. Set before the rows are counted,
+	// so an empty-but-present sidecar is still a localized project.
+	ProjectAsset->bHasLocalization = true;
+
+	FString SourceLanguage;
+	if (LocalizationJson->TryGetStringField(TEXT("sourceLanguage"), SourceLanguage) && !SourceLanguage.IsEmpty())
+	{
+		ProjectAsset->SourceLanguage = SourceLanguage;
+	}
+
+	const TArray<TSharedPtr<FJsonValue>>* LanguagesArray = nullptr;
+	if (LocalizationJson->TryGetArrayField(TEXT("languages"), LanguagesArray))
+	{
+		// Registry ORDER is the author's and is preserved: it is the order a picker draws.
+		for (const TSharedPtr<FJsonValue>& LanguageValue : *LanguagesArray)
+		{
+			const TSharedPtr<FJsonObject> LanguageObject = LanguageValue.IsValid() ? LanguageValue->AsObject() : nullptr;
+			if (!LanguageObject.IsValid())
+			{
+				continue;
+			}
+			FStoryFlowLanguage Language;
+			if (!LanguageObject->TryGetStringField(TEXT("code"), Language.Code) || Language.Code.IsEmpty())
+			{
+				continue;
+			}
+			if (!LanguageObject->TryGetStringField(TEXT("name"), Language.Name) || Language.Name.IsEmpty())
+			{
+				Language.Name = Language.Code;
+			}
+			ProjectAsset->Languages.Add(Language);
+		}
+	}
+
+	for (const auto& TablePair : (*StringsObject)->Values)
+	{
+		const TSharedPtr<FJsonObject> TableObject = TablePair.Value.IsValid() ? TablePair.Value->AsObject() : nullptr;
+		if (!TableObject.IsValid())
+		{
+			continue;
+		}
+		FStoryFlowStringTable Table;
+		for (const auto& RowPair : TableObject->Values)
+		{
+			FString Text;
+			if (RowPair.Value.IsValid() && RowPair.Value->TryGetString(Text))
+			{
+				// Ids are stored VERBATIM and are opaque: the plugin never parses one, and the
+				// only thing it ever does with one is look it up.
+				Table.Entries.Add(RowPair.Key, Text);
+			}
+		}
+		ProjectAsset->LanguageStrings.Add(TablePair.Key, MoveTemp(Table));
+	}
+
+	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Localization loaded (source '%s', %d target languages, %d tables)"),
+		*ProjectAsset->SourceLanguage, ProjectAsset->Languages.Num(), ProjectAsset->LanguageStrings.Num());
+}
+
 UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedPtr<FJsonObject>& JsonObject, const FString& BuildDirectory, const FString& ContentPath)
 {
 	// Create or reuse project asset
@@ -241,9 +694,17 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 	// Clear all containers for in-place update (keeps the same UObject pointer)
 	ProjectAsset->Scripts.Empty();
 	ProjectAsset->Characters.Empty();
+	ProjectAsset->CharacterIdToPath.Empty();
+	ProjectAsset->DataAssets.Empty();
 	ProjectAsset->GlobalVariables.Empty();
 	ProjectAsset->GlobalStrings.Empty();
 	ProjectAsset->ResolvedAssets.Empty();
+	// Reset the localization marker WITH the tables it describes: a re-import of a build that
+	// dropped its sidecar must leave a source-only project, not a stale claim to be localized.
+	ProjectAsset->bHasLocalization = false;
+	ProjectAsset->SourceLanguage = TEXT("en");
+	ProjectAsset->Languages.Empty();
+	ProjectAsset->LanguageStrings.Empty();
 
 	// Parse basic fields
 	if (JsonObject->HasField(TEXT("version")))
@@ -425,6 +886,15 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 		}
 	}
 
+	// Load Data Assets (.sfd seed) — engine contract §2.1
+	ImportDataAssets(BuildDirectory, ContentPath, ProjectAsset, ProjectHashParts);
+
+	// Load the character id bridge — P4 contract §1.4
+	ImportCharacterIndex(BuildDirectory, ProjectAsset, ProjectHashParts);
+
+	// Load the translations sidecar — localization spec §9
+	ImportLocalization(BuildDirectory, ProjectAsset, ProjectHashParts);
+
 	// Find and import all script files
 	TArray<FString> ScriptFiles;
 	IFileManager::Get().FindFilesRecursive(ScriptFiles, *BuildDirectory, TEXT("*.json"), true, false);
@@ -436,7 +906,10 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 		// Skip non-script files
 		if (Filename == TEXT("project.json") ||
 			Filename == TEXT("global-variables.json") ||
-			Filename == TEXT("characters.json"))
+			Filename == TEXT("characters.json") ||
+			Filename == TEXT("character-index.json") ||
+			Filename == TEXT("localization.json") ||
+			Filename == TEXT("data-assets.json"))
 		{
 			continue;
 		}
@@ -490,6 +963,13 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 		for (const FString& Key : CharacterKeys)
 		{
 			ProjectHashParts.Add(TEXT("char:") + Key);
+		}
+
+		TArray<FString> DataAssetKeys;
+		ProjectAsset->DataAssets.GetKeys(DataAssetKeys);
+		for (const FString& Key : DataAssetKeys)
+		{
+			ProjectHashParts.Add(TEXT("dataasset:") + Key);
 		}
 
 		TArray<FString> AssetKeys;
@@ -782,6 +1262,12 @@ FStoryFlowNodeData UStoryFlowImporter::ParseNodeData(const TSharedPtr<FJsonObjec
 	{
 		Data.Character = NodeObject->GetStringField(TEXT("character"));
 	}
+	// The speaker's character FILE id (editor 1.8+, additive — P4 contract §1.3). Absent on
+	// pre-migration content, leaving the field empty; `character` above stays authoritative.
+	if (NodeObject->HasField(TEXT("characterRefId")))
+	{
+		Data.CharacterRefId = NodeObject->GetStringField(TEXT("characterRefId"));
+	}
 
 	// Text blocks (non-interactive text displayed in dialogue)
 	if (NodeObject->HasField(TEXT("textBlocks")))
@@ -943,7 +1429,39 @@ FStoryFlowNodeData UStoryFlowImporter::ParseNodeData(const TSharedPtr<FJsonObjec
 		{
 			Data.CharacterPath = NodeObject->GetStringField(TEXT("characterPath"));
 		}
+		// The bound character's FILE id (editor 1.8+, additive — P4 contract §1.3). Absent
+		// on pre-migration content, leaving the field empty; characterPath above stays
+		// authoritative.
+		if (NodeObject->HasField(TEXT("characterId")))
+		{
+			Data.CharacterId = NodeObject->GetStringField(TEXT("characterId"));
+		}
 
+		Data.VariableName = Data.Variable;
+	}
+
+	// Data Asset fields (.sfd — engine contract §2.2). Field naming mirrors the
+	// character nodes above, which is why variableType / isArray / keyType /
+	// valueType need no arm of their own: they parse unconditionally below.
+	//
+	// The pill carries the assetId; the ACCESSORS carry none — the wire is the
+	// binding, and the runtime follows the `dataAsset` pin to find one. `variable`
+	// is the spawn-time NAME snapshot (display only), `variableId` the stable
+	// binding. Both accessor types are handled together: their payloads are
+	// identical (the Set is a Get with an exec pair and a value pin).
+	if (NodeType == TEXT("getDataAsset"))
+	{
+		if (NodeObject->HasField(TEXT("assetId")))
+		{
+			Data.AssetId = NodeObject->GetStringField(TEXT("assetId"));
+		}
+	}
+	else if (NodeType == TEXT("getDataAssetVariable") || NodeType == TEXT("setDataAssetVariable"))
+	{
+		if (NodeObject->HasField(TEXT("variableId")))
+		{
+			Data.VariableId = NodeObject->GetStringField(TEXT("variableId"));
+		}
 		Data.VariableName = Data.Variable;
 	}
 
@@ -989,7 +1507,7 @@ FStoryFlowNodeData UStoryFlowImporter::ParseNodeData(const TSharedPtr<FJsonObjec
 	{
 		// Gated on valueType because scalar nodes share the "value" JSON field. For string
 		// values this stores the exported strings-table key verbatim (resolved at read time)
-		Data.MapInlineValue = ParseVariant(NodeObject->TryGetField(TEXT("value")), VariableTypeFromString(Data.ValueType));
+		Data.MapInlineValue = ParseVariant(NodeObject->TryGetField(TEXT("value")), ParseVariableType(Data.ValueType));
 	}
 
 	return Data;
@@ -1061,7 +1579,7 @@ FStoryFlowVariable UStoryFlowImporter::ParseVariable(const FString& VariableId, 
 	{
 		TypeString = VariableObject->GetStringField(TEXT("type"));
 	}
-	const EStoryFlowVariableType ParsedType = VariableTypeFromString(TypeString);
+	const EStoryFlowVariableType ParsedType = ParseVariableType(TypeString);
 	if (ParsedType != EStoryFlowVariableType::None)
 	{
 		Variable.Type = ParsedType;
@@ -1073,7 +1591,7 @@ FStoryFlowVariable UStoryFlowImporter::ParseVariable(const FString& VariableId, 
 	{
 		if (VariableObject->HasField(TEXT("keyType")))
 		{
-			const EStoryFlowVariableType ParsedKeyType = VariableTypeFromString(VariableObject->GetStringField(TEXT("keyType")));
+			const EStoryFlowVariableType ParsedKeyType = ParseVariableType(VariableObject->GetStringField(TEXT("keyType")));
 			if (ParsedKeyType != EStoryFlowVariableType::None)
 			{
 				Variable.KeyType = ParsedKeyType;
@@ -1081,7 +1599,7 @@ FStoryFlowVariable UStoryFlowImporter::ParseVariable(const FString& VariableId, 
 		}
 		if (VariableObject->HasField(TEXT("valueType")))
 		{
-			const EStoryFlowVariableType ParsedValueType = VariableTypeFromString(VariableObject->GetStringField(TEXT("valueType")));
+			const EStoryFlowVariableType ParsedValueType = ParseVariableType(VariableObject->GetStringField(TEXT("valueType")));
 			if (ParsedValueType != EStoryFlowVariableType::None)
 			{
 				Variable.ValueType = ParsedValueType;
@@ -1335,7 +1853,11 @@ FStoryFlowVariant UStoryFlowImporter::ParseVariant(const TSharedPtr<FJsonValue>&
 		break;
 
 	case EJson::String:
-		if (ExpectedType == EStoryFlowVariableType::Enum)
+		if (ExpectedType == EStoryFlowVariableType::DataAsset)
+		{
+			Variant.SetDataAsset(Value->AsString());
+		}
+		else if (ExpectedType == EStoryFlowVariableType::Enum)
 		{
 			Variant.SetEnum(Value->AsString());
 		}
@@ -1353,6 +1875,7 @@ FStoryFlowVariant UStoryFlowImporter::ParseVariant(const TSharedPtr<FJsonValue>&
 			ArrayValues.Add(ParseVariant(ArrayItem, ExpectedType));
 		}
 		Variant.SetArray(ArrayValues);
+		if (ExpectedType == EStoryFlowVariableType::DataAsset) { Variant.SetArray(ArrayValues, ExpectedType); }
 		break;
 	}
 
@@ -1451,6 +1974,11 @@ UStoryFlowScriptAsset* UStoryFlowImporter::CreateScriptAsset(const FString& Cont
 UStoryFlowCharacterAsset* UStoryFlowImporter::CreateCharacterAsset(const FString& ContentPath, const FString& AssetName)
 {
 	return CreateAssetInternal<UStoryFlowCharacterAsset>(ContentPath, AssetName);
+}
+
+UStoryFlowDataAssetAsset* UStoryFlowImporter::CreateDataAssetAsset(const FString& ContentPath, const FString& AssetName)
+{
+	return CreateAssetInternal<UStoryFlowDataAssetAsset>(ContentPath, AssetName);
 }
 
 TSharedPtr<FJsonObject> UStoryFlowImporter::LoadJsonFile(const FString& FilePath)
