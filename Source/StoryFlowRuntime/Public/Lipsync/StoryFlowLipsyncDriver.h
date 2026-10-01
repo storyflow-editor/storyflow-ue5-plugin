@@ -3,6 +3,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Math/RandomStream.h"
 #include "Lipsync/StoryFlowVisemeTable.h"
 
 /**

@@ -27,6 +27,7 @@
 #include "Misc/Paths.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
+#include "UObject/GCObjectScopeGuard.h"
 
 /**
  * PERSISTENCE of the `.sfd` overlay — the sparse `dataAssets` save key (engine contract §7) — and

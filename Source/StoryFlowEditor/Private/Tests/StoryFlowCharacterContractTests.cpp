@@ -739,7 +739,7 @@ namespace StoryFlowCharacterContractTestHelpers
 				Test.TestEqual(CaseName + TEXT(": record count"), (*SavedChars)->Values.Num(), ExpectedChars->Values.Num());
 				for (const auto& ExpectedPair : ExpectedChars->Values)
 				{
-					const FString& RecordKey = ExpectedPair.Key;
+					const FString RecordKey(ExpectedPair.Key);
 					const TSharedPtr<FJsonObject> ExpectedRecord = ExpectedPair.Value->AsObject();
 					const TSharedPtr<FJsonObject>* SavedRecord = nullptr;
 					if (!Test.TestTrue(FString::Printf(TEXT("%s: the save carries '%s'"), *CaseName, *RecordKey),
@@ -1230,7 +1230,7 @@ namespace StoryFlowCharacterContractTestHelpers
 			const TSharedPtr<FJsonObject> ExpectedByLanguage = Case->GetObjectField(TEXT("expected"));
 			for (const auto& LanguagePair : ExpectedByLanguage->Values)
 			{
-				const FString Language = LanguagePair.Key;
+				const FString Language(LanguagePair.Key);
 				const FString Expected = LanguagePair.Value->AsString();
 				Test.TestEqual(CaseName + TEXT(": the case expects the literal in ") + Language, Expected, Literal);
 				Test.TestTrue(CaseName + TEXT(": the engine accepts ") + Language, W.Subsystem->SetLanguage(Language));
@@ -1283,7 +1283,7 @@ namespace StoryFlowCharacterContractTestHelpers
 			int32 Rows = 0;
 			for (const auto& RowPair : Expected->Values)
 			{
-				const FString Resolved = ResolveThroughChokepoint(Project, RowPair.Key, Language);
+				const FString Resolved = ResolveThroughChokepoint(Project, FString(RowPair.Key), Language);
 				Test.TestEqual(FString::Printf(TEXT("%s: %s[%s]"), *CaseName, *Language, *RowPair.Key),
 					Resolved, RowPair.Value->AsString());
 				Test.TestFalse(CaseName + TEXT(": the resolve is never empty for ") + RowPair.Key, Resolved.IsEmpty());
@@ -1313,7 +1313,7 @@ namespace StoryFlowCharacterContractTestHelpers
 			const TSharedPtr<FJsonObject> Expected = Case->GetObjectField(TEXT("expected"));
 			for (const auto& RowPair : Expected->Values)
 			{
-				const FString Resolved = ResolveThroughChokepoint(SourceOnlyProject, RowPair.Key, SourceOnlyProject->SourceLanguage);
+				const FString Resolved = ResolveThroughChokepoint(SourceOnlyProject, FString(RowPair.Key), SourceOnlyProject->SourceLanguage);
 				Test.TestEqual(FString::Printf(TEXT("%s: source-only[%s]"), *CaseName, *RowPair.Key), Resolved, RowPair.Value->AsString());
 			}
 
@@ -1322,7 +1322,7 @@ namespace StoryFlowCharacterContractTestHelpers
 			for (const auto& RowPair : Expected->Values)
 			{
 				Test.TestEqual(FString::Printf(TEXT("%s: source-only[%s] asked in fr"), *CaseName, *RowPair.Key),
-					ResolveThroughChokepoint(SourceOnlyProject, RowPair.Key, TEXT("fr")), RowPair.Value->AsString());
+					ResolveThroughChokepoint(SourceOnlyProject, FString(RowPair.Key), TEXT("fr")), RowPair.Value->AsString());
 			}
 		}
 	};
@@ -1395,10 +1395,10 @@ bool FStoryFlowCharacterContractGoldenPackageTest::RunTest(const FString& Parame
 		{
 			for (const auto& TablePair : (*Strings)->Values)
 			{
-				TMap<FString, FString>& Table = Harness.SidecarTables.Add(TablePair.Key);
+				TMap<FString, FString>& Table = Harness.SidecarTables.Add(FString(TablePair.Key));
 				for (const auto& RowPair : TablePair.Value->AsObject()->Values)
 				{
-					Table.Add(RowPair.Key, RowPair.Value->AsString());
+					Table.Add(FString(RowPair.Key), RowPair.Value->AsString());
 				}
 			}
 		}
@@ -1426,7 +1426,7 @@ bool FStoryFlowCharacterContractGoldenPackageTest::RunTest(const FString& Parame
 		{
 			for (const auto& AssetPair : (*Assets)->Values)
 			{
-				Harness.AssetPaths.Add(AssetPair.Key, JsonStr(AssetPair.Value->AsObject(), TEXT("path")));
+				Harness.AssetPaths.Add(FString(AssetPair.Key), JsonStr(AssetPair.Value->AsObject(), TEXT("path")));
 			}
 		}
 	}
