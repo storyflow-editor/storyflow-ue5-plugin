@@ -25,24 +25,58 @@
 // Explicit-instantiation access keeps MSVC member names and all production code intact.
 namespace StoryFlowLipsyncLifecycleAccess
 {
-	template<class Tag, auto Member> struct Grant { friend auto Get(Tag) { return Member; } };
+	// Explicit return types avoid MSVC's deferred deduction of hidden-friend auto returns.
+	template<class Tag, typename Tag::Type Member> struct Grant { friend typename Tag::Type Get(Tag) { return Member; } };
 	template<class Tag, class Component> decltype(auto) Field(Component* C) { return C->*Get(Tag{}); }
 	template<class Tag, class... Args> decltype(auto) Call(UStoryFlowLipsyncComponent* C, Args&&... A) { return (C->*Get(Tag{}))(Forward<Args>(A)...); }
-	struct DialogueAudio { friend auto Get(DialogueAudio); }; template struct Grant<DialogueAudio, &UStoryFlowComponent::CurrentDialogueAudio>;
-	struct HandleDialogueUpdated { friend auto Get(HandleDialogueUpdated); }; template struct Grant<HandleDialogueUpdated, &UStoryFlowLipsyncComponent::HandleDialogueUpdated>;
-	struct LineAudio { friend auto Get(LineAudio); }; template struct Grant<LineAudio, &UStoryFlowLipsyncComponent::LineAudio>;
-	struct bLineIsMine { friend auto Get(bLineIsMine); }; template struct Grant<bLineIsMine, &UStoryFlowLipsyncComponent::bLineIsMine>;
-	struct bLineCarriesAudio { friend auto Get(bLineCarriesAudio); }; template struct Grant<bLineCarriesAudio, &UStoryFlowLipsyncComponent::bLineCarriesAudio>;
-	struct bAnalysisAvailable { friend auto Get(bAnalysisAvailable); }; template struct Grant<bAnalysisAvailable, &UStoryFlowLipsyncComponent::bAnalysisAvailable>;
-	struct Targets { friend auto Get(Targets); }; template struct Grant<Targets, &UStoryFlowLipsyncComponent::Targets>;
-	struct Driver { friend auto Get(Driver); }; template struct Grant<Driver, &UStoryFlowLipsyncComponent::Driver>;
-	struct ResolvedTable { friend auto Get(ResolvedTable); }; template struct Grant<ResolvedTable, &UStoryFlowLipsyncComponent::ResolvedTable>;
-	struct HandleDialogueEnded { friend auto Get(HandleDialogueEnded); }; template struct Grant<HandleDialogueEnded, &UStoryFlowLipsyncComponent::HandleDialogueEnded>;
-	struct DecideDrive { friend auto Get(DecideDrive); }; template struct Grant<DecideDrive, &UStoryFlowLipsyncComponent::DecideDrive>;
-	struct ResolveFace { friend auto Get(ResolveFace); }; template struct Grant<ResolveFace, &UStoryFlowLipsyncComponent::ResolveFace>;
-	struct RefreshFaceIfStale { friend auto Get(RefreshFaceIfStale); }; template struct Grant<RefreshFaceIfStale, &UStoryFlowLipsyncComponent::RefreshFaceIfStale>;
-	struct TickComponent { friend auto Get(TickComponent); }; template struct Grant<TickComponent, &UStoryFlowLipsyncComponent::TickComponent>;
-	struct ApplyWeights { friend auto Get(ApplyWeights); }; template struct Grant<ApplyWeights, &UStoryFlowLipsyncComponent::ApplyWeights>;
+	struct DialogueAudio { using Type = TObjectPtr<UAudioComponent> UStoryFlowComponent::*; friend Type Get(DialogueAudio); }; template struct Grant<DialogueAudio, &UStoryFlowComponent::CurrentDialogueAudio>;
+	struct HandleDialogueUpdated { using Type = void (UStoryFlowLipsyncComponent::*)(const FStoryFlowDialogueState&); friend Type Get(HandleDialogueUpdated); }; template struct Grant<HandleDialogueUpdated, &UStoryFlowLipsyncComponent::HandleDialogueUpdated>;
+	struct LineAudio { using Type = TWeakObjectPtr<UAudioComponent> UStoryFlowLipsyncComponent::*; friend Type Get(LineAudio); }; template struct Grant<LineAudio, &UStoryFlowLipsyncComponent::LineAudio>;
+	struct bLineIsMine { using Type = bool UStoryFlowLipsyncComponent::*; friend Type Get(bLineIsMine); }; template struct Grant<bLineIsMine, &UStoryFlowLipsyncComponent::bLineIsMine>;
+	struct bLineCarriesAudio { using Type = bool UStoryFlowLipsyncComponent::*; friend Type Get(bLineCarriesAudio); }; template struct Grant<bLineCarriesAudio, &UStoryFlowLipsyncComponent::bLineCarriesAudio>;
+	struct bAnalysisAvailable { using Type = bool UStoryFlowLipsyncComponent::*; friend Type Get(bAnalysisAvailable); }; template struct Grant<bAnalysisAvailable, &UStoryFlowLipsyncComponent::bAnalysisAvailable>;
+	struct Driver { using Type = TUniquePtr<FStoryFlowLipsyncDriver> UStoryFlowLipsyncComponent::*; friend Type Get(Driver); }; template struct Grant<Driver, &UStoryFlowLipsyncComponent::Driver>;
+	struct ResolvedTable { using Type = StoryFlowVisemeTable::FTable UStoryFlowLipsyncComponent::*; friend Type Get(ResolvedTable); }; template struct Grant<ResolvedTable, &UStoryFlowLipsyncComponent::ResolvedTable>;
+	struct HandleDialogueEnded { using Type = void (UStoryFlowLipsyncComponent::*)(); friend Type Get(HandleDialogueEnded); }; template struct Grant<HandleDialogueEnded, &UStoryFlowLipsyncComponent::HandleDialogueEnded>;
+	struct ResolveFace { using Type = void (UStoryFlowLipsyncComponent::*)(const StoryFlowVisemeTable::FTable&); friend Type Get(ResolveFace); }; template struct Grant<ResolveFace, &UStoryFlowLipsyncComponent::ResolveFace>;
+	struct RefreshFaceIfStale { using Type = bool (UStoryFlowLipsyncComponent::*)(float); friend Type Get(RefreshFaceIfStale); }; template struct Grant<RefreshFaceIfStale, &UStoryFlowLipsyncComponent::RefreshFaceIfStale>;
+	struct TickComponent { using Type = void (UStoryFlowLipsyncComponent::*)(float, ELevelTick, FActorComponentTickFunction*); friend Type Get(TickComponent); }; template struct Grant<TickComponent, &UStoryFlowLipsyncComponent::TickComponent>;
+	struct ApplyWeights { using Type = void (UStoryFlowLipsyncComponent::*)(); friend Type Get(ApplyWeights); }; template struct Grant<ApplyWeights, &UStoryFlowLipsyncComponent::ApplyWeights>;
+
+	// These members involve private nested types. Adapt only the operations the tests need,
+	// so neither the enum nor the face-target type needs to become public production API.
+	struct FDriveState { int32 Value; int32 SilentValue; bool bAnalyse; bool bSilent; };
+	struct DecideDrive { using Type = FDriveState (*)(const UStoryFlowLipsyncComponent*); friend Type Get(DecideDrive); };
+	template<auto Member> struct GrantDrive
+	{
+		friend DecideDrive::Type Get(DecideDrive)
+		{
+			return [](const UStoryFlowLipsyncComponent* C) {
+				const auto Drive = (C->*Member)();
+				return FDriveState{int32(Drive), int32(decltype(Drive)::Silent), Drive == decltype(Drive)::Analyse, Drive == decltype(Drive)::Silent};
+			};
+		}
+	};
+	template struct GrantDrive<&UStoryFlowLipsyncComponent::DecideDrive>;
+
+	struct AddTarget { using Type = void (*)(UStoryFlowLipsyncComponent*, USkeletalMeshComponent*, FName); friend Type Get(AddTarget); };
+	struct TargetCount { using Type = int32 (*)(const UStoryFlowLipsyncComponent*); friend Type Get(TargetCount); };
+	template<auto Member> struct GrantTargets
+	{
+		friend AddTarget::Type Get(AddTarget)
+		{
+			return [](UStoryFlowLipsyncComponent* C, USkeletalMeshComponent* Mesh, FName Morph) {
+				auto& Target = (C->*Member).AddDefaulted_GetRef();
+				Target.Mesh = Mesh;
+				Target.Morphs.Add(Morph);
+			};
+		}
+		friend TargetCount::Type Get(TargetCount)
+		{
+			return [](const UStoryFlowLipsyncComponent* C) { return (C->*Member).Num(); };
+		}
+	};
+	template struct GrantTargets<&UStoryFlowLipsyncComponent::Targets>;
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowLipsyncLifecycleTail,
@@ -67,19 +101,19 @@ bool FStoryFlowLipsyncLifecycleTail::RunTest(const FString& Parameters)
 	Field<bLineCarriesAudio>(Lipsync) = false;
 	Field<bAnalysisAvailable>(Lipsync) = true;
 	Call<HandleDialogueEnded>(Lipsync);
-	const auto TailDrive = Call<DecideDrive>(Lipsync);
-	TestTrue(TEXT("the audible tail continues after the text ends"), TailDrive == decltype(TailDrive)::Analyse);
+	const auto TailDrive = Get(DecideDrive{})(Lipsync);
+	TestTrue(TEXT("the audible tail continues after the text ends"), TailDrive.bAnalyse);
 	TestTrue(TEXT("a surviving audio tail remains publicly active"), Lipsync->IsLipsyncActive());
 	Audio->SetActiveFlag(false);
-	const auto Drive = Call<DecideDrive>(Lipsync);
-	AddInfo(FString::Printf(TEXT("after dialogue and inherited audio end: drive=%d (Silent=%d), lineIsMine=%d"), int32(Drive), int32(decltype(Drive)::Silent), Field<bLineIsMine>(Lipsync)));
-	TestTrue(TEXT("ended dialogue must not resume idle speech after its inherited tail stops"), Drive == decltype(Drive)::Silent);
+	const auto Drive = Get(DecideDrive{})(Lipsync);
+	AddInfo(FString::Printf(TEXT("after dialogue and inherited audio end: drive=%d (Silent=%d), lineIsMine=%d"), Drive.Value, Drive.SilentValue, Field<bLineIsMine>(Lipsync)));
+	TestTrue(TEXT("ended dialogue must not resume idle speech after its inherited tail stops"), Drive.bSilent);
 	TestFalse(TEXT("activity ends when the tail stops"), Lipsync->IsLipsyncActive());
 	Field<Driver>(Lipsync) = MakeUnique<FStoryFlowLipsyncDriver>(StoryFlowVisemeTable::Default());
 	Call<TickComponent>(Lipsync, 1.0f / 60.0f, LEVELTICK_All, nullptr);
 	Audio->SetActiveFlag(true);
-	const auto ReplayDrive = Call<DecideDrive>(Lipsync);
-	TestTrue(TEXT("a later replay cannot revive a completed tail"), ReplayDrive == decltype(ReplayDrive)::Silent);
+	const auto ReplayDrive = Get(DecideDrive{})(Lipsync);
+	TestTrue(TEXT("a later replay cannot revive a completed tail"), ReplayDrive.bSilent);
 	Audio->SetActiveFlag(false);
 	return true;
 }
@@ -106,14 +140,14 @@ bool FStoryFlowLipsyncLifecycleDestroyedAudio::RunTest(const FString& Parameters
 	Audio->SetActiveFlag(false);
 	Audio->DestroyComponent();
 	TestFalse(TEXT("destroyed audio is no longer a valid weak target"), Field<LineAudio>(Lipsync).IsValid());
-	const auto Drive = Call<DecideDrive>(Lipsync);
-	AddInfo(FString::Printf(TEXT("destroyed tracked sound: drive=%d (Silent=%d)"), int32(Drive), int32(decltype(Drive)::Silent)));
-	TestTrue(TEXT("losing a tracked sound must close instead of analysing the unrelated mix"), Drive == decltype(Drive)::Silent);
+	const auto Drive = Get(DecideDrive{})(Lipsync);
+	AddInfo(FString::Printf(TEXT("destroyed tracked sound: drive=%d (Silent=%d)"), Drive.Value, Drive.SilentValue));
+	TestTrue(TEXT("losing a tracked sound must close instead of analysing the unrelated mix"), Drive.bSilent);
 	Lipsync->StopLipsync();
 	Field<DialogueAudio>(W.Component) = nullptr;
 	Call<HandleDialogueUpdated>(Lipsync, Line);
-	const auto ExternalDrive = Call<DecideDrive>(Lipsync);
-	TestTrue(TEXT("never-tracked custom playback still follows the line"), ExternalDrive == decltype(ExternalDrive)::Analyse);
+	const auto ExternalDrive = Get(DecideDrive{})(Lipsync);
+	TestTrue(TEXT("never-tracked custom playback still follows the line"), ExternalDrive.bAnalyse);
 	return true;
 }
 
@@ -132,9 +166,7 @@ bool FStoryFlowLipsyncLifecycleDestroyMouth::RunTest(const FString& Parameters)
 	Owner->DispatchBeginPlay();
 	TestTrue(TEXT("component began play"), Lipsync->HasBegunPlay());
 	auto* Mesh = NewObject<USkeletalMeshComponent>(Owner);
-	auto& Target = Field<Targets>(Lipsync).AddDefaulted_GetRef();
-	Target.Mesh = Mesh;
-	Target.Morphs.Add(TEXT("jawOpen"));
+	Get(AddTarget{})(Lipsync, Mesh, TEXT("jawOpen"));
 	TArray<float> Speech;
 	Speech.Init(0.02f, 24);
 	Field<Driver>(Lipsync)->AdvanceFromMagnitudes(Speech, 1.0f);
@@ -177,11 +209,11 @@ bool FStoryFlowLipsyncLifecyclePartialFace::RunTest(const FString& Parameters)
 	auto* Lipsync = NewObject<UStoryFlowLipsyncComponent>(Owner);
 	Field<ResolvedTable>(Lipsync).Add(TEXT("AA"), StoryFlowVisemeTable::FPose{{TEXT("jawOpen"), 1.0f}});
 	Call<ResolveFace>(Lipsync, Field<ResolvedTable>(Lipsync));
-	TestEqual(TEXT("initial head found"), Field<Targets>(Lipsync).Num(), 1);
+	TestEqual(TEXT("initial head found"), Get(TargetCount{})(Lipsync), 1);
 	AddMesh();
 	for (int32 Frame = 0; Frame < 600; ++Frame) Call<RefreshFaceIfStale>(Lipsync, 1.0f / 60.0f);
-	AddInfo(FString::Printf(TEXT("targets after 10 seconds with second part attached: %d"), Field<Targets>(Lipsync).Num()));
-	TestEqual(TEXT("late teeth/tongue part must join existing head"), Field<Targets>(Lipsync).Num(), 2);
+	AddInfo(FString::Printf(TEXT("targets after 10 seconds with second part attached: %d"), Get(TargetCount{})(Lipsync)));
+	TestEqual(TEXT("late teeth/tongue part must join existing head"), Get(TargetCount{})(Lipsync), 2);
 	return true;
 }
 

@@ -104,7 +104,7 @@ namespace StoryFlowLiveSyncProbe
 		bOk &= Test.TestTrue(Label + TEXT(" references media"), Assets->Values.Num() >= MinCount);
 		for (const auto& Pair : Assets->Values)
 		{
-			const TSoftObjectPtr<UObject>* Media = Imported.Find(Pair.Key);
+			const TSoftObjectPtr<UObject>* Media = Imported.Find(FString(Pair.Key));
 			UObject* Object = Media ? Media->LoadSynchronous() : nullptr;
 			const FString MediaLabel = Label + TEXT(" media ") + Pair.Key;
 			bOk &= Test.TestNotNull(MediaLabel, Object);
@@ -137,7 +137,8 @@ namespace StoryFlowLiveSyncProbe
 		bOk &= Test.TestEqual(TEXT("global count"), Project->GlobalVariables.Num(), GlobalVars->Values.Num());
 		for (const auto& Pair : GlobalVars->Values)
 		{
-			bOk &= CheckVariable(Test, TEXT("global ") + Pair.Key, Project->GlobalVariables.Find(Pair.Key), Pair.Value->AsObject());
+			const FString Key(Pair.Key);
+			bOk &= CheckVariable(Test, TEXT("global ") + Key, Project->GlobalVariables.Find(Key), Pair.Value->AsObject());
 		}
 		bOk &= CheckMedia(Test, TEXT("global"), Globals, Project->ResolvedAssets, 3);
 
@@ -145,7 +146,7 @@ namespace StoryFlowLiveSyncProbe
 		bOk &= Test.TestEqual(TEXT("character count"), Project->Characters.Num(), CharacterRecords->Values.Num());
 		for (const auto& Pair : CharacterRecords->Values)
 		{
-			const FString Key = Pair.Key.ToLower();
+			const FString Key = FString(Pair.Key).ToLower();
 			UStoryFlowCharacterAsset* const* Found = Project->Characters.Find(Key);
 			if (!Test.TestTrue(TEXT("character ") + Key, Found && *Found)) { bOk = false; continue; }
 			const auto Expected = Pair.Value->AsObject();
@@ -171,25 +172,26 @@ namespace StoryFlowLiveSyncProbe
 		bOk &= Test.TestEqual(TEXT("data asset count"), Project->DataAssets.Num(), DataRecords->Values.Num());
 		for (const auto& Pair : DataRecords->Values)
 		{
-			UStoryFlowDataAssetAsset* const* Found = Project->DataAssets.Find(Pair.Key);
-			if (!Test.TestTrue(TEXT("data asset ") + Pair.Key, Found && *Found)) { bOk = false; continue; }
+			const FString Key(Pair.Key);
+			UStoryFlowDataAssetAsset* const* Found = Project->DataAssets.Find(Key);
+			if (!Test.TestTrue(TEXT("data asset ") + Key, Found && *Found)) { bOk = false; continue; }
 			const auto Spec = Pair.Value->AsObject();
 			FString Parent;
 			Spec->TryGetStringField(TEXT("parent"), Parent);
-			bOk &= Test.TestEqual(Pair.Key + TEXT(" parent"), (*Found)->Parent, Parent);
+			bOk &= Test.TestEqual(Key + TEXT(" parent"), (*Found)->Parent, Parent);
 			const auto Vars = Spec->GetArrayField(TEXT("variables"));
-			bOk &= Test.TestEqual(Pair.Key + TEXT(" declaration count"), (*Found)->Variables.Num(), Vars.Num());
+			bOk &= Test.TestEqual(Key + TEXT(" declaration count"), (*Found)->Variables.Num(), Vars.Num());
 			for (int32 I = 0; I < FMath::Min((*Found)->Variables.Num(), Vars.Num()); ++I)
 			{
-				bOk &= CheckVariable(Test, Pair.Key + TEXT(" declaration"), &(*Found)->Variables[I], Vars[I]->AsObject());
+				bOk &= CheckVariable(Test, Key + TEXT(" declaration"), &(*Found)->Variables[I], Vars[I]->AsObject());
 			}
 			const auto Overrides = Spec->GetObjectField(TEXT("overrides"));
-			bOk &= Test.TestEqual(Pair.Key + TEXT(" override count"), (*Found)->Overrides.Num(), Overrides->Values.Num());
+			bOk &= Test.TestEqual(Key + TEXT(" override count"), (*Found)->Overrides.Num(), Overrides->Values.Num());
 			for (const auto& Override : Overrides->Values)
 			{
-				const FStoryFlowVariant* Value = (*Found)->Overrides.Find(Override.Key);
-				bOk &= Test.TestTrue(Pair.Key + TEXT(" override exists"), Value != nullptr);
-				if (Value) bOk &= StoryFlowEngineContract::VariantMatchesJson(Test, Pair.Key + TEXT(" override"), *Value, Override.Value);
+				const FStoryFlowVariant* Value = (*Found)->Overrides.Find(FString(Override.Key));
+				bOk &= Test.TestTrue(Key + TEXT(" override exists"), Value != nullptr);
+				if (Value) bOk &= StoryFlowEngineContract::VariantMatchesJson(Test, Key + TEXT(" override"), *Value, Override.Value);
 			}
 		}
 		bOk &= CheckMedia(Test, TEXT("data asset"), Data, Project->ResolvedAssets, 3);
@@ -531,15 +533,18 @@ namespace StoryFlowLiveSyncProbe
 		const auto GlobalVars = Globals->GetObjectField(TEXT("variables"));
 		bOk &= Test.TestEqual(TEXT("migrated global count"), Project->GlobalVariables.Num(), GlobalVars->Values.Num());
 		for (const auto& Pair : GlobalVars->Values)
-			bOk &= CheckVariable(Test, TEXT("migrated global ") + Pair.Key,
-				Project->GlobalVariables.Find(Pair.Key), Pair.Value->AsObject());
+		{
+			const FString Key(Pair.Key);
+			bOk &= CheckVariable(Test, TEXT("migrated global ") + Key,
+				Project->GlobalVariables.Find(Key), Pair.Value->AsObject());
+		}
 		bOk &= CheckMedia(Test, TEXT("migrated global"), Globals, Project->ResolvedAssets, 1);
 
 		const auto CharacterRecords = Characters->GetObjectField(TEXT("characters"));
 		bOk &= Test.TestEqual(TEXT("migrated character count"), Project->Characters.Num(), CharacterRecords->Values.Num());
 		for (const auto& Pair : CharacterRecords->Values)
 		{
-			const FString Key = Pair.Key.ToLower();
+			const FString Key = FString(Pair.Key).ToLower();
 			UStoryFlowCharacterAsset* const* Found = Project->Characters.Find(Key);
 			if (!Test.TestTrue(TEXT("migrated character ") + Key, Found && *Found)) { bOk = false; continue; }
 			const auto Expected = Pair.Value->AsObject();
@@ -565,8 +570,9 @@ namespace StoryFlowLiveSyncProbe
 		bOk &= Test.TestEqual(TEXT("migrated character bridge count"), Project->CharacterIdToPath.Num(), Bridge->Values.Num());
 		for (const auto& Pair : Bridge->Values)
 		{
-			const FString* Actual = Project->CharacterIdToPath.Find(Pair.Key);
-			bOk &= Test.TestTrue(TEXT("migrated character id ") + Pair.Key,
+			const FString Key(Pair.Key);
+			const FString* Actual = Project->CharacterIdToPath.Find(Key);
+			bOk &= Test.TestTrue(TEXT("migrated character id ") + Key,
 				Actual && *Actual == Pair.Value->AsString().ToLower() && Project->Characters.Contains(*Actual));
 		}
 		bOk &= Test.TestEqual(TEXT("frozen 1.7 data asset export is empty"),

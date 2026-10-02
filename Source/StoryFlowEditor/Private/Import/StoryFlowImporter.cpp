@@ -337,14 +337,15 @@ void UStoryFlowImporter::ImportDataAssets(const FString& BuildDirectory, const F
 						}
 					}
 
-					ParsedSeed.Add(AssetPair.Key, MoveTemp(Def));
+					ParsedSeed.Add(FString(AssetPair.Key), MoveTemp(Def));
 				}
 
 				// Pass 2 — overrides against the now-complete chain, then the assets themselves.
 				for (const auto& AssetPair : AssetsObject->Values)
 				{
 					TSharedPtr<FJsonObject> AssetObject = AssetPair.Value->AsObject();
-					FStoryFlowDataAssetDef* Def = ParsedSeed.Find(AssetPair.Key);
+					const FString AssetId(AssetPair.Key);
+					FStoryFlowDataAssetDef* Def = ParsedSeed.Find(AssetId);
 					if (!AssetObject.IsValid() || !Def)
 					{
 						continue;
@@ -366,7 +367,8 @@ void UStoryFlowImporter::ImportDataAssets(const FString& BuildDirectory, const F
 					{
 						for (const auto& OverridePair : (*OverridesObject)->Values)
 						{
-							const FStoryFlowVariable* Declaration = StoryFlowDataAssets::FindDeclaration(ParsedSeed, AssetPair.Key, OverridePair.Key);
+							const FString VariableId(OverridePair.Key);
+							const FStoryFlowVariable* Declaration = StoryFlowDataAssets::FindDeclaration(ParsedSeed, AssetId, VariableId);
 							if (!Declaration)
 							{
 								// The collector strips orphan overrides, so this is a legacy or
@@ -425,7 +427,7 @@ void UStoryFlowImporter::ImportDataAssets(const FString& BuildDirectory, const F
 									OverrideValue.SetArray(Elements, Declaration->Type);
 								}
 							}
-							Def->Overrides.Add(OverridePair.Key, MoveTemp(OverrideValue));
+							Def->Overrides.Add(VariableId, MoveTemp(OverrideValue));
 						}
 					}
 
@@ -433,7 +435,7 @@ void UStoryFlowImporter::ImportDataAssets(const FString& BuildDirectory, const F
 					// across re-imports while names are neither (two .sfd files in different
 					// folders can share a filename base, and the seed carries no path). A
 					// name-derived asset name would silently make two ids share one UObject.
-					UStoryFlowDataAssetAsset* DataAsset = CreateDataAssetAsset(DataAssetContentPath, NormalizeAssetPath(AssetPair.Key));
+					UStoryFlowDataAssetAsset* DataAsset = CreateDataAssetAsset(DataAssetContentPath, NormalizeAssetPath(AssetId));
 					if (!DataAsset)
 					{
 						continue;
@@ -446,13 +448,13 @@ void UStoryFlowImporter::ImportDataAssets(const FString& BuildDirectory, const F
 					OverrideDeclarationParts.Sort([](const FString& A, const FString& B) { return A.Compare(B, ESearchCase::CaseSensitive) < 0; });
 					TArray<FString> DataAssetHashParts;
 					DataAssetHashParts.Add(SerializeJsonCondensed(AssetObject.ToSharedRef()));
-					DataAssetHashParts.Add(AssetPair.Key);
+					DataAssetHashParts.Add(AssetId);
 					DataAssetHashParts.Append(OverrideDeclarationParts);
 					const FString DataAssetSourceHash = HashImportSource(DataAssetHashParts);
 					if (DataAsset->ImportedSourceHash == DataAssetSourceHash && PackageFileExists(DataAsset->GetOutermost()))
 					{
 						DataAsset->GetOutermost()->SetDirtyFlag(false);
-						ProjectAsset->DataAssets.Add(AssetPair.Key, DataAsset);
+						ProjectAsset->DataAssets.Add(AssetId, DataAsset);
 						UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Data Asset '%s' unchanged since last import, skipping save"), *AssetPair.Key);
 						continue;
 					}
@@ -470,7 +472,7 @@ void UStoryFlowImporter::ImportDataAssets(const FString& BuildDirectory, const F
 					DataAsset->ImportedSourceHash = DataAssetSourceHash;
 					SaveAssetRecordingHash(DataAsset->GetOutermost(), DataAsset, DataAsset->ImportedSourceHash);
 
-					ProjectAsset->DataAssets.Add(AssetPair.Key, DataAsset);
+					ProjectAsset->DataAssets.Add(AssetId, DataAsset);
 					UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Created data asset '%s' at %s"), *AssetPair.Key, *DataAsset->GetPathName());
 				}
 			}
@@ -551,7 +553,7 @@ void UStoryFlowImporter::ImportCharacterIndex(const FString& BuildDirectory, USt
 		// the exact NormalizeCharacterPath shape (lowercase, backslashes), so a
 		// re-normalization here could only mask an exporter that broke that
 		// guarantee — better that such a key visibly misses.
-		ProjectAsset->CharacterIdToPath.Add(IndexPair.Key, RecordKey);
+		ProjectAsset->CharacterIdToPath.Add(FString(IndexPair.Key), RecordKey);
 	}
 }
 
@@ -665,10 +667,10 @@ void UStoryFlowImporter::ImportLocalization(const FString& BuildDirectory, UStor
 			{
 				// Ids are stored VERBATIM and are opaque: the plugin never parses one, and the
 				// only thing it ever does with one is look it up.
-				Table.Entries.Add(RowPair.Key, Text);
+				Table.Entries.Add(FString(RowPair.Key), Text);
 			}
 		}
-		ProjectAsset->LanguageStrings.Add(TablePair.Key, MoveTemp(Table));
+		ProjectAsset->LanguageStrings.Add(FString(TablePair.Key), MoveTemp(Table));
 	}
 
 	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Localization loaded (source '%s', %d target languages, %d tables)"),

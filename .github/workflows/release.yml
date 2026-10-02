@@ -63,11 +63,13 @@ jobs:
           $bak = Join-Path $cfgDir "BuildConfiguration.ci-backup.xml"
           New-Item -ItemType Directory -Force -Path $cfgDir | Out-Null
           if (Test-Path $cfg) { Copy-Item $cfg $bak -Force }
+          # UE 5.5 enables its local UBA executor separately from the distributed one.
           Set-Content -Path $cfg -Encoding utf8 -Value @(
             '<?xml version="1.0" encoding="utf-8" ?>',
             '<Configuration xmlns="https://www.unrealengine.com/BuildConfiguration">',
             '  <BuildConfiguration>',
             '    <bAllowUBAExecutor>false</bAllowUBAExecutor>',
+            '    <bAllowUBALocalExecutor>false</bAllowUBALocalExecutor>',
             '  </BuildConfiguration>',
             '</Configuration>'
           )

@@ -641,7 +641,7 @@ void DataAssetOverlayFromJson(
 
 	for (const auto& AssetPair : (*TableObj)->Values)
 	{
-		const FString& AssetId = AssetPair.Key;
+		const FString AssetId(AssetPair.Key);
 		if (!StoryFlowDataAssets::HasAsset(Seed, AssetId))
 		{
 			// Deliberately not the write path's wording: a load-time drop (the save outlived the
@@ -665,7 +665,7 @@ void DataAssetOverlayFromJson(
 		TMap<FString, FStoryFlowVariant> Values;
 		for (const auto& ValuePair : (*AssetObj)->Values)
 		{
-			const FString& VariableId = ValuePair.Key;
+			const FString VariableId(ValuePair.Key);
 			const FStoryFlowVariable* Declaration = StoryFlowDataAssets::FindDeclaration(Seed, AssetId, VariableId);
 			if (!Declaration)
 			{
