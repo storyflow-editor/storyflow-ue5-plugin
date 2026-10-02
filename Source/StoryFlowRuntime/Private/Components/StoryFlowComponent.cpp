@@ -2694,7 +2694,7 @@ void UStoryFlowComponent::HandleRunScript(FStoryFlowNode* Node)
 {
 	if (ExecutionContext.IsAtMaxScriptDepth())
 	{
-		ReportError(FString::Printf(TEXT("Max script nesting depth exceeded (%d)"), STORYFLOW_MAX_SCRIPT_DEPTH));
+		ReportError(FString::Printf(TEXT("Max script nesting depth exceeded (%d) when calling '%s'. Check for recursive script calls or adjust Maximum Script Nesting in StoryFlow Editor project settings."), ExecutionContext.GetMaxScriptDepth(), *Node->Data.Script));
 		return;
 	}
 

@@ -13,9 +13,6 @@ class UStoryFlowProjectAsset;
 // Forward declaration
 struct FStoryFlowEvaluator;
 
-/** Maximum depth for script nesting */
-constexpr int32 STORYFLOW_MAX_SCRIPT_DEPTH = 20;
-
 /** Maximum depth for flow nesting */
 constexpr int32 STORYFLOW_MAX_FLOW_DEPTH = 50;
 
@@ -551,8 +548,11 @@ public:
 
 	// === Validation ===
 
+	/** Configured script nesting limit, or the legacy default for an invalid/missing project. */
+	int32 GetMaxScriptDepth() const;
+
 	/** Check if we're at max script depth */
-	bool IsAtMaxScriptDepth() const { return CallStack.Num() >= STORYFLOW_MAX_SCRIPT_DEPTH; }
+	bool IsAtMaxScriptDepth() const { return CallStack.Num() >= GetMaxScriptDepth(); }
 
 	/** Check if we're at max flow depth */
 	bool IsAtMaxFlowDepth() const { return FlowCallStack.Num() >= STORYFLOW_MAX_FLOW_DEPTH; }

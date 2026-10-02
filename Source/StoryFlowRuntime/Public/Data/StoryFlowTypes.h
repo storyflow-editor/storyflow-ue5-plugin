@@ -1535,6 +1535,9 @@ struct STORYFLOWRUNTIME_API FStoryFlowDialogueState
 // Project Metadata
 // ============================================================================
 
+/** Default script nesting limit for legacy projects (retained public API). */
+constexpr int32 STORYFLOW_MAX_SCRIPT_DEPTH = 20;
+
 /**
  * Project metadata
  */
@@ -1548,6 +1551,10 @@ struct STORYFLOWRUNTIME_API FStoryFlowProjectMetadata
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FString Description;
+
+	/** Maximum nested script calls, excluding the root script. Imported from project settings. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow", meta = (ClampMin = "1", ClampMax = "100"))
+	int32 MaxScriptNesting = STORYFLOW_MAX_SCRIPT_DEPTH;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FDateTime Created;

@@ -494,11 +494,18 @@ const FStoryFlowConnection* FStoryFlowExecutionContext::FindEdgeByTarget(const F
 	return nullptr;
 }
 
+int32 FStoryFlowExecutionContext::GetMaxScriptDepth() const
+{
+	const UStoryFlowProjectAsset* Proj = DataAssetStore.SharedState ? DataAssetStore.SharedState->Project.Get() : Project.Get();
+	const int32 Limit = Proj ? Proj->Metadata.MaxScriptNesting : STORYFLOW_MAX_SCRIPT_DEPTH;
+	return Limit >= 1 && Limit <= 100 ? Limit : STORYFLOW_MAX_SCRIPT_DEPTH;
+}
+
 bool FStoryFlowExecutionContext::PushScript(const FString& ScriptPath, const FString& ReturnNodeId)
 {
 	if (IsAtMaxScriptDepth())
 	{
-		UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow: Max script nesting depth exceeded (%d)"), STORYFLOW_MAX_SCRIPT_DEPTH);
+		UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow Editor: Max script nesting depth exceeded (%d) when calling '%s'. Check for recursive script calls or adjust Maximum Script Nesting in project settings."), GetMaxScriptDepth(), *ScriptPath);
 		return false;
 	}
 

@@ -120,8 +120,9 @@ namespace
 	    Node.Type persists in the .uasset — must re-parse or the node answers
 	    empty arrays forever.
 	    10: persist the Data Asset localization version and declaration opt-out flags, including
-	    assets whose identical source was previously imported without this metadata. */
-	constexpr const TCHAR* ImportHashSchemaVersion = TEXT("10");
+	    assets whose identical source was previously imported without this metadata.
+	    11: persist the project's Maximum Script Nesting setting. */
+	constexpr const TCHAR* ImportHashSchemaVersion = TEXT("11");
 
 	FString SerializeJsonCondensed(const TSharedRef<FJsonObject>& JsonObject)
 	{
@@ -732,10 +733,12 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 		ProjectAsset->StartupScript = NormalizeScriptPath(JsonObject->GetStringField(TEXT("startupScript")));
 	}
 
-	// Parse metadata
-	if (JsonObject->HasField(TEXT("metadata")))
+	// Reset on every import so an older export cannot retain a previous project's settings.
+	ProjectAsset->Metadata = FStoryFlowProjectMetadata();
+	const TSharedPtr<FJsonObject>* MetadataObject = nullptr;
+	if (JsonObject->TryGetObjectField(TEXT("metadata"), MetadataObject) && MetadataObject->IsValid())
 	{
-		ProjectAsset->Metadata = ParseMetadata(JsonObject->GetObjectField(TEXT("metadata")));
+		ProjectAsset->Metadata = ParseMetadata(*MetadataObject);
 	}
 
 	// Load global variables
@@ -1901,6 +1904,16 @@ FStoryFlowVariant UStoryFlowImporter::ParseVariant(const TSharedPtr<FJsonValue>&
 FStoryFlowProjectMetadata UStoryFlowImporter::ParseMetadata(const TSharedPtr<FJsonObject>& MetadataObject)
 {
 	FStoryFlowProjectMetadata Metadata;
+	// JSON number only: strings and booleans must not be coerced, fractions must not truncate.
+	const TSharedPtr<FJsonValue> Nesting = MetadataObject->TryGetField(TEXT("maxScriptNesting"));
+	if (Nesting.IsValid() && Nesting->Type == EJson::Number)
+	{
+		const double Limit = Nesting->AsNumber();
+		if (FMath::IsFinite(Limit) && Limit >= 1 && Limit <= 100 && FMath::TruncToDouble(Limit) == Limit)
+		{
+			Metadata.MaxScriptNesting = static_cast<int32>(Limit);
+		}
+	}
 
 	if (MetadataObject->HasField(TEXT("title")))
 	{
