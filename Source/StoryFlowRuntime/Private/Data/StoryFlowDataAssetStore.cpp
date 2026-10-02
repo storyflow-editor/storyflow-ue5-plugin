@@ -99,7 +99,7 @@ namespace StoryFlowDataAssets
 		}
 
 		/**
-		 * TryRead's second half: a DECLARED value with its string-table keys resolved, in place.
+		 * TryRead's second half: an authored value with its string-table keys resolved, in place.
 		 *
 		 * The type gate is the exporter's, transcribed (json-export-strategy.ts
 		 * keyDataAssetDeclaration): a string scalar, the elements of a string ARRAY, and the values
@@ -111,7 +111,7 @@ namespace StoryFlowDataAssets
 		 * ValueType defaults to String on FStoryFlowVariable, which is how "an absent valueType is
 		 * a string map" arrives here without a special case.
 		 */
-		void LocalizeDeclaredValue(const FStoryFlowVariable& Declaration, const UStoryFlowProjectAsset& Project, const FString& LanguageCode, FStoryFlowVariant& Value)
+		void LocalizeAuthoredValue(const FStoryFlowVariable& Declaration, const UStoryFlowProjectAsset& Project, const FString& LanguageCode, FStoryFlowVariant& Value)
 		{
 			if (Declaration.Type == EStoryFlowVariableType::Map)
 			{
@@ -354,11 +354,11 @@ namespace StoryFlowDataAssets
 			return false;
 		}
 
-		// THE GATE, and it is the whole of it: only the seed's own declared value is content.
-		// An override ships literal (the exporter keys declarations only) and a session write is
-		// live data — neither has a row in any table, so a lookup over one could only find
-		// SOMEBODY ELSE'S prose. Gated on provenance, never on the value's shape.
-		if (From != EResolvedFrom::Declaration || !Project)
+		// Version 2 keys authored overrides independently of declarations. Older exports keep
+		// literal overrides, and session/restored writes always stay literal, even when they
+		// contain a known localization key. The resolver already selects the nearest author.
+		if (!Project || From == EResolvedFrom::SessionWrite ||
+			(From == EResolvedFrom::Override && Project->DataAssetLocalizationVersion != 2))
 		{
 			return true;
 		}
@@ -368,11 +368,11 @@ namespace StoryFlowDataAssets
 		// handing the pointer back: the chain rule stays a value-answering function, and this
 		// costs one more walk on a path that is already doing a string-table lookup.
 		const FStoryFlowVariable* Declaration = FindDeclaration(*Store.Seed, AssetId, VariableId);
-		if (!Declaration)
+		if (!Declaration || !Declaration->bLocalizable)
 		{
 			return true;
 		}
-		LocalizeDeclaredValue(*Declaration, *Project, LanguageCode, OutValue);
+		LocalizeAuthoredValue(*Declaration, *Project, LanguageCode, OutValue);
 		return true;
 	}
 

@@ -689,6 +689,10 @@ struct STORYFLOWRUNTIME_API FStoryFlowVariable
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	bool bIsArray = false;
 
+	/** Data Asset declaration setting, inherited by file overrides. Missing means translatable. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	bool bLocalizable = true;
+
 	/** Enum values (for enum type) */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TArray<FString> EnumValues;

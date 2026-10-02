@@ -166,9 +166,9 @@ namespace StoryFlowDataAssets
 	 */
 	enum class EResolvedFrom : uint8
 	{
-		/** The root-most declaration's own authored value (contract §4.3). The only tier that LOCALIZES. */
+		/** The root-most declaration's own authored value (contract §4.3). */
 		Declaration,
-		/** An `overrides` entry at some chain level. Authored, but NOT keyed — see TryRead. */
+		/** An authored `overrides` entry at some chain level. Keyed in localization version 2. */
 		Override,
 		/** An overlay entry: a write this session made. Live data, never content — see TryRead. */
 		SessionWrite,
@@ -218,12 +218,9 @@ namespace StoryFlowDataAssets
 	 * WHAT LOCALIZES, and the three rules that are re-derivable wrongly (manifest
 	 * localization.dataAssets in the vendored golden package spells all of them out):
 	 *
-	 *  - ONLY A DECLARATION. `EResolvedFrom::Override` and `EResolvedFrom::SessionWrite` are handed
-	 *    back verbatim. An override is authored but UNKEYED: a `.sfd` id carries no per-asset
-	 *    segment, so a declaration and a descendant's override of it would collide on one
-	 *    `<variableId>.value`, and the exporter therefore keys declarations only. Localizing an
-	 *    override does not MISS — it serves the ancestor's translation for a text the descendant
-	 *    replaced.
+	 *  - AUTHORED CONTENT. Declarations localize in every version. File overrides localize only
+	 *    with data-assets.json localizationVersion 2; absent/version 1 preserves literal overrides.
+	 *    The root-most declaration's localizable setting governs both; false keeps them literal.
 	 *  - A WRITTEN VALUE NEVER LOCALIZES, including after a save/load, because the save carries the
 	 *    overlay and a restored write was never content. The gate is WHERE THE VALUE CAME FROM and
 	 *    never whether it LOOKS like a key: a write that happened to equal a key would otherwise be
@@ -236,11 +233,10 @@ namespace StoryFlowDataAssets
 	 *    that is empty or whitespace after trimming is left alone, because no translator can reach
 	 *    an id keyed by whitespace.
 	 *
-	 * THE ID IS BUILT FROM THE VARIABLE ALONE — `<variableId>.value`, `.value.<index>`,
-	 * `.value.<mapKey>` — and it is the exporter that built it; nothing here re-derives one. That
-	 * is the deliberate CONTRAST with a character value's `<characterId>.<variableId>.value`, and
-	 * the reason a chain localizes at every level that declares something: it is the VARIABLE that
-	 * is unique, not the asset.
+	 * The exporter builds declaration keys as `<variableId>.value` and override keys as
+	 * `data.<authoringAssetId>.<variableId>.value`, followed by array indices or opaque map keys.
+	 * This reader resolves the stored key without rebuilding it: an inherited override therefore
+	 * retains its nearest author's identity through every descendant.
 	 *
 	 * RESOLUTION IS AT THIS DOOR, not baked into the seed, so a mid-session SetLanguage lands on the
 	 * very next `.sfd` read. That is a difference from global and character string variables, whose

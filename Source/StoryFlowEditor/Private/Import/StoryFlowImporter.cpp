@@ -118,8 +118,10 @@ namespace
 	    8: ParseNodeType learns getDataAssetVariableNames (contract §11.1), so a
 	    script imported under 7 that carries one — parsed then as Unknown, and
 	    Node.Type persists in the .uasset — must re-parse or the node answers
-	    empty arrays forever. */
-	constexpr const TCHAR* ImportHashSchemaVersion = TEXT("9");
+	    empty arrays forever.
+	    10: persist the Data Asset localization version and declaration opt-out flags, including
+	    assets whose identical source was previously imported without this metadata. */
+	constexpr const TCHAR* ImportHashSchemaVersion = TEXT("10");
 
 	FString SerializeJsonCondensed(const TSharedRef<FJsonObject>& JsonObject)
 	{
@@ -210,6 +212,12 @@ void UStoryFlowImporter::ImportDataAssets(const FString& BuildDirectory, const F
 		if (DataAssetsJson.IsValid())
 		{
 			InOutProjectHashParts.Add(SerializeJsonCondensed(DataAssetsJson.ToSharedRef()));
+			double LocalizationVersion = 1;
+			if (DataAssetsJson->HasTypedField<EJson::Number>(TEXT("localizationVersion"))
+				&& DataAssetsJson->TryGetNumberField(TEXT("localizationVersion"), LocalizationVersion) && LocalizationVersion == 2)
+			{
+				ProjectAsset->DataAssetLocalizationVersion = 2;
+			}
 
 			// data-assets.json's OWN strings table, merged into the project's global table
 			// exactly as characters.json's is — same call, same collision warning, same
@@ -320,6 +328,7 @@ void UStoryFlowImporter::ImportDataAssets(const FString& BuildDirectory, const F
 								continue;
 							}
 							FStoryFlowVariable Declaration = ParseVariable(VariableId, VariableObject);
+							VariableObject->TryGetBoolField(TEXT("localizable"), Declaration.bLocalizable);
 							// STATE the element type on an array declaration instead of letting
 							// SetArray infer it from element [0]. An EMPTY array has no element
 							// to infer from and would land typed None, while the save path always
@@ -698,6 +707,7 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 	ProjectAsset->Characters.Empty();
 	ProjectAsset->CharacterIdToPath.Empty();
 	ProjectAsset->DataAssets.Empty();
+	ProjectAsset->DataAssetLocalizationVersion = 1;
 	ProjectAsset->GlobalVariables.Empty();
 	ProjectAsset->GlobalStrings.Empty();
 	ProjectAsset->ResolvedAssets.Empty();
