@@ -19,6 +19,7 @@ class UAudioComponent;
 class USoundClass;
 class USoundConcurrency;
 class USoundAttenuation;
+class FStoryFlowRollbackController;
 
 // ============================================================================
 // Delegates
@@ -26,6 +27,7 @@ class USoundAttenuation;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnDialogueStarted);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnDialogueUpdated, const FStoryFlowDialogueState&, DialogueState);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnRollbackAvailabilityChanged, const FStoryFlowRollbackAvailability&, Availability);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnDialogueEnded);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnDialogueTagReached, const FString&, Tag);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnVariableChanged, const FStoryFlowVariable&, Variable, bool, bIsGlobal);
@@ -155,6 +157,20 @@ public:
 	/** Called when dialogue state updates (new text, options, etc.) */
 	UPROPERTY(BlueprintAssignable, Category = "StoryFlow|Events")
 	FOnDialogueUpdated OnDialogueUpdated;
+	UPROPERTY(BlueprintAssignable, Category = "StoryFlow|Rollback")
+	FOnDialogueUpdated OnDialogueRestored;
+	UPROPERTY(BlueprintAssignable, Category = "StoryFlow|Rollback")
+	FOnRollbackAvailabilityChanged OnRollbackAvailabilityChanged;
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Rollback")
+	bool CanGoBack() const;
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Rollback")
+	FStoryFlowRollbackAvailability GetRollbackAvailability() const;
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Rollback")
+	FStoryFlowRollbackResult GoBack();
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Rollback")
+	void BlockRollback(const FString& Reason = TEXT(""));
+	bool IsCurrentDialogueRestored() const { return ExecutionContext.bIsExecuting && ExecutionContext.CurrentDialogueState.bIsValid && RestoredEntry.IsSet() && RestoredEntry.GetValue() == DialogueEntrySerial; }
+	bool IsCurrentRestoredDelivery() const { return IsCurrentDialogueRestored() && RestoredDeliveryEntry == DialogueEntrySerial; }
 
 	/** Called when dialogue execution ends */
 	UPROPERTY(BlueprintAssignable, Category = "StoryFlow|Events")
@@ -1094,6 +1110,23 @@ protected:
 	void OnDialogueAudioFinished();
 
 private:
+	friend struct FStoryFlowRollbackTestAccess;
+	friend class FStoryFlowRollbackController;
+	bool bPublishingRollbackAvailability = false;
+	bool bPendingRollbackAvailability = false;
+	void PublishRollbackAvailability();
+	TSharedPtr<FStoryFlowRollbackController> Rollback;
+	TWeakObjectPtr<UStoryFlowSubsystem> RollbackSubsystem;
+	TOptional<uint64> RestoredEntry;
+	uint64 RestoredDeliveryEntry = 0;
+	uint64 AudioGeneration = 0;
+	uint64 SessionGeneration = 0;
+	float CurrentAudioPosition = 0.0f;
+	void PlayDialogueAudioNative(USoundBase* Sound, bool bLoop, float Position, float Volume, bool bNativeOnly);
+	FString ResolveCharacterName(const FStoryFlowCharacterDef& Character) const;
+	void DetachRollback();
+	void BindAudioFinished();
+	void HandleBlockRollback(FStoryFlowNode* Node);
 
 	/**
 	 * The character path the CURRENT line's speaker resolved to — see GetCurrentSpeakerPath. Set wherever

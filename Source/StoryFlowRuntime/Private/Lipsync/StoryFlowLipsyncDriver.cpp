@@ -173,6 +173,13 @@ void FStoryFlowLipsyncDriver::AdvanceSilent(float DeltaSeconds)
 	Ease(DeltaSeconds);
 }
 
+void FStoryFlowLipsyncDriver::ResetPose()
+{
+	ClearTarget();
+	for (auto& Weight : CurrentWeights) Weight.Value = 0.0f;
+	ResetLevel(); IdlePose = TEXT("rest"); IdleHold = 0.0f;
+}
+
 void FStoryFlowLipsyncDriver::ResetLevel()
 {
 	Peak = PeakInitial;

@@ -366,6 +366,7 @@ EStoryFlowVariableType ParseVariableType(const FString& TypeString)
 
 EStoryFlowNodeType ParseNodeType(const FString& TypeString)
 {
+	if (TypeString == TEXT("blockRollback")) return EStoryFlowNodeType::BlockRollback;
 	static TMap<FString, EStoryFlowNodeType> TypeMap = {
 		// Control Flow
 		{ TEXT("start"), EStoryFlowNodeType::Start },

@@ -8,6 +8,7 @@
 #include "Components/AudioComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StoryFlowComponent.h"
+#include "Evaluation/StoryFlowRestoredListener.h"
 #include "Data/StoryFlowTypes.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/World.h"
@@ -124,11 +125,7 @@ void UStoryFlowLipsyncComponent::BeginPlay()
 
 void UStoryFlowLipsyncComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	if (Source != nullptr)
-	{
-		Source->OnDialogueUpdated.RemoveDynamic(this, &UStoryFlowLipsyncComponent::HandleDialogueUpdated);
-		Source->OnDialogueEnded.RemoveDynamic(this, &UStoryFlowLipsyncComponent::HandleDialogueEnded);
-	}
+	UnbindSource();
 	StopLipsync();
 	StopAnalysis();
 	ZeroOwnedMorphs();
@@ -196,14 +193,9 @@ void UStoryFlowLipsyncComponent::TickComponent(float DeltaTime, ELevelTick TickT
 	// and hold the mouth wide open.
 	Driver->FullScale = FMath::Max(AnalysisFullScale, 0.001f);
 
-	RefreshFaceIfStale(RealDelta);
-
 	// The dialogue actor can go away and come back (streaming, a respawn). Its delegates died with it, so
 	// discovery has to be re-armed, or this face is deaf for the rest of the session with nothing said.
-	if (bSubscribed && Source == nullptr)
-	{
-		bSubscribed = false;
-	}
+	if (bSubscribed && (!BoundSource.IsValid() || BoundSource.Get() != Source)) ResolveSource();
 
 	if (!bSubscribed)
 	{
@@ -214,6 +206,9 @@ void UStoryFlowLipsyncComponent::TickComponent(float DeltaTime, ELevelTick TickT
 			ResolveSource();
 		}
 	}
+	// A restored line has surrendered its face. Do not overwrite another animation's later pose.
+	if (bReleasedByRestore && !bManualLipsync) return;
+	RefreshFaceIfStale(RealDelta);
 
 	const EMouthDrive Drive = DecideDrive();
 
@@ -313,6 +308,7 @@ bool UStoryFlowLipsyncComponent::SourceAudioIsPlaying() const
 
 void UStoryFlowLipsyncComponent::StartLipsync()
 {
+	bReleasedByRestore = false;
 	bManualLipsync = true;
 	bLineIsMine = false;
 	bHadTrackedAudio = false;
@@ -362,6 +358,8 @@ float UStoryFlowLipsyncComponent::GetCentroid() const
  */
 void UStoryFlowLipsyncComponent::HandleDialogueUpdated(const FStoryFlowDialogueState& DialogueState)
 {
+	if (Source && Source->IsCurrentDialogueRestored()) { HandleDialogueRestored(DialogueState, Source); return; }
+	if (bSubscribed && BoundSource.Get() != Source) return;
 	if (!SpeakerIsMine())
 	{
 		// Someone else's line. Game-code lipsync (StartLipsync) promised to run until StopLipsync, and
@@ -380,6 +378,7 @@ void UStoryFlowLipsyncComponent::HandleDialogueUpdated(const FStoryFlowDialogueS
 	}
 
 	LineNodeId = DialogueState.NodeId;
+	bReleasedByRestore = false;
 	LineEntrySerial = EntrySerial;
 	++LineStarts;
 	bManualLipsync = false;
@@ -413,6 +412,7 @@ void UStoryFlowLipsyncComponent::HandleDialogueUpdated(const FStoryFlowDialogueS
 
 void UStoryFlowLipsyncComponent::HandleDialogueEnded()
 {
+	if (bSubscribed && Source && Source->IsDialogueActive()) return;
 	if (bManualLipsync)
 	{
 		return;
@@ -431,6 +431,26 @@ void UStoryFlowLipsyncComponent::HandleDialogueEnded()
 		return;
 	}
 	StopLipsync();
+}
+
+void UStoryFlowLipsyncComponent::HandleDialogueRestored(const FStoryFlowDialogueState& State, UStoryFlowComponent* From)
+{
+	if (bManualLipsync || !bSubscribed || !From || From != Source || From != BoundSource.Get() ||
+		!From->IsCurrentDialogueRestored() || From->GetCurrentDialogue().NodeId != State.NodeId) return;
+	StopLipsync(); StopAnalysis();
+	if (Driver.IsValid()) Driver->ResetPose();
+	ZeroOwnedMorphs(); bReleasedByRestore = true;
+}
+
+void UStoryFlowLipsyncComponent::UnbindSource()
+{
+	if (auto* Old = BoundSource.Get())
+	{
+		Old->OnDialogueUpdated.RemoveDynamic(this, &UStoryFlowLipsyncComponent::HandleDialogueUpdated);
+		Old->OnDialogueEnded.RemoveDynamic(this, &UStoryFlowLipsyncComponent::HandleDialogueEnded);
+		if (RestoredListener) Old->OnDialogueRestored.RemoveDynamic(RestoredListener, &UStoryFlowRestoredListener::Restore);
+	}
+	RestoredListener = nullptr; BoundSource.Reset(); bSubscribed = false;
 }
 
 /**
@@ -489,11 +509,14 @@ bool UStoryFlowLipsyncComponent::SpeakerPathsMatch(const FString& APath, const F
  */
 void UStoryFlowLipsyncComponent::ResolveSource()
 {
-	if (bSubscribed)
+	if (bSubscribed && BoundSource.IsValid() && BoundSource.Get() == Source)
 	{
 		return;
 	}
+	UnbindSource();
+	if (!bManualLipsync) { StopLipsync(); StopAnalysis(); if (Driver.IsValid()) Driver->ResetPose(); ZeroOwnedMorphs(); }
 
+	if (!IsValid(Source)) Source = nullptr;
 	if (Source == nullptr && SourceActor != nullptr)
 	{
 		Source = SourceActor->FindComponentByClass<UStoryFlowComponent>();
@@ -529,6 +552,15 @@ void UStoryFlowLipsyncComponent::ResolveSource()
 
 	Source->OnDialogueUpdated.AddDynamic(this, &UStoryFlowLipsyncComponent::HandleDialogueUpdated);
 	Source->OnDialogueEnded.AddDynamic(this, &UStoryFlowLipsyncComponent::HandleDialogueEnded);
+	BoundSource = Source;
+	RestoredListener = NewObject<UStoryFlowRestoredListener>(this);
+	RestoredListener->Source = Source;
+	const TWeakObjectPtr<UStoryFlowLipsyncComponent> Self(this);
+	UStoryFlowRestoredListener* Binding = RestoredListener;
+	RestoredListener->Callback = [Self, Binding](const FStoryFlowDialogueState& State, UStoryFlowComponent* From) {
+		if (Self.IsValid() && Self->RestoredListener == Binding) Self->HandleDialogueRestored(State, From);
+	};
+	Source->OnDialogueRestored.AddDynamic(RestoredListener, &UStoryFlowRestoredListener::Restore);
 	bSubscribed = true;
 
 	// A late subscribe misses the update for the line already on screen, and the next one may be a while

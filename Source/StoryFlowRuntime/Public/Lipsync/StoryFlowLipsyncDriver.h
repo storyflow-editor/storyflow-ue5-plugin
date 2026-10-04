@@ -75,6 +75,8 @@ public:
 
 	/** Forget the loudness history. Call at the START of a line so takes do not scale each other. */
 	void ResetLevel();
+	/** Close immediately, including a zero-time restore frame. */
+	void ResetPose();
 
 	// Tunables. Defaults are the three.js build's, which is the point of them.
 	float Strength = 0.55f;

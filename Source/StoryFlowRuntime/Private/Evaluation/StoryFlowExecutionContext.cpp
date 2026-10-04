@@ -80,6 +80,8 @@ void FStoryFlowExecutionContext::Reset()
 	EvaluationDepth = 0;
 	ProcessingDepth = 0;
 	NodeRuntimeStates.Empty();
+	CallerActivations.Empty();
+	RollbackRandomState.Reset();
 	WarnedUnknownNodes.Empty();
 	WarnedMapNodes.Empty();
 	WarnedDataAssetNodes.Empty();
@@ -436,7 +438,7 @@ FStoryFlowVariant FStoryFlowExecutionContext::GetCharacterVariableValue(const FS
 	if (IsCharacterNameBuiltin(VariableName))
 	{
 		FStoryFlowVariant Result;
-		Result.SetString(CharDef->bNameIsLiteral ? CharDef->Name : GetString(CharDef->Name));
+		Result.SetString(ResolveCharacterName(*CharDef));
 		return Result;
 	}
 
@@ -540,6 +542,9 @@ bool FStoryFlowExecutionContext::PushScript(const FString& ScriptPath, const FSt
 	}
 
 	CallStack.Push(Frame);
+	FStoryFlowActivationState Activation;
+	Activation.Loops = MoveTemp(LoopStack); Activation.Nodes = MoveTemp(NodeRuntimeStates);
+	CallerActivations.Add(MoveTemp(Activation));
 
 	// Clear flow stack for new script (each script has its own flow scope)
 	FlowCallStack.Reset();
@@ -565,6 +570,13 @@ bool FStoryFlowExecutionContext::PopScript()
 	}
 
 	FStoryFlowCallFrame Frame = CallStack.Pop();
+	if (CallerActivations.Num() > 0)
+	{
+		auto Activation = CallerActivations.Pop();
+		LoopStack = MoveTemp(Activation.Loops); NodeRuntimeStates = MoveTemp(Activation.Nodes);
+	}
+	// Caller memo predates callee writes; execution outputs and loop fields remain intact.
+	ClearEvaluationCache();
 
 	// Restore state
 	if (Frame.ScriptAsset.IsValid())
@@ -718,7 +730,7 @@ FString FStoryFlowExecutionContext::InterpolateVariables(const FString& Text) co
 		}
 		if (IsCharacterNameBuiltin(Name)) {
 			Out.Type = EStoryFlowVariableType::String;
-			Out.Value.SetString(Character->bNameIsLiteral ? Character->Name : GetString(Character->Name)); return true;
+			Out.Value.SetString(ResolveCharacterName(*Character)); return true;
 		}
 		for (const auto& Pair : Character->Variables) {
 			if (Pair.Value.Name.Equals(Name, ESearchCase::CaseSensitive) || Pair.Value.Id.Equals(Name, ESearchCase::CaseSensitive)) { Out = Pair.Value; return true; }
@@ -923,4 +935,29 @@ void FStoryFlowExecutionContext::NotifyStateChanged()
 {
 	DataAssetStore.NotifyChanged();
 	ClearEvaluationCache();
+}
+
+uint32 FStoryFlowExecutionContext::NextRollbackRandom()
+{
+	uint32 State = RollbackRandomState.GetValue();
+	if (State == 0) State = 1;
+	State ^= State << 13; State ^= State >> 17; State ^= State << 5;
+	RollbackRandomState = State; return State;
+}
+int32 FStoryFlowExecutionContext::RandomInt(int32 Min, int32 Max)
+{
+	if (!RollbackRandomState.IsSet()) return FMath::RandRange(Min, Max);
+	if (Min > Max) Swap(Min, Max);
+	return int32(int64(Min) + int64((double(NextRollbackRandom()) / 4294967296.0) * (int64(Max)-Min+1)));
+}
+float FStoryFlowExecutionContext::RandomFloat(float Min, float Max)
+{
+	if (!RollbackRandomState.IsSet()) return FMath::FRandRange(Min, Max);
+	return Min + float(double(NextRollbackRandom()) / 4294967296.0) * (Max-Min);
+}
+FString FStoryFlowExecutionContext::ResolveCharacterName(const FStoryFlowCharacterDef& Character) const
+{
+	if (Character.bNameIsLiteral) return Character.Name;
+	const auto* P = DataAssetStore.SharedState ? DataAssetStore.SharedState->Project.Get() : Project.Get();
+	return P ? P->GetGlobalString(Character.Name, P->bHasLocalization && ActiveLanguage ? *ActiveLanguage : SeedLanguageCode) : Character.Name;
 }

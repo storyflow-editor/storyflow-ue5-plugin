@@ -8,6 +8,8 @@
 #include "StoryFlowDialogueWidget.generated.h"
 
 class UStoryFlowComponent;
+class UStoryFlowRestoredListener;
+class UButton;
 
 /**
  * Base widget class for StoryFlow dialogue UI
@@ -53,6 +55,7 @@ public:
 	 */
 	UFUNCTION(BlueprintPure, Category = "StoryFlow")
 	UStoryFlowComponent* GetStoryFlowComponent() const { return StoryFlowComponent; }
+	uint64 GetComponentBindingSerial() const { return ComponentBindingSerial; }
 
 protected:
 	virtual void NativeConstruct() override;
@@ -68,6 +71,12 @@ protected:
 	 */
 	UFUNCTION(BlueprintNativeEvent, Category = "StoryFlow")
 	void OnDialogueUpdated(const FStoryFlowDialogueState& DialogueState);
+
+	/** Fully reveal this restored entry and cancel the consuming widget's auto/typewriter timers. */
+	UFUNCTION(BlueprintNativeEvent, Category = "StoryFlow|Rollback")
+	void OnDialogueRestored(const FStoryFlowDialogueState& DialogueState);
+	UFUNCTION(BlueprintNativeEvent, Category = "StoryFlow|Rollback")
+	void OnRollbackAvailabilityChanged(const FStoryFlowRollbackAvailability& Availability);
 
 	/**
 	 * Called when dialogue starts
@@ -91,6 +100,17 @@ protected:
 	void OnVariableChanged(const FStoryFlowVariable& Variable, bool bIsGlobal);
 
 public:
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Rollback")
+	bool CanGoBack() const;
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Rollback")
+	FStoryFlowRollbackAvailability GetRollbackAvailability() const;
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Rollback")
+	FStoryFlowRollbackResult GoBack();
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Rollback")
+	void BlockRollback(const FString& Reason = TEXT(""));
+	/** Additional author control. Availability never re-enables a forbidden Back control. */
+	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Rollback")
+	void SetBackAllowed(bool bAllowed);
 	// ========================================================================
 	// Blueprint Callable Helper Functions
 	// ========================================================================
@@ -126,11 +146,20 @@ public:
 	FString GetLocalizedString(const FString& Key) const;
 
 protected:
+	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow|Rollback", meta = (BindWidgetOptional))
+	TObjectPtr<UButton> BackButton;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "StoryFlow|Rollback")
+	bool bBackAllowed = true;
 	/** The bound StoryFlow component */
 	UPROPERTY(BlueprintReadOnly, Category = "StoryFlow", meta = (ExposeOnSpawn = true))
 	TObjectPtr<UStoryFlowComponent> StoryFlowComponent;
 
 private:
+	UPROPERTY(Transient)
+	TObjectPtr<UStoryFlowRestoredListener> RestoredListener;
+	void HandleDialogueRestored(const FStoryFlowDialogueState& State, UStoryFlowComponent* Source);
+	UFUNCTION() void HandleRollbackAvailabilityChanged(const FStoryFlowRollbackAvailability& Availability);
+	UFUNCTION() void HandleBackClicked();
 	/** Bind to component events */
 	void BindToComponent();
 
@@ -139,6 +168,7 @@ private:
 
 	/** Track if we're currently bound to prevent double-binding */
 	bool bIsBoundToComponent = false;
+	uint64 ComponentBindingSerial = 0;
 
 	/** Internal handlers for component events */
 	UFUNCTION()

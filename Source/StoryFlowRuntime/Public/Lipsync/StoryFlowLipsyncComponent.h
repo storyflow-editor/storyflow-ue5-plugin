@@ -14,6 +14,7 @@ class USkeletalMesh;
 class USkeletalMeshComponent;
 class USoundSubmix;
 class UStoryFlowComponent;
+class UStoryFlowRestoredListener;
 class UStoryFlowVisemeMap;
 struct FStoryFlowDialogueState;
 
@@ -180,11 +181,14 @@ protected:
 	virtual void Deactivate() override;
 
 private:
+	friend struct FStoryFlowRollbackTestAccess;
 	UFUNCTION()
 	void HandleDialogueUpdated(const FStoryFlowDialogueState& DialogueState);
 
 	UFUNCTION()
 	void HandleDialogueEnded();
+	void HandleDialogueRestored(const FStoryFlowDialogueState& State, UStoryFlowComponent* From);
+	void UnbindSource();
 
 	/** What the mouth is following this frame. */
 	enum class EMouthDrive : uint8
@@ -252,6 +256,10 @@ private:
 
 	/** Bound to the source's delegates. Separate from Source being set: a designer-set Source needs binding too. */
 	bool bSubscribed = false;
+	TWeakObjectPtr<UStoryFlowComponent> BoundSource;
+	UPROPERTY(Transient)
+	TObjectPtr<UStoryFlowRestoredListener> RestoredListener;
+	bool bReleasedByRestore = false;
 
 	/** Latched inside SpeakerIsMine, which is const because asking who is speaking changes nothing. */
 	mutable bool bWarnedUnknownCharacter = false;

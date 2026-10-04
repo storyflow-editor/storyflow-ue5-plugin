@@ -11,6 +11,8 @@ class UStoryFlowProjectAsset;
 class UStoryFlowScriptAsset;
 class UStoryFlowCharacterAsset;
 class UStoryFlowDataAssetAsset;
+class FJsonObject;
+class FJsonValue;
 
 /**
  * JSON importer for StoryFlow project and script files

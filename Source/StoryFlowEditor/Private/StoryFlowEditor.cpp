@@ -22,6 +22,7 @@
 #include "HAL/PlatformProcess.h"
 #include "DesktopPlatformModule.h"
 #include "Editor.h"
+#include "Framework/Application/SlateApplication.h"
 
 #define LOCTEXT_NAMESPACE "FStoryFlowEditorModule"
 

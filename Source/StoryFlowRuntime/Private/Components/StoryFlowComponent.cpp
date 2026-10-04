@@ -10,6 +10,7 @@
 #include "Data/StoryFlowDataAssetAsset.h"
 #include "Data/StoryFlowDataAssetStore.h"
 #include "Evaluation/StoryFlowEvaluator.h"
+#include "Evaluation/StoryFlowRollbackController.h"
 #include "Subsystems/StoryFlowSubsystem.h"
 #include "Engine/GameInstance.h"
 #include "Kismet/GameplayStatics.h"
@@ -108,7 +109,9 @@ void UStoryFlowComponent::StartDialogueWithScript(const FString& ScriptPath)
 
 	// BEFORE Initialize, not after: the local-variable string seeding runs inside it, and Reset
 	// deliberately leaves this field alone so a runScript push keeps the same language.
+	const uint64 StartingSession = ++SessionGeneration;
 	ExecutionContext.SeedLanguageCode = ActiveLanguageCode();
+	DetachRollback();
 
 	// Initialize execution context with project and script
 	// Pass the subsystem's global variables, runtime characters, and once-only options so they're shared across all components
@@ -123,9 +126,21 @@ void UStoryFlowComponent::StartDialogueWithScript(const FString& ScriptPath)
 	// disable loading for the rest of the session.
 	if (!bCountedActiveDialogue)
 	{
-		Subsystem->NotifyDialogueStarted();
 		bCountedActiveDialogue = true;
+		Subsystem->NotifyDialogueStarted();
 	}
+	if (SessionGeneration != StartingSession) return;
+	const auto Settings = Project->Metadata.DialogueRollback;
+	if (Settings.Version == 1 && Settings.bEnabled)
+	{
+		RollbackSubsystem = Subsystem;
+		Rollback = MakeShared<FStoryFlowRollbackController>(this, Subsystem, Settings.HistoryLimit >= 1 && Settings.HistoryLimit <= 1000 ? Settings.HistoryLimit : 100);
+		ExecutionContext.RollbackRandomState = uint32(FPlatformTime::Cycles()) | 1u;
+		Subsystem->RegisterRollback(Rollback);
+	}
+	if (SessionGeneration != StartingSession) return;
+	{
+	FStoryFlowRollbackExecutionScope Execution(Rollback);
 	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: ExecutionContext initialized, CurrentNodeId='%s'"), *ExecutionContext.CurrentNodeId);
 
 	// Create evaluator
@@ -140,18 +155,13 @@ void UStoryFlowComponent::StartDialogueWithScript(const FString& ScriptPath)
 		// is the game's job, same as at dialogue end.
 		if (ActiveDialogueWidget)
 		{
+			UStoryFlowDialogueWidget* OutgoingWidget = ActiveDialogueWidget; ActiveDialogueWidget = nullptr;
+			OutgoingWidget->DetachFromComponent();
 			if (bAutoAddWidgetToViewport)
 			{
-				ActiveDialogueWidget->RemoveFromParent();
+				OutgoingWidget->RemoveFromParent();
 			}
-			else
-			{
-				// Restarting does not stop the dialogue, so no OnDialogueEnded fires
-				// here: detaching is the old widget's only cue to stop following this
-				// component, and without it the new dialogue would drive it.
-				ActiveDialogueWidget->DetachFromComponent();
-			}
-			ActiveDialogueWidget = nullptr;
+			if (SessionGeneration != StartingSession) return;
 		}
 
 		UWorld* World = GetWorld();
@@ -162,6 +172,7 @@ void UStoryFlowComponent::StartDialogueWithScript(const FString& ScriptPath)
 			if (ActiveDialogueWidget)
 			{
 				ActiveDialogueWidget->InitializeWithComponent(this);
+				if (SessionGeneration != StartingSession) return;
 				if (bAutoAddWidgetToViewport)
 				{
 					ActiveDialogueWidget->AddToViewport();
@@ -169,6 +180,7 @@ void UStoryFlowComponent::StartDialogueWithScript(const FString& ScriptPath)
 				// Announce after the placement decision so handlers see where the
 				// widget ended up (and can place it themselves when it went nowhere)
 				OnDialogueWidgetCreated.Broadcast(ActiveDialogueWidget);
+				if (SessionGeneration != StartingSession) return;
 			}
 		}
 	}
@@ -176,7 +188,9 @@ void UStoryFlowComponent::StartDialogueWithScript(const FString& ScriptPath)
 	// Broadcast start event
 	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Broadcasting OnDialogueStarted"));
 	OnDialogueStarted.Broadcast();
+	if (SessionGeneration != StartingSession) return;
 	OnScriptStarted.Broadcast(ScriptPath);
+	if (SessionGeneration != StartingSession) return;
 
 	// Find start node and begin execution
 	FStoryFlowNode* StartNode = ExecutionContext.GetNode(TEXT("0"));
@@ -194,10 +208,17 @@ void UStoryFlowComponent::StartDialogueWithScript(const FString& ScriptPath)
 			UE_LOG(LogStoryFlow, Error, TEXT("StoryFlow:   - id='%s' type='%s'"), *NodePair.Key, *NodePair.Value.TypeString);
 		}
 	}
+	}
+	if (SessionGeneration == StartingSession)
+	{
+		if (Rollback) Rollback->Publish();
+		else PublishRollbackAvailability();
+	}
 }
 
 void UStoryFlowComponent::SelectOption(const FString& OptionId)
 {
+	FStoryFlowRollbackExecutionScope Execution(Rollback);
 	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: SelectOption('%s') called"), *OptionId);
 	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow:   bIsExecuting=%s bIsWaitingForInput=%s"),
 		ExecutionContext.bIsExecuting ? TEXT("true") : TEXT("false"),
@@ -226,6 +247,10 @@ void UStoryFlowComponent::SelectOption(const FString& OptionId)
 	}
 
 	// Mark once-only options as used
+	const uint64 InputSession = SessionGeneration, InputEntry = DialogueEntrySerial;
+	const auto InputOwner = Rollback;
+	if (InputOwner) InputOwner->BeforeLeave();
+	if (SessionGeneration != InputSession || DialogueEntrySerial != InputEntry || Rollback != InputOwner || !ExecutionContext.bIsExecuting) return;
 	for (const FStoryFlowDialogueOption& Option : ExecutionContext.CurrentDialogueState.Options)
 	{
 		if (Option.Id == OptionId)
@@ -279,6 +304,7 @@ void UStoryFlowComponent::SelectOption(const FString& OptionId)
 
 void UStoryFlowComponent::AdvanceDialogue()
 {
+	FStoryFlowRollbackExecutionScope Execution(Rollback);
 	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: AdvanceDialogue() called"));
 
 	if (!ExecutionContext.bIsExecuting || !ExecutionContext.bIsWaitingForInput)
@@ -325,6 +351,10 @@ void UStoryFlowComponent::AdvanceDialogue()
 	}
 
 	ExecutionContext.bIsWaitingForInput = false;
+	const uint64 InputSession = SessionGeneration, InputEntry = DialogueEntrySerial;
+	const auto InputOwner = Rollback;
+	if (InputOwner) InputOwner->BeforeLeave();
+	if (SessionGeneration != InputSession || DialogueEntrySerial != InputEntry || Rollback != InputOwner || !ExecutionContext.bIsExecuting) return;
 
 	if (Evaluator)
 	{
@@ -340,14 +370,20 @@ void UStoryFlowComponent::StopDialogue()
 	{
 		return;
 	}
+	const uint64 StoppingSession = ++SessionGeneration;
+	DetachRollback();
 
 	// Stop audio if configured
 	if (bStopAudioOnDialogueEnd)
 	{
 		StopDialogueAudio();
 	}
+	if (SessionGeneration != StoppingSession) return;
 
 	FString CurrentScriptPath = ExecutionContext.CurrentScript.IsValid() ? ExecutionContext.CurrentScript->ScriptPath : TEXT("");
+	UStoryFlowDialogueWidget* OutgoingWidget = ActiveDialogueWidget; ActiveDialogueWidget = nullptr;
+	const uint64 OutgoingBinding = OutgoingWidget ? OutgoingWidget->GetComponentBindingSerial() : 0;
+	const bool bRemoveOutgoingWidget = bAutoAddWidgetToViewport;
 
 	ExecutionContext.Reset();
 
@@ -364,6 +400,7 @@ void UStoryFlowComponent::StopDialogue()
 	{
 		if (bCountedActiveDialogue)
 		{
+			bCountedActiveDialogue = false;
 			Subsystem->NotifyDialogueEnded();
 		}
 	}
@@ -381,20 +418,15 @@ void UStoryFlowComponent::StopDialogue()
 	// parented it into its own UI, that tree is the game's to unwind. The
 	// OnDialogueEnded broadcast just above is the signal it does that on, and it
 	// fires even when the component is being destroyed.
-	if (ActiveDialogueWidget)
+	if (OutgoingWidget && OutgoingWidget->GetComponentBindingSerial() == OutgoingBinding)
 	{
-		if (bAutoAddWidgetToViewport)
+		OutgoingWidget->DetachFromComponent();
+		if (bRemoveOutgoingWidget)
 		{
-			ActiveDialogueWidget->RemoveFromParent();
+			OutgoingWidget->RemoveFromParent();
 		}
-		else
-		{
-			// After the OnDialogueEnded broadcast above, so the widget still gets its
-			// ending cue before it stops following this component.
-			ActiveDialogueWidget->DetachFromComponent();
-		}
-		ActiveDialogueWidget = nullptr;
 	}
+	PublishRollbackAvailability();
 }
 
 void UStoryFlowComponent::PauseDialogue()
@@ -569,6 +601,7 @@ bool UStoryFlowComponent::GetBoolVariable(const FString& VariableName, bool bGlo
 
 void UStoryFlowComponent::SetBoolVariable(const FString& VariableName, bool bValue, bool bGlobal)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	if (FStoryFlowVariable* Var = FindVariableByName(VariableName, bGlobal))
 	{
 		FStoryFlowVariant NewValue;
@@ -586,6 +619,7 @@ int32 UStoryFlowComponent::GetIntVariable(const FString& VariableName, bool bGlo
 
 void UStoryFlowComponent::SetIntVariable(const FString& VariableName, int32 Value, bool bGlobal)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	if (FStoryFlowVariable* Var = FindVariableByName(VariableName, bGlobal))
 	{
 		FStoryFlowVariant NewValue;
@@ -603,6 +637,7 @@ float UStoryFlowComponent::GetFloatVariable(const FString& VariableName, bool bG
 
 void UStoryFlowComponent::SetFloatVariable(const FString& VariableName, float Value, bool bGlobal)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	if (FStoryFlowVariable* Var = FindVariableByName(VariableName, bGlobal))
 	{
 		FStoryFlowVariant NewValue;
@@ -620,6 +655,7 @@ FString UStoryFlowComponent::GetStringVariable(const FString& VariableName, bool
 
 void UStoryFlowComponent::SetStringVariable(const FString& VariableName, const FString& Value, bool bGlobal)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	if (FStoryFlowVariable* Var = FindVariableByName(VariableName, bGlobal))
 	{
 		FStoryFlowVariant NewValue;
@@ -636,6 +672,7 @@ FString UStoryFlowComponent::GetEnumVariable(const FString& VariableName, bool b
 
 void UStoryFlowComponent::SetEnumVariable(const FString& VariableName, const FString& Value, bool bGlobal)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	if (FStoryFlowVariable* Var = FindVariableByName(VariableName, bGlobal))
 	{
 		FStoryFlowVariant NewValue;
@@ -658,6 +695,7 @@ void UStoryFlowComponent::ApplyArrayVariable(const FString& VariableName, bool b
 
 void UStoryFlowComponent::SetBoolArrayVariable(const FString& VariableName, const TArray<bool>& Values, bool bGlobal)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	TArray<FStoryFlowVariant> Items;
 	Items.Reserve(Values.Num());
 	for (bool bValue : Values)
@@ -671,6 +709,7 @@ void UStoryFlowComponent::SetBoolArrayVariable(const FString& VariableName, cons
 
 void UStoryFlowComponent::SetIntArrayVariable(const FString& VariableName, const TArray<int32>& Values, bool bGlobal)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	TArray<FStoryFlowVariant> Items;
 	Items.Reserve(Values.Num());
 	for (int32 Value : Values)
@@ -684,6 +723,7 @@ void UStoryFlowComponent::SetIntArrayVariable(const FString& VariableName, const
 
 void UStoryFlowComponent::SetFloatArrayVariable(const FString& VariableName, const TArray<float>& Values, bool bGlobal)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	TArray<FStoryFlowVariant> Items;
 	Items.Reserve(Values.Num());
 	for (float Value : Values)
@@ -697,6 +737,7 @@ void UStoryFlowComponent::SetFloatArrayVariable(const FString& VariableName, con
 
 void UStoryFlowComponent::SetStringArrayVariable(const FString& VariableName, const TArray<FString>& Values, bool bGlobal)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	TArray<FStoryFlowVariant> Items;
 	Items.Reserve(Values.Num());
 	for (const FString& Value : Values)
@@ -710,6 +751,7 @@ void UStoryFlowComponent::SetStringArrayVariable(const FString& VariableName, co
 
 void UStoryFlowComponent::SetEnumArrayVariable(const FString& VariableName, const TArray<FString>& Values, bool bGlobal)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	TArray<FStoryFlowVariant> Items;
 	Items.Reserve(Values.Num());
 	for (const FString& Value : Values)
@@ -723,6 +765,7 @@ void UStoryFlowComponent::SetEnumArrayVariable(const FString& VariableName, cons
 
 void UStoryFlowComponent::SetImageArrayVariable(const FString& VariableName, const TArray<FString>& AssetKeys, bool bGlobal)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	// Asset keys are stored as plain strings, matching how ParseVariant imports
 	// image/audio/character array elements (GetString accepts them either way).
 	SetStringArrayVariable(VariableName, AssetKeys, bGlobal);
@@ -730,11 +773,13 @@ void UStoryFlowComponent::SetImageArrayVariable(const FString& VariableName, con
 
 void UStoryFlowComponent::SetAudioArrayVariable(const FString& VariableName, const TArray<FString>& AssetKeys, bool bGlobal)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	SetStringArrayVariable(VariableName, AssetKeys, bGlobal);
 }
 
 void UStoryFlowComponent::SetCharacterArrayVariable(const FString& VariableName, const TArray<FString>& CharacterPaths, bool bGlobal)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	SetStringArrayVariable(VariableName, CharacterPaths, bGlobal);
 }
 
@@ -1148,6 +1193,7 @@ TArray<FString> UStoryFlowComponent::GetMapKeysInOrder(const FString& VariableNa
 
 void UStoryFlowComponent::SetStringToBoolMap(const FString& VariableName, const TMap<FString, bool>& Values, bool bGlobal)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	FStoryFlowVariable* Var = FindMapVariableForAccess(VariableName, bGlobal);
 	if (!Var) { return; }
 	if (Var->KeyType != EStoryFlowVariableType::String && Var->KeyType != EStoryFlowVariableType::Enum)
@@ -1176,6 +1222,7 @@ void UStoryFlowComponent::SetStringToBoolMap(const FString& VariableName, const 
 
 void UStoryFlowComponent::SetStringToIntMap(const FString& VariableName, const TMap<FString, int32>& Values, bool bGlobal)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	FStoryFlowVariable* Var = FindMapVariableForAccess(VariableName, bGlobal);
 	if (!Var) { return; }
 	if (Var->KeyType != EStoryFlowVariableType::String && Var->KeyType != EStoryFlowVariableType::Enum)
@@ -1204,6 +1251,7 @@ void UStoryFlowComponent::SetStringToIntMap(const FString& VariableName, const T
 
 void UStoryFlowComponent::SetStringToFloatMap(const FString& VariableName, const TMap<FString, float>& Values, bool bGlobal)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	FStoryFlowVariable* Var = FindMapVariableForAccess(VariableName, bGlobal);
 	if (!Var) { return; }
 	if (Var->KeyType != EStoryFlowVariableType::String && Var->KeyType != EStoryFlowVariableType::Enum)
@@ -1232,6 +1280,7 @@ void UStoryFlowComponent::SetStringToFloatMap(const FString& VariableName, const
 
 void UStoryFlowComponent::SetStringToStringMap(const FString& VariableName, const TMap<FString, FString>& Values, bool bGlobal)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	FStoryFlowVariable* Var = FindMapVariableForAccess(VariableName, bGlobal);
 	if (!Var) { return; }
 	if (Var->KeyType != EStoryFlowVariableType::String && Var->KeyType != EStoryFlowVariableType::Enum)
@@ -1264,6 +1313,7 @@ void UStoryFlowComponent::SetStringToStringMap(const FString& VariableName, cons
 
 void UStoryFlowComponent::SetIntToBoolMap(const FString& VariableName, const TMap<int32, bool>& Values, bool bGlobal)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	FStoryFlowVariable* Var = FindMapVariableForAccess(VariableName, bGlobal);
 	if (!Var) { return; }
 	if (Var->KeyType != EStoryFlowVariableType::Integer)
@@ -1291,6 +1341,7 @@ void UStoryFlowComponent::SetIntToBoolMap(const FString& VariableName, const TMa
 
 void UStoryFlowComponent::SetIntToIntMap(const FString& VariableName, const TMap<int32, int32>& Values, bool bGlobal)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	FStoryFlowVariable* Var = FindMapVariableForAccess(VariableName, bGlobal);
 	if (!Var) { return; }
 	if (Var->KeyType != EStoryFlowVariableType::Integer)
@@ -1318,6 +1369,7 @@ void UStoryFlowComponent::SetIntToIntMap(const FString& VariableName, const TMap
 
 void UStoryFlowComponent::SetIntToFloatMap(const FString& VariableName, const TMap<int32, float>& Values, bool bGlobal)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	FStoryFlowVariable* Var = FindMapVariableForAccess(VariableName, bGlobal);
 	if (!Var) { return; }
 	if (Var->KeyType != EStoryFlowVariableType::Integer)
@@ -1345,6 +1397,7 @@ void UStoryFlowComponent::SetIntToFloatMap(const FString& VariableName, const TM
 
 void UStoryFlowComponent::SetIntToStringMap(const FString& VariableName, const TMap<int32, FString>& Values, bool bGlobal)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	FStoryFlowVariable* Var = FindMapVariableForAccess(VariableName, bGlobal);
 	if (!Var) { return; }
 	if (Var->KeyType != EStoryFlowVariableType::Integer)
@@ -1436,7 +1489,7 @@ FStoryFlowVariant UStoryFlowComponent::GetCharacterVariable(const FString& Chara
 	if (IsCharacterNameBuiltin(VariableName))
 	{
 		FStoryFlowVariant Result;
-		Result.SetString(CharDef->bNameIsLiteral ? CharDef->Name : ResolveString(CharDef->Name));
+		Result.SetString(ResolveCharacterName(*CharDef));
 		return Result;
 	}
 
@@ -1460,6 +1513,7 @@ FStoryFlowVariant UStoryFlowComponent::GetCharacterVariable(const FString& Chara
 
 void UStoryFlowComponent::SetCharacterVariable(const FString& CharacterPath, const FString& VariableName, const FStoryFlowVariant& Value)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	FStoryFlowCharacterDef* CharDef = FindCharacter(CharacterPath);
 	if (!CharDef)
 	{
@@ -1668,6 +1722,7 @@ FStoryFlowVariant UStoryFlowComponent::GetCharacterVariableById(const FString& C
 
 void UStoryFlowComponent::SetCharacterVariableById(const FString& CharacterId, const FString& VariableName, const FStoryFlowVariant& Value)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	SetCharacterVariable(CharacterId, VariableName, Value);
 }
 
@@ -1706,6 +1761,7 @@ bool UStoryFlowComponent::GetCharacterBoolVariable(UStoryFlowCharacterAsset* Cha
 
 void UStoryFlowComponent::SetCharacterBoolVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName, bool bValue)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	FStoryFlowCharacterDef* CharDef = FindCharacterFromAsset(Character);
 	if (!CharDef) return;
 
@@ -1737,6 +1793,7 @@ int32 UStoryFlowComponent::GetCharacterIntVariable(UStoryFlowCharacterAsset* Cha
 
 void UStoryFlowComponent::SetCharacterIntVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName, int32 Value)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	FStoryFlowCharacterDef* CharDef = FindCharacterFromAsset(Character);
 	if (!CharDef) return;
 
@@ -1768,6 +1825,7 @@ float UStoryFlowComponent::GetCharacterFloatVariable(UStoryFlowCharacterAsset* C
 
 void UStoryFlowComponent::SetCharacterFloatVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName, float Value)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	FStoryFlowCharacterDef* CharDef = FindCharacterFromAsset(Character);
 	if (!CharDef) return;
 
@@ -1827,7 +1885,7 @@ FString UStoryFlowComponent::GetCharacterStringVariable(UStoryFlowCharacterAsset
 	// Handle built-in "Name" field (stored as string table key; cf_name alias — amendment A2a)
 	if (IsCharacterNameBuiltin(VariableName))
 	{
-		return CharDef->bNameIsLiteral ? CharDef->Name : ResolveString(CharDef->Name);
+		return ResolveCharacterName(*CharDef);
 	}
 	// Handle built-in "Image" field (or cf_image — amendment A2a)
 	if (IsCharacterImageBuiltin(VariableName))
@@ -1845,6 +1903,7 @@ FString UStoryFlowComponent::GetCharacterStringVariable(UStoryFlowCharacterAsset
 
 void UStoryFlowComponent::SetCharacterStringVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName, const FString& Value)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	FStoryFlowCharacterDef* CharDef = FindCharacterFromAsset(Character);
 	if (!CharDef) return;
 
@@ -1884,6 +1943,7 @@ FString UStoryFlowComponent::GetCharacterEnumVariable(UStoryFlowCharacterAsset* 
 
 void UStoryFlowComponent::SetCharacterEnumVariable(UStoryFlowCharacterAsset* Character, const FString& VariableName, const FString& Value)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	FStoryFlowCharacterDef* CharDef = FindCharacterFromAsset(Character);
 	if (!CharDef) return;
 
@@ -1915,6 +1975,7 @@ bool UStoryFlowComponent::GetDataAssetBoolVariable(UStoryFlowDataAssetAsset* Dat
 
 bool UStoryFlowComponent::SetDataAssetBoolVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool bValue)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	FStoryFlowVariant NewValue;
 	NewValue.SetBool(bValue);
 	UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem();
@@ -1931,6 +1992,7 @@ int32 UStoryFlowComponent::GetDataAssetIntVariable(UStoryFlowDataAssetAsset* Dat
 
 bool UStoryFlowComponent::SetDataAssetIntVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, int32 Value)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	FStoryFlowVariant NewValue;
 	NewValue.SetInt(Value);
 	UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem();
@@ -1947,6 +2009,7 @@ float UStoryFlowComponent::GetDataAssetFloatVariable(UStoryFlowDataAssetAsset* D
 
 bool UStoryFlowComponent::SetDataAssetFloatVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, float Value)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	FStoryFlowVariant NewValue;
 	NewValue.SetFloat(Value);
 	UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem();
@@ -1963,6 +2026,7 @@ FString UStoryFlowComponent::GetDataAssetStringVariable(UStoryFlowDataAssetAsset
 
 bool UStoryFlowComponent::SetDataAssetStringVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, const FString& Value)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	FStoryFlowVariant NewValue;
 	NewValue.SetString(Value);
 	UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem();
@@ -1979,6 +2043,7 @@ FString UStoryFlowComponent::GetDataAssetEnumVariable(UStoryFlowDataAssetAsset* 
 
 bool UStoryFlowComponent::SetDataAssetEnumVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, const FString& Value)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	FStoryFlowVariant NewValue;
 	// SetEnum, not SetString: the seed types an enum declaration's value as Enum, and an overlay
 	// entry that differed would be invisible to a read and visible in the save key.
@@ -1990,6 +2055,7 @@ bool UStoryFlowComponent::SetDataAssetEnumVariable(UStoryFlowDataAssetAsset* Dat
 bool UStoryFlowComponent::SetDataAssetArrayVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
 	const TArray<FStoryFlowVariant>& Elements)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem();
 	return DropCachesAfterDataAssetWrite(Subsystem && StoryFlowDataAssetAccess::SetArray(*Subsystem, DataAsset, VariableName, Elements));
 }
@@ -1997,6 +2063,7 @@ bool UStoryFlowComponent::SetDataAssetArrayVariable(UStoryFlowDataAssetAsset* Da
 bool UStoryFlowComponent::SetDataAssetMapVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
 	const TArray<FStoryFlowVariant>& Keys, const TArray<FStoryFlowVariant>& Values)
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	UStoryFlowSubsystem* Subsystem = GetStoryFlowSubsystem();
 	return DropCachesAfterDataAssetWrite(Subsystem && StoryFlowDataAssetAccess::SetMap(*Subsystem, DataAsset, VariableName, Keys, Values));
 }
@@ -2040,6 +2107,7 @@ FStoryFlowVariant UStoryFlowComponent::GetDataAssetVariantVariable(UStoryFlowDat
 
 void UStoryFlowComponent::ResetVariables()
 {
+	FStoryFlowRollbackMutationScope HostMutation(GetStoryFlowSubsystem());
 	// Reset local variables from current script
 	if (UStoryFlowScriptAsset* CurrentScriptAsset = ExecutionContext.CurrentScript.Get())
 	{
@@ -2068,6 +2136,7 @@ FString UStoryFlowComponent::GetLocalizedString(const FString& Key) const
 
 void UStoryFlowComponent::ProcessNode(FStoryFlowNode* Node)
 {
+	FStoryFlowRollbackExecutionScope Execution(Rollback);
 	if (!Node)
 	{
 		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: ProcessNode called with nullptr"));
@@ -2122,7 +2191,7 @@ void UStoryFlowComponent::ProcessNode(FStoryFlowNode* Node)
 		ProcessNextNode(StoryFlowHandles::Source(Node->Id));
 	}
 
-	--ExecutionContext.ProcessingDepth;
+	if (ExecutionContext.ProcessingDepth > 0) --ExecutionContext.ProcessingDepth;
 }
 
 const TMap<EStoryFlowNodeType, UStoryFlowComponent::FNodeHandler>& UStoryFlowComponent::GetDispatchTable()
@@ -2133,6 +2202,7 @@ const TMap<EStoryFlowNodeType, UStoryFlowComponent::FNodeHandler>& UStoryFlowCom
 
 		// Control flow
 		T.Add(EStoryFlowNodeType::Start,      &UStoryFlowComponent::HandleStart);
+		T.Add(EStoryFlowNodeType::BlockRollback, &UStoryFlowComponent::HandleBlockRollback);
 		T.Add(EStoryFlowNodeType::End,        &UStoryFlowComponent::HandleEnd);
 		T.Add(EStoryFlowNodeType::Branch,     &UStoryFlowComponent::HandleBranch);
 		T.Add(EStoryFlowNodeType::Dialogue,   &UStoryFlowComponent::HandleDialogue);
@@ -2477,6 +2547,13 @@ void UStoryFlowComponent::HandleEnd(FStoryFlowNode* Node)
 		FString ReturnScriptPath = ExecutionContext.CurrentScript.IsValid() ? ExecutionContext.CurrentScript->ScriptPath : TEXT("");
 		SF_TRACE(ExecutionContext, "SCRIPT RETURN \"%s\"", *ReturnScriptPath);
 		FStoryFlowCallFrame Frame = ExecutionContext.CallStack.Pop();
+		if (ExecutionContext.CallerActivations.Num() > 0)
+		{
+			auto Activation = ExecutionContext.CallerActivations.Pop();
+			ExecutionContext.LoopStack = MoveTemp(Activation.Loops); ExecutionContext.NodeRuntimeStates = MoveTemp(Activation.Nodes);
+		}
+		// A callee may already have consumed the shared revision while caller memo was parked.
+		ExecutionContext.ClearEvaluationCache();
 		OnScriptEnded.Broadcast(ReturnScriptPath);
 
 		if (Frame.ScriptAsset.IsValid())
@@ -3898,8 +3975,8 @@ void UStoryFlowComponent::HandleForEachLoop(FStoryFlowNode* Node)
 			ExecutionContext.LoopStack.Pop();
 		}
 
-		// Continue after loop
-		ProcessNextNode(StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_LoopCompleted));
+		// An unconnected nested completion returns to the enclosing iteration.
+		HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_LoopCompleted));
 	}
 }
 
@@ -4005,8 +4082,8 @@ void UStoryFlowComponent::HandleForEachMap(FStoryFlowNode* Node)
 			ExecutionContext.LoopStack.Pop();
 		}
 
-		// Continue after loop
-		ProcessNextNode(StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_LoopCompleted));
+		// An unconnected nested completion returns to the enclosing iteration.
+		HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_LoopCompleted));
 	}
 }
 
@@ -4186,7 +4263,7 @@ void UStoryFlowComponent::HandleRandomBranch(FStoryFlowNode* Node)
 	}
 
 	// Pick a random value in [0, TotalWeight)
-	const int32 Roll = FMath::RandRange(0, TotalWeight - 1);
+	const int32 Roll = ExecutionContext.RandomInt(0, TotalWeight - 1);
 
 	// Find selected option using cumulative weight
 	int32 Cumulative = 0;
@@ -4837,7 +4914,7 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 		{
 			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: BuildDialogueState - Found character, raw Name='%s'"), *CharDef->Name);
 			State.Character.CharacterPath = SpeakerRef;
-			State.Character.Name = CharDef->bNameIsLiteral ? CharDef->Name : ExecutionContext.GetString(CharDef->Name, ActiveLanguageCode());
+			State.Character.Name = ExecutionContext.ResolveCharacterName(*CharDef);
 			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: BuildDialogueState - Resolved Name='%s'"), *State.Character.Name);
 
 			// Load character image from the runtime character data (CharDef->Image).
@@ -4867,7 +4944,7 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 	FString TitleKey = DialogueNode->Data.Title;
 	FString TextKey = DialogueNode->Data.Text;
 
-	State.Title = ExecutionContext.GetString(TitleKey, ActiveLanguageCode());
+	State.Title = ExecutionContext.InterpolateVariables(ExecutionContext.GetString(TitleKey, ActiveLanguageCode()));
 	State.Text = ExecutionContext.InterpolateVariables(ExecutionContext.GetString(TextKey, ActiveLanguageCode()));
 
 	// Presentation tags pass through untouched (raw authored strings, in array order)
@@ -4962,7 +5039,7 @@ FStoryFlowDialogueState UStoryFlowComponent::BuildDialogueState(FStoryFlowNode* 
 	}
 
 	// Pass audio advance-on-end flags to state so widgets can adjust UI
-	State.bAudioAdvanceOnEnd = DialogueNode->Data.bAudioAdvanceOnEnd && !DialogueNode->Data.bAudioLoop;
+	State.bAudioAdvanceOnEnd = !IsCurrentDialogueRestored() && DialogueNode->Data.bAudioAdvanceOnEnd && !DialogueNode->Data.bAudioLoop;
 	State.bAudioAllowSkip = State.bAudioAdvanceOnEnd && DialogueNode->Data.bAudioAllowSkip;
 
 	return State;
@@ -5083,13 +5160,18 @@ void UStoryFlowComponent::HandleSetNodeEnd(FStoryFlowNode* Node, const FString& 
 
 void UStoryFlowComponent::PlayDialogueAudio_Implementation(USoundBase* Sound, bool bLoop)
 {
+	PlayDialogueAudioNative(Sound, bLoop, 0.0f, DialogueVolumeMultiplier, false);
+}
+
+void UStoryFlowComponent::PlayDialogueAudioNative(USoundBase* Sound, bool bLoop, float Position, float Volume, bool bNativeOnly)
+{
 	if (!Sound)
 	{
 		return;
 	}
 
 	// Stop any currently playing dialogue audio
-	StopDialogueAudio();
+	if (bNativeOnly) StopDialogueAudio_Implementation(); else StopDialogueAudio();
 
 	// Spawn audio component — 3D attached to owner or 2D non-spatialized
 	if (bUse3DAudio && GetOwner())
@@ -5097,12 +5179,12 @@ void UStoryFlowComponent::PlayDialogueAudio_Implementation(USoundBase* Sound, bo
 		CurrentDialogueAudio = UGameplayStatics::SpawnSoundAttached(
 			Sound, GetOwner()->GetRootComponent(),
 			NAME_None, FVector::ZeroVector, EAttachLocation::KeepRelativeOffset,
-			false, DialogueVolumeMultiplier, 1.0f, 0.0f,
+			false, Volume, 1.0f, Position,
 			DialogueAttenuation.Get(), DialogueConcurrency.Get(), false);
 	}
 	else
 	{
-		CurrentDialogueAudio = UGameplayStatics::SpawnSound2D(this, Sound, DialogueVolumeMultiplier, 1.0f, 0.0f, DialogueConcurrency.Get(), false, false);
+		CurrentDialogueAudio = UGameplayStatics::SpawnSound2D(this, Sound, Volume, 1.0f, Position, DialogueConcurrency.Get(), false, false);
 	}
 
 	if (CurrentDialogueAudio)
@@ -5128,10 +5210,11 @@ void UStoryFlowComponent::PlayDialogueAudio_Implementation(USoundBase* Sound, bo
 		}
 
 		// Play the audio
-		CurrentDialogueAudio->Play();
+		CurrentDialogueAudio->Play(Position);
+		CurrentAudioPosition = Position;
 
 		// Always bind OnAudioFinished for looping and/or advance-on-end
-		CurrentDialogueAudio->OnAudioFinished.AddDynamic(this, &UStoryFlowComponent::OnDialogueAudioFinished);
+		BindAudioFinished();
 
 		if (bLoop)
 		{
@@ -5152,10 +5235,13 @@ bool UStoryFlowComponent::IsDialogueAudioPlaying() const
 
 void UStoryFlowComponent::StopDialogueAudio_Implementation()
 {
+	++AudioGeneration;
 	if (CurrentDialogueAudio)
 	{
 		// Remove callback to prevent restart or advance
 		CurrentDialogueAudio->OnAudioFinished.RemoveAll(this);
+		CurrentDialogueAudio->OnAudioFinishedNative.RemoveAll(this);
+		CurrentDialogueAudio->OnAudioPlaybackPercentNative.RemoveAll(this);
 
 		if (CurrentDialogueAudio->IsPlaying())
 		{
@@ -5166,6 +5252,7 @@ void UStoryFlowComponent::StopDialogueAudio_Implementation()
 		CurrentDialogueAudio->DestroyComponent();
 	}
 	CurrentDialogueAudio = nullptr;
+	CurrentAudioPosition = 0.0f;
 
 	// Clear advance-on-end state
 	bWaitingForAudioAdvance = false;
@@ -5180,6 +5267,7 @@ void UStoryFlowComponent::OnDialogueAudioFinished()
 		// Restart the audio for looping
 		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: Looping dialogue audio"));
 		CurrentDialogueAudio->Play();
+		CurrentAudioPosition = 0.0f;
 	}
 	else if (bWaitingForAudioAdvance)
 	{

@@ -2,9 +2,12 @@
 
 #include "UI/StoryFlowDialogueWidget.h"
 #include "Components/StoryFlowComponent.h"
+#include "Components/Button.h"
+#include "Evaluation/StoryFlowRestoredListener.h"
 
 void UStoryFlowDialogueWidget::InitializeWithComponent(UStoryFlowComponent* InComponent)
 {
+	++ComponentBindingSerial;
 	// Unbind from previous component if any
 	UnbindFromComponent();
 
@@ -50,8 +53,21 @@ void UStoryFlowDialogueWidget::BindToComponent()
 	StoryFlowComponent->OnDialogueUpdated.AddDynamic(this, &UStoryFlowDialogueWidget::HandleDialogueUpdated);
 	StoryFlowComponent->OnDialogueEnded.AddDynamic(this, &UStoryFlowDialogueWidget::HandleDialogueEnded);
 	StoryFlowComponent->OnVariableChanged.AddDynamic(this, &UStoryFlowDialogueWidget::HandleVariableChanged);
+	StoryFlowComponent->OnRollbackAvailabilityChanged.AddDynamic(this, &UStoryFlowDialogueWidget::HandleRollbackAvailabilityChanged);
+	RestoredListener = NewObject<UStoryFlowRestoredListener>(this);
+	RestoredListener->Source = StoryFlowComponent;
+	const TWeakObjectPtr<UStoryFlowDialogueWidget> Self(this);
+	UStoryFlowRestoredListener* Binding = RestoredListener;
+	RestoredListener->Callback = [Self, Binding](const FStoryFlowDialogueState& State, UStoryFlowComponent* Source) {
+		if (Self.IsValid() && Self->RestoredListener == Binding) Self->HandleDialogueRestored(State, Source);
+	};
+	StoryFlowComponent->OnDialogueRestored.AddDynamic(RestoredListener, &UStoryFlowRestoredListener::Restore);
+	if (BackButton) BackButton->OnClicked.AddUniqueDynamic(this, &UStoryFlowDialogueWidget::HandleBackClicked);
 
 	bIsBoundToComponent = true;
+	HandleRollbackAvailabilityChanged(StoryFlowComponent->GetRollbackAvailability());
+	if (StoryFlowComponent && StoryFlowComponent->IsCurrentDialogueRestored())
+		HandleDialogueRestored(StoryFlowComponent->GetCurrentDialogue(), StoryFlowComponent);
 }
 
 void UStoryFlowDialogueWidget::UnbindFromComponent()
@@ -65,6 +81,10 @@ void UStoryFlowDialogueWidget::UnbindFromComponent()
 	StoryFlowComponent->OnDialogueUpdated.RemoveDynamic(this, &UStoryFlowDialogueWidget::HandleDialogueUpdated);
 	StoryFlowComponent->OnDialogueEnded.RemoveDynamic(this, &UStoryFlowDialogueWidget::HandleDialogueEnded);
 	StoryFlowComponent->OnVariableChanged.RemoveDynamic(this, &UStoryFlowDialogueWidget::HandleVariableChanged);
+	StoryFlowComponent->OnRollbackAvailabilityChanged.RemoveDynamic(this, &UStoryFlowDialogueWidget::HandleRollbackAvailabilityChanged);
+	if (RestoredListener) StoryFlowComponent->OnDialogueRestored.RemoveDynamic(RestoredListener, &UStoryFlowRestoredListener::Restore);
+	RestoredListener = nullptr;
+	if (BackButton) { BackButton->OnClicked.RemoveDynamic(this, &UStoryFlowDialogueWidget::HandleBackClicked); BackButton->SetIsEnabled(false); }
 
 	bIsBoundToComponent = false;
 }
@@ -85,6 +105,7 @@ void UStoryFlowDialogueWidget::HandleDialogueUpdated(const FStoryFlowDialogueSta
 
 void UStoryFlowDialogueWidget::HandleDialogueEnded()
 {
+	if (StoryFlowComponent && StoryFlowComponent->IsDialogueActive()) return;
 	OnDialogueEnded();
 }
 
@@ -102,6 +123,32 @@ void UStoryFlowDialogueWidget::OnDialogueUpdated_Implementation(const FStoryFlow
 	// Default implementation does nothing
 	// Override in Blueprint to update UI
 }
+
+void UStoryFlowDialogueWidget::OnDialogueRestored_Implementation(const FStoryFlowDialogueState&) {}
+void UStoryFlowDialogueWidget::OnRollbackAvailabilityChanged_Implementation(const FStoryFlowRollbackAvailability&) {}
+
+void UStoryFlowDialogueWidget::HandleDialogueRestored(const FStoryFlowDialogueState& State, UStoryFlowComponent* Source)
+{
+	if (!bIsBoundToComponent || Source != StoryFlowComponent || !Source || !Source->IsCurrentDialogueRestored() ||
+		Source->GetCurrentDialogue().NodeId != State.NodeId) return;
+	OnDialogueRestored(State);
+}
+void UStoryFlowDialogueWidget::HandleRollbackAvailabilityChanged(const FStoryFlowRollbackAvailability&)
+{
+	const auto Current = GetRollbackAvailability();
+	if (BackButton) BackButton->SetIsEnabled(bBackAllowed && Current.bCanGoBack);
+	OnRollbackAvailabilityChanged(Current);
+}
+void UStoryFlowDialogueWidget::HandleBackClicked() { if (bBackAllowed) GoBack(); }
+void UStoryFlowDialogueWidget::SetBackAllowed(bool Allowed) { bBackAllowed = Allowed; HandleRollbackAvailabilityChanged(GetRollbackAvailability()); }
+bool UStoryFlowDialogueWidget::CanGoBack() const { return StoryFlowComponent && StoryFlowComponent->CanGoBack(); }
+FStoryFlowRollbackAvailability UStoryFlowDialogueWidget::GetRollbackAvailability() const { return StoryFlowComponent ? StoryFlowComponent->GetRollbackAvailability() : FStoryFlowRollbackAvailability(); }
+FStoryFlowRollbackResult UStoryFlowDialogueWidget::GoBack()
+{
+	if (StoryFlowComponent) return StoryFlowComponent->GoBack();
+	FStoryFlowRollbackResult Result; Result.Reason = TEXT("disabled"); return Result;
+}
+void UStoryFlowDialogueWidget::BlockRollback(const FString& Reason) { if (StoryFlowComponent) StoryFlowComponent->BlockRollback(Reason); }
 
 void UStoryFlowDialogueWidget::OnDialogueStarted_Implementation()
 {

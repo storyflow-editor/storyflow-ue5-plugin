@@ -1,6 +1,7 @@
 // Copyright 2026 StoryFlow. All Rights Reserved.
 
 #include "Subsystems/StoryFlowSubsystem.h"
+#include "Evaluation/StoryFlowRollbackController.h"
 #include "StoryFlowRuntime.h"
 #include "Data/StoryFlowProjectAsset.h"
 #include "Data/StoryFlowScriptAsset.h"
@@ -38,6 +39,7 @@ void UStoryFlowSubsystem::Deinitialize()
 
 void UStoryFlowSubsystem::SetProject(UStoryFlowProjectAsset* NewProject)
 {
+	FStoryFlowRollbackMutationScope Content(this, true);
 	// The language can MOVE here (the snap branch below), and a game that swapped projects
 	// mid-session needs telling. Captured before anything changes; compared at the very end.
 	const FString LanguageOnEntry = CurrentLanguage;
@@ -190,6 +192,7 @@ bool UStoryFlowSubsystem::GetDataAssetBoolVariable(UStoryFlowDataAssetAsset* Dat
 
 bool UStoryFlowSubsystem::SetDataAssetBoolVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, bool bValue)
 {
+	FStoryFlowRollbackMutationScope HostMutation(this);
 	FStoryFlowVariant NewValue;
 	NewValue.SetBool(bValue);
 	return StoryFlowDataAssetAccess::SetScalar(*this, DataAsset, VariableName, EStoryFlowVariableType::Boolean, NewValue);
@@ -204,6 +207,7 @@ int32 UStoryFlowSubsystem::GetDataAssetIntVariable(UStoryFlowDataAssetAsset* Dat
 
 bool UStoryFlowSubsystem::SetDataAssetIntVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, int32 Value)
 {
+	FStoryFlowRollbackMutationScope HostMutation(this);
 	FStoryFlowVariant NewValue;
 	NewValue.SetInt(Value);
 	return StoryFlowDataAssetAccess::SetScalar(*this, DataAsset, VariableName, EStoryFlowVariableType::Integer, NewValue);
@@ -218,6 +222,7 @@ float UStoryFlowSubsystem::GetDataAssetFloatVariable(UStoryFlowDataAssetAsset* D
 
 bool UStoryFlowSubsystem::SetDataAssetFloatVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, float Value)
 {
+	FStoryFlowRollbackMutationScope HostMutation(this);
 	FStoryFlowVariant NewValue;
 	NewValue.SetFloat(Value);
 	return StoryFlowDataAssetAccess::SetScalar(*this, DataAsset, VariableName, EStoryFlowVariableType::Float, NewValue);
@@ -232,6 +237,7 @@ FString UStoryFlowSubsystem::GetDataAssetStringVariable(UStoryFlowDataAssetAsset
 
 bool UStoryFlowSubsystem::SetDataAssetStringVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, const FString& Value)
 {
+	FStoryFlowRollbackMutationScope HostMutation(this);
 	FStoryFlowVariant NewValue;
 	NewValue.SetString(Value);
 	return StoryFlowDataAssetAccess::SetScalar(*this, DataAsset, VariableName, EStoryFlowVariableType::String, NewValue);
@@ -246,6 +252,7 @@ FString UStoryFlowSubsystem::GetDataAssetEnumVariable(UStoryFlowDataAssetAsset* 
 
 bool UStoryFlowSubsystem::SetDataAssetEnumVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, const FString& Value)
 {
+	FStoryFlowRollbackMutationScope HostMutation(this);
 	FStoryFlowVariant NewValue;
 	// SetEnum, not SetString - the same reason the component gives: the seed types an enum
 	// declaration's value as Enum, and an overlay entry that differed would be invisible to a
@@ -268,17 +275,20 @@ TArray<FString> UStoryFlowSubsystem::GetDataAssetVariableNames(UStoryFlowDataAss
 
 bool UStoryFlowSubsystem::SetDataAssetArrayVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName, const TArray<FStoryFlowVariant>& Elements)
 {
+	FStoryFlowRollbackMutationScope HostMutation(this);
 	return StoryFlowDataAssetAccess::SetArray(*this, DataAsset, VariableName, Elements);
 }
 
 bool UStoryFlowSubsystem::SetDataAssetMapVariable(UStoryFlowDataAssetAsset* DataAsset, const FString& VariableName,
 	const TArray<FStoryFlowVariant>& Keys, const TArray<FStoryFlowVariant>& Values)
 {
+	FStoryFlowRollbackMutationScope HostMutation(this);
 	return StoryFlowDataAssetAccess::SetMap(*this, DataAsset, VariableName, Keys, Values);
 }
 
 void UStoryFlowSubsystem::ResetGlobalVariables()
 {
+	FStoryFlowRollbackMutationScope HostMutation(this);
 	NotifySharedStateChanged();
 	if (ProjectAsset)
 	{
@@ -291,6 +301,7 @@ void UStoryFlowSubsystem::ResetGlobalVariables()
 
 void UStoryFlowSubsystem::ResetRuntimeCharacters()
 {
+	FStoryFlowRollbackMutationScope HostMutation(this);
 	NotifySharedStateChanged();
 	if (ProjectAsset)
 	{
@@ -320,6 +331,7 @@ void UStoryFlowSubsystem::ResetRuntimeCharacters()
 
 void UStoryFlowSubsystem::ResetDataAssetSeed()
 {
+	FStoryFlowRollbackMutationScope HostMutation(this);
 	NotifySharedStateChanged();
 	// Contract §3: init installs the seed AND clears the overlay. Reseeding without clearing
 	// would leave session writes pointing at a table that no longer describes them.
@@ -537,6 +549,7 @@ bool UStoryFlowSubsystem::DeleteSave(const FString& SlotName, int32 UserIndex)
 
 void UStoryFlowSubsystem::ResetAllState()
 {
+	FStoryFlowRollbackMutationScope HostMutation(this);
 	ResetGlobalVariables();
 	ResetRuntimeCharacters();
 	// Contract §3: reset clears the OVERLAY only — the seed is content, not state.

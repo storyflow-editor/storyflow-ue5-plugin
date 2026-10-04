@@ -6,6 +6,7 @@
 #include "Import/StoryFlowMp3Decoder.h"
 #include "StoryFlowRuntime.h"
 #include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
 #include "HAL/FileManager.h"
 
 // Suppress all third-party warnings including C4706 (assignment within conditional)

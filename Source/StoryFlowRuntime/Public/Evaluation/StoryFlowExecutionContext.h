@@ -102,6 +102,13 @@ struct FNodeRuntimeState
 	bool bHasMapExecutionOutput = false;
 };
 
+/** Runtime state parked with each script activation, including recursive calls. */
+struct FStoryFlowActivationState
+{
+	TArray<FStoryFlowLoopContext> Loops;
+	TMap<FString, FNodeRuntimeState> Nodes;
+};
+
 /**
  * Runtime execution context for StoryFlow
  */
@@ -303,6 +310,12 @@ public:
 
 	/** Runtime state for each node, keyed by node ID. NOT stored on the shared asset. */
 	TMap<FString, FNodeRuntimeState> NodeRuntimeStates;
+	TArray<FStoryFlowActivationState> CallerActivations;
+	TOptional<uint32> RollbackRandomState;
+	uint32 NextRollbackRandom();
+	int32 RandomInt(int32 Min, int32 Max);
+	float RandomFloat(float Min, float Max);
+	FString ResolveCharacterName(const FStoryFlowCharacterDef& Character) const;
 
 	/**
 	 * Tracks node ids for which an "Unknown node type" warning has already been

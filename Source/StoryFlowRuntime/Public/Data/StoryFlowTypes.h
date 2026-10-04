@@ -261,7 +261,8 @@ enum class EStoryFlowNodeType : uint8
 	ArrayLengthDataAsset,
 	ArrayContainsDataAsset,
 	FindInDataAssetArray,
-	ForEachDataAssetLoop
+	ForEachDataAssetLoop,
+	BlockRollback
 };
 
 /**
@@ -318,6 +319,7 @@ USTRUCT(BlueprintType)
 struct STORYFLOWRUNTIME_API FStoryFlowVariant
 {
 	GENERATED_BODY()
+	friend struct FStoryFlowRollbackCloner;
 
 private:
 	UPROPERTY()
@@ -1542,6 +1544,40 @@ constexpr int32 STORYFLOW_MAX_SCRIPT_DEPTH = 20;
  * Project metadata
  */
 USTRUCT(BlueprintType)
+struct STORYFLOWRUNTIME_API FStoryFlowRollbackSettings
+{
+	GENERATED_BODY()
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow|Rollback")
+	int32 Version = 1;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow|Rollback")
+	bool bEnabled = false;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow|Rollback")
+	int32 HistoryLimit = 100;
+};
+
+USTRUCT(BlueprintType)
+struct STORYFLOWRUNTIME_API FStoryFlowRollbackAvailability
+{
+	GENERATED_BODY()
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow|Rollback")
+	bool bCanGoBack = false;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow|Rollback")
+	int32 Steps = 0;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow|Rollback")
+	FString Reason = TEXT("disabled");
+};
+
+USTRUCT(BlueprintType)
+struct STORYFLOWRUNTIME_API FStoryFlowRollbackResult
+{
+	GENERATED_BODY()
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow|Rollback")
+	bool bOk = false;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow|Rollback")
+	FString Reason;
+};
+
+USTRUCT(BlueprintType)
 struct STORYFLOWRUNTIME_API FStoryFlowProjectMetadata
 {
 	GENERATED_BODY()
@@ -1555,6 +1591,8 @@ struct STORYFLOWRUNTIME_API FStoryFlowProjectMetadata
 	/** Maximum nested script calls, excluding the root script. Imported from project settings. */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow", meta = (ClampMin = "1", ClampMax = "100"))
 	int32 MaxScriptNesting = STORYFLOW_MAX_SCRIPT_DEPTH;
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow|Rollback")
+	FStoryFlowRollbackSettings DialogueRollback;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	FDateTime Created;
