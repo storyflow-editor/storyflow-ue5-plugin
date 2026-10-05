@@ -96,10 +96,10 @@ public:
 	float Strength = 0.46f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Lipsync|Feel", meta = (ClampMin = "0.1", ClampMax = "3.0"))
-	float Sensitivity = 1.39f;
+	float Sensitivity = 1.05f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Lipsync|Feel", meta = (ClampMin = "0.0", ClampMax = "2.0"))
-	float JawBias = 0.72f;
+	float JawBias = 0.62f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Lipsync|Feel", meta = (ClampMin = "1.0", ClampMax = "40.0"))
 	float Smoothing = 20.0f;
