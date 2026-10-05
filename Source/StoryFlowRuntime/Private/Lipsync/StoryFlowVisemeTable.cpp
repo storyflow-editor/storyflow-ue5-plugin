@@ -14,7 +14,7 @@ namespace StoryFlowVisemeTable
 	{
 		static const TArray<FName> Value = {
 			TEXT("rest"), TEXT("AA"), TEXT("EE"), TEXT("IH"), TEXT("OH"),
-			TEXT("OO"), TEXT("MM"), TEXT("FF"), TEXT("TH"), TEXT("L")
+			TEXT("OO"), TEXT("MM"), TEXT("FF"), TEXT("TH"), TEXT("L"), TEXT("SS")
 		};
 		return Value;
 	}
@@ -27,24 +27,33 @@ namespace StoryFlowVisemeTable
 
 		Table.Add(TEXT("AA"), FPose{
 			{ TEXT("jawOpen"), 0.85f },
-			{ TEXT("mouthLowerDownLeft"), 0.32f }, { TEXT("mouthLowerDownRight"), 0.32f } });
+			{ TEXT("mouthLowerDownLeft"), 0.32f }, { TEXT("mouthLowerDownRight"), 0.32f },
+			{ TEXT("mouthPucker"), 0.30f },
+			{ TEXT("mouthPressLeft"), 0.16f }, { TEXT("mouthPressRight"), 0.16f },
+			{ TEXT("tongueIn"), 0.20f }, { TEXT("tongueUp"), 0.03f } });
 
 		Table.Add(TEXT("EE"), FPose{
 			{ TEXT("jawOpen"), 0.28f },
-			{ TEXT("mouthStretchLeft"), 0.78f }, { TEXT("mouthStretchRight"), 0.78f },
-			{ TEXT("mouthSmileLeft"), 0.32f }, { TEXT("mouthSmileRight"), 0.32f } });
+			{ TEXT("mouthStretchLeft"), 0.25f }, { TEXT("mouthStretchRight"), 0.25f },
+			{ TEXT("mouthSmileLeft"), 0.04f }, { TEXT("mouthSmileRight"), 0.04f },
+			{ TEXT("mouthPucker"), 0.16f },
+			{ TEXT("mouthPressLeft"), 0.12f }, { TEXT("mouthPressRight"), 0.12f },
+			{ TEXT("tongueIn"), 0.08f }, { TEXT("tongueUp"), 0.08f }, { TEXT("tongueRaise"), 0.10f } });
 
 		Table.Add(TEXT("IH"), FPose{
 			{ TEXT("jawOpen"), 0.36f },
-			{ TEXT("mouthStretchLeft"), 0.44f }, { TEXT("mouthStretchRight"), 0.44f } });
+			{ TEXT("mouthStretchLeft"), 0.25f }, { TEXT("mouthStretchRight"), 0.25f },
+			{ TEXT("mouthPucker"), 0.12f } });
 
 		Table.Add(TEXT("OH"), FPose{
 			{ TEXT("jawOpen"), 0.62f },
-			{ TEXT("mouthFunnel"), 0.72f }, { TEXT("mouthPucker"), 0.32f } });
+			{ TEXT("mouthFunnel"), 0.72f }, { TEXT("mouthPucker"), 0.32f },
+			{ TEXT("tongueIn"), 0.18f }, { TEXT("tongueDown"), 0.04f } });
 
 		Table.Add(TEXT("OO"), FPose{
 			{ TEXT("jawOpen"), 0.20f },
-			{ TEXT("mouthPucker"), 0.72f }, { TEXT("mouthFunnel"), 0.38f } });
+			{ TEXT("mouthPucker"), 0.72f }, { TEXT("mouthFunnel"), 0.38f },
+			{ TEXT("tongueIn"), 0.30f }, { TEXT("tongueUp"), 0.04f } });
 
 		Table.Add(TEXT("MM"), FPose{
 			{ TEXT("mouthClose"), 0.68f },

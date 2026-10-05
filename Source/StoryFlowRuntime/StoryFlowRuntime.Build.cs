@@ -19,10 +19,9 @@ public class StoryFlowRuntime : ModuleRules
 				"SlateCore",
 				"Json",
 				"JsonUtilities",
-				// Lipsync reads the LIVE output spectrum. UAudioComponent's own FFT and envelope readers are
-				// COOKED — they need per-asset analysis ticked on every dialogue wave — so submix analysis
-				// through UAudioMixerBlueprintLibrary is the only path that needs no per-asset setup.
-				"AudioMixer"
+				// Live source taps and the submix fallback need no per-asset audio analysis.
+				"AudioMixer",
+				"SignalProcessing"
 			}
 		);
 	}
