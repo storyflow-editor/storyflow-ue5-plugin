@@ -1,6 +1,7 @@
 // Copyright 2026 StoryFlow. All Rights Reserved.
 
 #include "StoryFlowEditor.h"
+#include "MetaHuman/StoryFlowMetaHumanDetails.h"
 #include "StoryFlowRuntime.h"
 #include "StoryFlowEditorSettings.h"
 #include "Subsystems/StoryFlowEditorSubsystem.h"
@@ -35,6 +36,7 @@
 
 void FStoryFlowEditorModule::StartupModule()
 {
+	RegisterStoryFlowMetaHumanDetails();
 	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Editor module loaded"));
 
 	// Create and register the style set
@@ -100,6 +102,7 @@ void FStoryFlowEditorModule::StartupModule()
 
 void FStoryFlowEditorModule::ShutdownModule()
 {
+	UnregisterStoryFlowMetaHumanDetails();
 	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Editor module unloaded"));
 
 	UnregisterToolbarExtension();

@@ -155,6 +155,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Lipsync")
 	void StartLipsync();
 
+	/** Effective analysis submix; face adapters may supply their own transient bus. */
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Lipsync")
+	virtual USoundSubmix* GetAnalysisSubmix() const { return AnalysisSubmix; }
+
 	/** Let the mouth close. Safe to call when nothing is playing. */
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Lipsync")
 	void StopLipsync();
@@ -200,6 +204,14 @@ protected:
 	virtual void Activate(bool bReset = false) override;
 	virtual void Deactivate() override;
 
+	/** Face adapters reuse dialogue ownership and analysis, with their own output and default rig map. */
+	virtual StoryFlowVisemeTable::FTable GetDefaultVisemeTable() const { return StoryFlowVisemeTable::Default(); }
+	virtual void ResolveFace(const StoryFlowVisemeTable::FTable& Table);
+	virtual void ApplyWeights();
+	virtual void ZeroOwnedMorphs();
+	const TMap<FName, float>& GetOutputWeights() const;
+	UAudioComponent* GetTrackedDialogueAudio() const;
+
 private:
 	friend struct FStoryFlowRollbackTestAccess;
 	UFUNCTION()
@@ -230,7 +242,6 @@ private:
 
 	bool SpeakerIsMine() const;
 	void ResolveSource();
-	void ResolveFace(const StoryFlowVisemeTable::FTable& Table);
 
 	/**
 	 * Re-resolve the face when the meshes we cached are gone OR have been replaced.
@@ -241,8 +252,6 @@ private:
 	 * leaves live components whose morphs are new and undriven, which is a mouth that quietly stops moving.
 	 */
 	bool RefreshFaceIfStale(float DeltaSeconds);
-	void ApplyWeights();
-	void ZeroOwnedMorphs();
 	void StartAnalysis();
 	void StopAnalysis();
 

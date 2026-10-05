@@ -28,6 +28,9 @@ public class StoryFlowEditor : ModuleRules
 			{
 				"UnrealEd",
 				"AssetTools",
+				"AssetRegistry",
+				"PropertyEditor",
+				"InputCore",
 				"EditorSubsystem",
 				"WebSockets",
 				"Slate",

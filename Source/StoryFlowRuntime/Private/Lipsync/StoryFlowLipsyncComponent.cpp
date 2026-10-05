@@ -95,7 +95,7 @@ void UStoryFlowLipsyncComponent::BeginPlay()
 		return;
 	}
 
-	ResolvedTable = VisemeMap != nullptr ? VisemeMap->ToTable() : StoryFlowVisemeTable::Default();
+	ResolvedTable = VisemeMap != nullptr && !VisemeMap->Poses.IsEmpty() ? VisemeMap->ToTable() : GetDefaultVisemeTable();
 	Driver = MakeUnique<FStoryFlowLipsyncDriver>(ResolvedTable);
 	ResolveFace(ResolvedTable);
 
@@ -255,7 +255,7 @@ void UStoryFlowLipsyncComponent::TickComponent(float DeltaTime, ELevelTick TickT
 			VoiceSpectrum->Read(AnalysisFrequencies, Magnitudes);
 		}
 		else
-			UAudioMixerBlueprintLibrary::GetMagnitudeForFrequencies(this, AnalysisFrequencies, Magnitudes, AnalysisSubmix);
+			UAudioMixerBlueprintLibrary::GetMagnitudeForFrequencies(this, AnalysisFrequencies, Magnitudes, GetAnalysisSubmix());
 		Driver->AdvanceFromMagnitudes(Magnitudes, RealDelta);
 		break;
 	case EMouthDrive::Idle:
@@ -779,7 +779,7 @@ void UStoryFlowLipsyncComponent::StartAnalysis()
 		return;
 	}
 
-	if (AnalysisSubmix == nullptr && !bWarnedMasterSubmix)
+	if (GetAnalysisSubmix() == nullptr && !bWarnedMasterSubmix)
 	{
 		// Once per component: analysis now starts with every conversation, not once per session.
 		bWarnedMasterSubmix = true;
@@ -792,13 +792,13 @@ void UStoryFlowLipsyncComponent::StartAnalysis()
 	// Remembered for StopAnalysis: the reference must be released on the key it was taken on, whatever
 	// AnalysisSubmix says by then.
 	AnalysingDeviceId = AudioDeviceIdOf(GetWorld());
-	AnalysingSubmix = FObjectKey(AnalysisSubmix);
+	AnalysingSubmix = FObjectKey(GetAnalysisSubmix());
 
 	const FAnalysisKey Key{ AnalysingDeviceId, AnalysingSubmix };
 	int32& Count = AnalysisRefCounts().FindOrAdd(Key);
 	if (Count++ == 0)
 	{
-		UAudioMixerBlueprintLibrary::StartAnalyzingOutput(this, AnalysisSubmix);
+		UAudioMixerBlueprintLibrary::StartAnalyzingOutput(this, GetAnalysisSubmix());
 	}
 	bAnalysing = true;
 }
@@ -826,4 +826,15 @@ void UStoryFlowLipsyncComponent::StopAnalysis()
 float UStoryFlowLipsyncComponent::GetSourceAnalysisRMS() const
 {
 	return VoiceSpectrum ? VoiceSpectrum->RMS : 0.f;
+}
+
+const TMap<FName, float>& UStoryFlowLipsyncComponent::GetOutputWeights() const
+{
+	static const TMap<FName, float> Empty;
+	return Driver.IsValid() ? Driver->Current() : Empty;
+}
+
+UAudioComponent* UStoryFlowLipsyncComponent::GetTrackedDialogueAudio() const
+{
+	return LineAudio.Get();
 }

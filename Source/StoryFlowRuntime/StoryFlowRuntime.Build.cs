@@ -24,5 +24,6 @@ public class StoryFlowRuntime : ModuleRules
 				"SignalProcessing"
 			}
 		);
+		PrivateDependencyModuleNames.Add("AnimGraphRuntime");
 	}
 }
