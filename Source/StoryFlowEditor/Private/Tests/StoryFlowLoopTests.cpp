@@ -264,7 +264,7 @@ namespace StoryFlowLoopTests
 	 * For Each [1, 2, 3] -> Run Script(Callee) -> Set Int(Last = element), Completed -> line Finished,
 	 * or End when this script is itself a called one.
 	 */
-	FScript PerElement(const FString& Callee, const bool bCalled)
+	FScript CallPerElement(const FString& Callee, const bool bCalled)
 	{
 		FScript Script;
 		Script.ForEach(TEXT("loop"), TEXT("Numbers"))
@@ -562,7 +562,7 @@ bool FStoryFlowLoopCalledBodyEndTest::RunTest(const FString& Parameters)
 	// caller: For Each [1, 2, 3] -> Run Script(callee), Completed -> Finished. The line with the loops
 	// sits in the called script, so the caller's own loop is parked while they run.
 	FFixture F;
-	F.Script(TEXT("caller"), PerElement(TEXT("callee"), false));
+	F.Script(TEXT("caller"), CallPerElement(TEXT("callee"), false));
 	F.Script(TEXT("callee"), LineWithLoops(false, true));
 	F.Script(TEXT("empty"), Empty());
 	if (!TestTrue(TEXT("fixture imported"), F.Import())) { return false; }
@@ -716,7 +716,7 @@ bool FStoryFlowLoopSaveScopeTest::RunTest(const FString& Parameters)
 	// A slot holds the variables and nothing of where the story stands, and Load is refused while a
 	// dialogue runs, so what can be held here is that neither disturbs the loop the caller parked.
 	FFixture F;
-	F.Script(TEXT("counting"), PerElement(TEXT("visit"), false));
+	F.Script(TEXT("counting"), CallPerElement(TEXT("visit"), false));
 	F.Script(TEXT("visit"), Visit());
 	if (!TestTrue(TEXT("fixture imported"), F.Import())) { return false; }
 	const auto Position = [&F]() { return FString::Printf(TEXT("%s last=%d errors=%d"), *F.Line(), F.Global(TEXT("Last")), F.Errors->Tags.Num()); };
@@ -766,7 +766,7 @@ bool FStoryFlowLoopReplacedPositionTest::RunTest(const FString& Parameters)
 	// iteration, so the lines shown count the iterations that ran.
 	FFixture F;
 	F.Script(TEXT("visits"), Story(TEXT("visiting"), true));
-	F.Script(TEXT("visiting"), PerElement(TEXT("visit"), true));
+	F.Script(TEXT("visiting"), CallPerElement(TEXT("visit"), true));
 	F.Script(TEXT("visit"), Visit());
 	F.Script(TEXT("halts"), Story(TEXT("halting"), true));
 	F.Script(TEXT("halting"), Halting());
