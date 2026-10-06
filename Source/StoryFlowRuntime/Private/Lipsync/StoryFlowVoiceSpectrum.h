@@ -6,6 +6,7 @@
 #include "DSP/FFTAlgorithm.h"
 #include "DSP/AudioFFT.h"
 #include "DSP/BufferVectorOperations.h"
+#include "DSP/MultithreadedPatching.h"
 #include "UObject/StrongObjectPtr.h"
 
 class UAudioComponent;
