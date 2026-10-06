@@ -68,6 +68,10 @@ public:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TMap<FString, UStoryFlowDataAssetAsset*> DataAssets;
 
+	/** data-assets.json localization contract. Legacy imports localize declarations only. */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
+	int32 DataAssetLocalizationVersion = 1;
+
 	/** Global string table */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "StoryFlow")
 	TMap<FString, FString> GlobalStrings;

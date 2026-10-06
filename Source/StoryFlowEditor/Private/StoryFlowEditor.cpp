@@ -1,6 +1,7 @@
 // Copyright 2026 StoryFlow. All Rights Reserved.
 
 #include "StoryFlowEditor.h"
+#include "MetaHuman/StoryFlowMetaHumanDetails.h"
 #include "StoryFlowRuntime.h"
 #include "StoryFlowEditorSettings.h"
 #include "Subsystems/StoryFlowEditorSubsystem.h"
@@ -22,11 +23,12 @@
 #include "HAL/PlatformProcess.h"
 #include "DesktopPlatformModule.h"
 #include "Editor.h"
+#include "Framework/Application/SlateApplication.h"
 
 #define LOCTEXT_NAMESPACE "FStoryFlowEditorModule"
 
 #define STORYFLOW_STYLE_NAME "StoryFlowEditorStyle"
-#define STORYFLOW_VERSION "1.3.0"
+#define STORYFLOW_VERSION "1.3.1"
 #define STORYFLOW_URL_EDITOR_DOCS "https://storyflow-editor.com/docs"
 #define STORYFLOW_URL_PLUGIN_DOCS "https://storyflow-editor.com/integrations/unreal-engine/docs"
 #define STORYFLOW_URL_CHANGELOG "https://storyflow-editor.com/changelog"
@@ -34,6 +36,7 @@
 
 void FStoryFlowEditorModule::StartupModule()
 {
+	RegisterStoryFlowMetaHumanDetails();
 	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Editor module loaded"));
 
 	// Create and register the style set
@@ -99,6 +102,7 @@ void FStoryFlowEditorModule::StartupModule()
 
 void FStoryFlowEditorModule::ShutdownModule()
 {
+	UnregisterStoryFlowMetaHumanDetails();
 	UE_LOG(LogStoryFlow, Log, TEXT("StoryFlow: Editor module unloaded"));
 
 	UnregisterToolbarExtension();

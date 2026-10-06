@@ -395,7 +395,7 @@ public:
 	 * Notify the subsystem that a dialogue has started (called by StoryFlowComponent).
 	 * Used to guard against loading mid-dialogue.
 	 */
-	void NotifyDialogueStarted() { ++ActiveDialogueCount; }
+	void NotifyDialogueStarted() { ++ActiveDialogueCount; if (ActiveDialogueCount > 1) InvalidateRollback(TEXT("multipleSessions")); }
 
 	/**
 	 * Notify the subsystem that a dialogue has ended (called by StoryFlowComponent).
@@ -414,6 +414,16 @@ public:
 	/** Resolve string table keys in string-type variable initial values (scalar + array + string-valued map entries; map keys never resolve) using global string table */
 	void ResolveStringVariableValues(TMap<FString, FStoryFlowVariable>& Variables);
 
+private:
+	friend struct FStoryFlowRollbackMutationScope;
+	TArray<TSharedPtr<class FStoryFlowRollbackController>> RollbackOwners;
+	int32 RollbackMutationDepth = 0, RollbackContentDepth = 0;
+public:
+	void RegisterRollback(TSharedPtr<class FStoryFlowRollbackController> Owner);
+	void UnregisterRollback(class FStoryFlowRollbackController* Owner);
+	void InvalidateRollback(const FString& Reason = TEXT("barrier"), bool bPermanent = false);
+	bool OwnsRollback(const class FStoryFlowRollbackController* Owner) const;
+	bool IsRollbackMutationActive() const { return RollbackMutationDepth > 0; }
 private:
 	StoryFlowDataAssets::FSharedState SharedState;
 	/** Try to auto-load project from default location */

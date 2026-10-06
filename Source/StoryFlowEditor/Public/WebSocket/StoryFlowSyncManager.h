@@ -6,6 +6,7 @@
 #include "UObject/StrongObjectPtr.h"
 
 class FStoryFlowWebSocketClient;
+class FJsonObject;
 class UStoryFlowProjectAsset;
 
 DECLARE_MULTICAST_DELEGATE_OneParam(FOnStoryFlowSyncComplete, UStoryFlowProjectAsset* /* Project */);

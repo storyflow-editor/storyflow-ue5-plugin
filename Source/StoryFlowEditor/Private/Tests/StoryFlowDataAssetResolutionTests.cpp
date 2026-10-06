@@ -1024,4 +1024,169 @@ bool FStoryFlowDataAssetMalformedOverrideTest::RunTest(const FString& Parameters
 	return true;
 }
 
+namespace StoryFlowDataAssetTestHelpers
+{
+	FString OverrideLocalizationJson(const FString& VersionField, bool bTranslate = true)
+	{
+		const FString Json = TEXT(R"JSON({VERSION_FIELD "dataAssets": {
+			"base": {"id":"base","variables":[
+				{"id":"title","name":"Title","type":"string","localizable":TRANSLATE,"value":"title.value"},
+				{"id":"tags","name":"Tags","type":"string","isArray":true,"localizable":TRANSLATE,"value":["tags.value.0"]},
+				{"id":"labels","name":"Labels","type":"map","keyType":"string","valueType":"string","localizable":TRANSLATE,"value":[{"key":" a.b ","value":"labels.value. a.b "}]}
+			],"overrides":{}},
+			"child":{"id":"child","parent":"base","variables":[],"overrides":{
+				"title":"data.child.title.value","tags":["data.child.tags.value.0"],
+				"labels":[{"key":" a.b ","value":"data.child.labels.value. a.b "}]
+			}},
+			"leaf":{"id":"leaf","parent":"child","variables":[],"overrides":{}}
+		},"strings":{"en":{
+			"title.value":"Base title","tags.value.0":"Base tag","labels.value. a.b ":"Base label",
+			"data.child.title.value":"Child title","data.child.tags.value.0":"Child tag","data.child.labels.value. a.b ":"Child label"
+		},"fr":{
+			"title.value":"Titre de base","tags.value.0":"Tag de base","labels.value. a.b ":"Libelle de base",
+			"data.child.title.value":"Titre enfant","data.child.tags.value.0":"Tag enfant","data.child.labels.value. a.b ":"Libelle enfant"
+		}}})JSON");
+		return Json.Replace(TEXT("VERSION_FIELD"), *VersionField).Replace(TEXT("TRANSLATE"), bTranslate ? TEXT("true") : TEXT("false"));
+	}
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetOverrideLocalizationTest,
+	"StoryFlow.DataAssets.Localization.VersionedOverrides", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FStoryFlowDataAssetOverrideLocalizationTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowDataAssetTestHelpers;
+	CleanUp();
+	StoryFlowDataAssets::FSeed Seed;
+	UStoryFlowProjectAsset* Project = ImportSeedJson(OverrideLocalizationJson(TEXT("\"localizationVersion\":2,")), Seed);
+	if (!TestNotNull(TEXT("versioned seed imports"), Project)) { CleanUp(); return false; }
+	StoryFlowDataAssets::FOverlay Overlay;
+	const StoryFlowDataAssets::FStoreRef Store{&Seed, &Overlay};
+	FStoryFlowVariant Value;
+	StoryFlowDataAssets::TryRead(Store, Project, TEXT("fr"), TEXT("base"), TEXT("title"), Value);
+	TestEqual(TEXT("declaration keys retain their existing translations"), Value.GetString(), FString(TEXT("Titre de base")));
+	for (const FString Asset : {FString(TEXT("child")), FString(TEXT("leaf"))})
+	{
+		StoryFlowDataAssets::TryRead(Store, Project, TEXT("fr"), Asset, TEXT("title"), Value);
+		TestEqual(TEXT("nearest authored scalar override translates for its descendants"), Value.GetString(), FString(TEXT("Titre enfant")));
+		StoryFlowDataAssets::TryRead(Store, Project, TEXT("fr"), Asset, TEXT("tags"), Value);
+		if (TestEqual(TEXT("override array shape survives"), Value.GetArray().Num(), 1))
+			TestEqual(TEXT("override array element translates"), Value.GetArray()[0].GetString(), FString(TEXT("Tag enfant")));
+		StoryFlowDataAssets::TryRead(Store, Project, TEXT("fr"), Asset, TEXT("labels"), Value);
+		if (TestEqual(TEXT("override map shape survives"), Value.GetMap().Num(), 1))
+		{
+			TestEqual(TEXT("opaque map key remains literal"), Value.GetMap()[0].Key.GetString(), FString(TEXT(" a.b ")));
+			TestEqual(TEXT("override map value translates"), Value.GetMap()[0].Value.GetString(), FString(TEXT("Libelle enfant")));
+		}
+	}
+	StoryFlowDataAssets::TryRead(Store, Project, TEXT("en"), TEXT("leaf"), TEXT("title"), Value);
+	TestEqual(TEXT("the next read observes the language change"), Value.GetString(), FString(TEXT("Child title")));
+	TestEqual(TEXT("read-time translation never mutates the seed"), StoryFlowDataAssets::Resolve(Seed, Overlay, TEXT("child"), TEXT("title")).GetString(), FString(TEXT("data.child.title.value")));
+	CleanUp();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetLocalizationOptOutTest,
+	"StoryFlow.DataAssets.Localization.OptOutAndSerializedMetadata", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FStoryFlowDataAssetLocalizationOptOutTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowDataAssetTestHelpers;
+	CleanUp();
+	StoryFlowDataAssets::FSeed Seed;
+	UStoryFlowProjectAsset* Project = ImportSeedJson(OverrideLocalizationJson(TEXT("\"localizationVersion\":2,"), false), Seed);
+	if (!TestNotNull(TEXT("opt-out seed imports"), Project)) { CleanUp(); return false; }
+	FGCObjectScopeGuard ProjectGuard(Project);
+	// Both project metadata and declaration settings must survive UObject serialization.
+	TArray<uint8> Bytes;
+	FObjectWriter(Project, Bytes, false, false, false);
+	UStoryFlowProjectAsset* Reloaded = NewObject<UStoryFlowProjectAsset>();
+	FGCObjectScopeGuard ReloadedGuard(Reloaded);
+	FObjectReader(Reloaded, Bytes);
+	Reloaded->PostLoad();
+	for (auto& Pair : Reloaded->DataAssets) Pair.Value = SerializeAndPostLoad(Pair.Value);
+	StoryFlowDataAssets::BuildSeed(Reloaded->DataAssets, Seed);
+	StoryFlowDataAssets::FOverlay Overlay;
+	const StoryFlowDataAssets::FStoreRef Store{&Seed, &Overlay};
+	FStoryFlowVariant Value;
+	for (const FString Asset : {FString(TEXT("base")), FString(TEXT("leaf"))})
+	{
+		const FString Prefix = Asset == TEXT("base") ? TEXT("") : TEXT("data.child.");
+		StoryFlowDataAssets::TryRead(Store, Reloaded, TEXT("fr"), Asset, TEXT("title"), Value);
+		TestEqual(TEXT("opted-out scalar remains literal even when it equals a known key"), Value.GetString(), Prefix + TEXT("title.value"));
+		StoryFlowDataAssets::TryRead(Store, Reloaded, TEXT("fr"), Asset, TEXT("tags"), Value);
+		if (TestEqual(TEXT("opt-out array survives serialization"), Value.GetArray().Num(), 1))
+			TestEqual(TEXT("opted-out array values remain literal"), Value.GetArray()[0].GetString(), Prefix + TEXT("tags.value.0"));
+		StoryFlowDataAssets::TryRead(Store, Reloaded, TEXT("fr"), Asset, TEXT("labels"), Value);
+		if (TestEqual(TEXT("opt-out map survives serialization"), Value.GetMap().Num(), 1))
+			TestEqual(TEXT("opted-out map values remain literal"), Value.GetMap()[0].Value.GetString(), Prefix + TEXT("labels.value. a.b "));
+	}
+	// Reimporting the setting must replace it rather than retain a cached false flag.
+	Project = ImportSeedJson(OverrideLocalizationJson(TEXT("\"localizationVersion\":2,")), Seed);
+	if (TestNotNull(TEXT("translation-enabled reimport succeeds"), Project))
+	{
+		StoryFlowDataAssets::TryRead(Store, Project, TEXT("fr"), TEXT("leaf"), TEXT("title"), Value);
+		TestEqual(TEXT("reimport replaces the declaration's opt-out"), Value.GetString(), FString(TEXT("Titre enfant")));
+		Bytes.Empty();
+		FObjectWriter(Project, Bytes, false, false, false);
+		FObjectReader(Reloaded, Bytes);
+		Reloaded->PostLoad();
+		for (auto& Pair : Reloaded->DataAssets) Pair.Value = SerializeAndPostLoad(Pair.Value);
+		StoryFlowDataAssets::BuildSeed(Reloaded->DataAssets, Seed);
+		StoryFlowDataAssets::TryRead(Store, Reloaded, TEXT("fr"), TEXT("leaf"), TEXT("title"), Value);
+		TestEqual(TEXT("versioned override translation survives serialized reload"), Value.GetString(), FString(TEXT("Titre enfant")));
+	}
+	CleanUp();
+	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetLocalizationCompatibilityTest,
+	"StoryFlow.DataAssets.Localization.LegacyReimportAndSessionWrites", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FStoryFlowDataAssetLocalizationCompatibilityTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowDataAssetTestHelpers;
+	CleanUp();
+	StoryFlowDataAssets::FSeed Seed;
+	StoryFlowDataAssets::FOverlay Overlay;
+	const StoryFlowDataAssets::FStoreRef Store{&Seed, &Overlay};
+	FStoryFlowVariant Value;
+	UStoryFlowProjectAsset* Project = nullptr;
+	for (const FString Version : {FString(TEXT("")), FString(TEXT("\"localizationVersion\":1,")),
+		FString(TEXT("\"localizationVersion\":2,")), FString(TEXT("\"localizationVersion\":2,")),
+		FString(TEXT("\"localizationVersion\":\"2\",")), FString(TEXT("\"localizationVersion\":3,")),
+		FString(TEXT("\"localizationVersion\":2.5,")), FString(TEXT("\"localizationVersion\":null,")), FString(TEXT(""))})
+	{
+		Project = ImportSeedJson(OverrideLocalizationJson(Version).Replace(TEXT("\"localizable\":true,"), TEXT("")), Seed);
+		if (!TestNotNull(TEXT("version-only reimport succeeds"), Project)) { CleanUp(); return false; }
+		StoryFlowDataAssets::TryRead(Store, Project, TEXT("fr"), TEXT("base"), TEXT("title"), Value);
+		TestEqual(TEXT("absent declaration setting defaults to translatable"), Value.GetString(), FString(TEXT("Titre de base")));
+		StoryFlowDataAssets::TryRead(Store, Project, TEXT("fr"), TEXT("leaf"), TEXT("title"), Value);
+		TestEqual(*FString::Printf(TEXT("only numeric v2 translates file overrides after reimport (%s)"), *Version), Value.GetString(), Version == TEXT("\"localizationVersion\":2,") ? FString(TEXT("Titre enfant")) : FString(TEXT("data.child.title.value")));
+	}
+	Project = ImportSeedJson(OverrideLocalizationJson(TEXT("\"localizationVersion\":2,")), Seed);
+	if (!TestNotNull(TEXT("v2 session seed imports"), Project)) { CleanUp(); return false; }
+	for (const FString Variable : {FString(TEXT("title")), FString(TEXT("tags")), FString(TEXT("labels"))})
+	{
+		const FStoryFlowVariant Authored = StoryFlowDataAssets::Resolve(Seed, Overlay, TEXT("child"), Variable);
+		TestTrue(TEXT("writing an authored-key-looking value succeeds"), StoryFlowDataAssets::TrySet(Seed, Overlay, TEXT("child"), Variable, Authored));
+	}
+	TMap<FString, FStoryFlowVariable> Globals;
+	TMap<FString, FStoryFlowCharacterDef> Characters;
+	TSet<FString> OnceOnly;
+	const FString Saved = StoryFlowSaveHelpers::SerializeSaveData(Globals, Characters, OnceOnly, Seed, Overlay);
+	Overlay.Empty();
+	TestTrue(TEXT("session writes restore"), StoryFlowSaveHelpers::DeserializeSaveData(Saved, Globals, Characters, OnceOnly, Seed, Overlay));
+	StoryFlowDataAssets::TryRead(Store, Project, TEXT("fr"), TEXT("leaf"), TEXT("title"), Value);
+	TestEqual(TEXT("restored inherited session scalar stays literal"), Value.GetString(), FString(TEXT("data.child.title.value")));
+	StoryFlowDataAssets::TryRead(Store, Project, TEXT("en"), TEXT("leaf"), TEXT("tags"), Value);
+	if (TestEqual(TEXT("restored array survives"), Value.GetArray().Num(), 1))
+		TestEqual(TEXT("restored array stays literal in another language"), Value.GetArray()[0].GetString(), FString(TEXT("data.child.tags.value.0")));
+	StoryFlowDataAssets::TryRead(Store, Project, TEXT("fr"), TEXT("leaf"), TEXT("labels"), Value);
+	if (TestEqual(TEXT("restored map survives"), Value.GetMap().Num(), 1))
+		TestEqual(TEXT("restored map values stay literal"), Value.GetMap()[0].Value.GetString(), FString(TEXT("data.child.labels.value. a.b ")));
+	StoryFlowDataAssets::ResetOverlay(Overlay);
+	StoryFlowDataAssets::TryRead(Store, Project, TEXT("fr"), TEXT("leaf"), TEXT("title"), Value);
+	TestEqual(TEXT("reset restores authored override localization"), Value.GetString(), FString(TEXT("Titre enfant")));
+	CleanUp();
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

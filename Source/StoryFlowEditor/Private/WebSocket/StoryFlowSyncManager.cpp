@@ -1,6 +1,7 @@
 // Copyright 2026 StoryFlow. All Rights Reserved.
 
 #include "WebSocket/StoryFlowSyncManager.h"
+#include "Dom/JsonObject.h"
 #include "StoryFlowRuntime.h"
 #include "WebSocket/StoryFlowWebSocketClient.h"
 #include "Import/StoryFlowImporter.h"

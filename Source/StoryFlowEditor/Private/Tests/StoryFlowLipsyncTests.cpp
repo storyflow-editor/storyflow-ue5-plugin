@@ -666,4 +666,82 @@ bool FStoryFlowLipsyncManualSurvivesDialogueTest::RunTest(const FString& Paramet
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowLipsyncBroadbandCalibrationTest,
+    "StoryFlow.Lipsync.BroadbandCalibrationSeparatesVowels",
+    EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FStoryFlowLipsyncBroadbandCalibrationTest::RunTest(const FString& Parameters)
+{
+    using namespace StoryFlowLipsyncTestHelpers;
+    // Two 24-band mixer snapshots from different syllables in the demo recording.
+    // Both saturated the original centroid at EE, despite different spectral balance.
+    const TArray<float> Rounded = {0.225459f, 0.038149f, 0.065496f, 0.004047f, 0.003854f, 0.006124f, 0.005453f, 0.005577f, 0.004852f, 0.011677f, 0.024018f, 0.004392f, 0.004730f, 0.005595f, 0.003086f, 0.002760f, 0.006922f, 0.003290f, 0.001756f, 0.001987f, 0.000508f, 0.001501f, 0.002072f, 0.002075f};
+    const TArray<float> Spread = {5.937835f, 3.068410f, 2.017326f, 10.631539f, 1.097391f, 0.214983f, 0.165242f, 0.170387f, 0.159038f, 1.025327f, 2.729825f, 0.415630f, 0.325098f, 0.364233f, 4.312669f, 0.924465f, 0.259884f, 0.122447f, 0.279529f, 0.074249f, 0.218343f, 0.383125f, 0.186893f, 0.058610f};
+    // Isolate spectrum calibration from a particular rig's stretch limits.
+    const StoryFlowVisemeTable::FTable CalibrationTable = {
+        {TEXT("OO"), {{TEXT("jawOpen"), .2f}, {TEXT("mouthPucker"), .8f}}},
+        {TEXT("OH"), {{TEXT("jawOpen"), .6f}, {TEXT("mouthPucker"), .5f}}},
+        {TEXT("AA"), {{TEXT("jawOpen"), .85f}}},
+        {TEXT("EE"), {{TEXT("jawOpen"), .28f}, {TEXT("mouthStretchLeft"), .8f}}}
+    };
+    FStoryFlowLipsyncDriver Low(CalibrationTable);
+    FStoryFlowLipsyncDriver High(CalibrationTable);
+    for (auto* Driver : {&Low, &High})
+    {
+        Driver->FullScale = 32.f;
+        Driver->VowelScale = 4.f;
+        Driver->VowelOffset = -1.1f;
+        Driver->SpectralContrast = 2.f;
+    }
+    Settle(Low, Rounded);
+    Settle(High, Spread);
+    TestTrue(TEXT("Rounded speech no longer pins the wide vowel"), Low.Centroid() < .35f);
+    TestTrue(TEXT("Bright speech still reaches the open/spread end"), High.Centroid() > .65f && High.Centroid() < .95f);
+    TestTrue(TEXT("The actual mouth rounds on the low syllable"), WeightOf(Low, TEXT("mouthPucker")) > WeightOf(High, TEXT("mouthPucker")) + .1f);
+    TestTrue(TEXT("The actual mouth spreads on the bright syllable"), WeightOf(High, TEXT("mouthStretchLeft")) > WeightOf(Low, TEXT("mouthStretchLeft")) + .03f);
+    Settle(Low, TArray<float>{}, 60);
+    TestTrue(TEXT("Calibration still returns the jaw to rest"), WeightOf(Low, TEXT("jawOpen")) < .001f);
+    TestTrue(TEXT("Calibration releases round lips at rest"), WeightOf(Low, TEXT("mouthPucker")) < .001f);
+    return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowArticulationTest, "StoryFlow.Lipsync.SpectralArticulationSeparatesSounds", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FStoryFlowArticulationTest::RunTest(const FString& Parameters)
+{
+ // Median normalized spectra from the comparison voice's estimated sound intervals.
+ // No recording times or phoneme labels are supplied to the driver.
+ const TArray<float> AA = {4.5638395f, 3.3948797f, 6.2837417f, 8.0000000f, 3.8874296f, 1.6700996f, 1.9254578f, 0.5760763f, 0.2302174f, 0.1066827f, 0.1166886f, 0.0938568f, 0.2558874f, 0.4739501f, 0.6472464f, 0.3766224f, 0.2991101f, 0.2205013f, 0.2532450f, 0.1732813f, 0.1459124f, 0.0846823f, 0.1716618f, 0.4784366f};
+ const TArray<float> UW = {2.9408187f, 8.0000000f, 3.6435724f, 0.5051192f, 0.2034790f, 0.0858681f, 0.1604327f, 0.3337183f, 0.3196717f, 0.2147750f, 0.5994444f, 0.3105703f, 0.7424886f, 0.1371866f, 0.0533936f, 0.0839217f, 0.1155893f, 0.0643006f, 0.1023510f, 0.0338608f, 0.0797036f, 0.0736186f, 0.0238007f, 0.0224656f};
+ const TArray<float> IY = {3.1999630f, 8.0000000f, 3.8742417f, 0.7173810f, 0.1962019f, 0.1253982f, 0.0693804f, 0.0584704f, 0.0861837f, 0.2057375f, 0.4408576f, 0.5205051f, 1.1689148f, 0.5477177f, 0.3212263f, 0.1219156f, 0.0938451f, 0.1095114f, 0.1745078f, 0.1540079f, 0.0825296f, 0.0532116f, 0.0613775f, 0.0704049f};
+ const TArray<float> M = {5.6308946f, 8.0000000f, 4.4280608f, 1.2038556f, 0.8340944f, 1.0155546f, 0.5861614f, 0.2316687f, 0.1009630f, 0.1744277f, 0.2570279f, 0.2765488f, 0.5936318f, 0.2198207f, 0.0616570f, 0.0615312f, 0.0525952f, 0.0629775f, 0.0929129f, 0.0390245f, 0.0280979f, 0.0304940f, 0.0154473f, 0.0432758f};
+ const TArray<float> S = {2.7210916f, 1.6577262f, 2.0424855f, 1.0707995f, 0.7632159f, 0.8244199f, 0.4780119f, 0.4176268f, 1.1365432f, 1.6889101f, 1.1313594f, 0.9467233f, 1.3474261f, 1.6206611f, 1.0042480f, 0.7454493f, 1.3812182f, 1.3656784f, 2.9090891f, 1.7947428f, 1.5337434f, 2.4566829f, 3.6452522f, 7.9999999f};
+ StoryFlowVisemeTable::FTable Table;
+ Table.Add(TEXT("rest"), {});
+ Table.Add(TEXT("AA"), {{TEXT("jawOpen"), .8f}});
+ Table.Add(TEXT("OH"), {{TEXT("jawOpen"), .65f}, {TEXT("mouthPucker"), .5f}});
+ Table.Add(TEXT("OO"), {{TEXT("jawOpen"), .25f}, {TEXT("mouthPucker"), .9f}});
+ Table.Add(TEXT("EE"), {{TEXT("jawOpen"), .25f}, {TEXT("mouthStretchLeft"), .5f}});
+ Table.Add(TEXT("SS"), {{TEXT("jawOpen"), .12f}, {TEXT("mouthStretchLeft"), .3f}});
+ Table.Add(TEXT("MM"), {{TEXT("jawOpen"), .1f}, {TEXT("mouthClose"), 1.f}});
+ auto Pose = [&](const TArray<float>& Spectrum) {
+  FStoryFlowLipsyncDriver Driver(Table);
+  Driver.bSpectralArticulation = true;
+  Driver.FullScale = 32.f;
+  for (int32 I = 0; I < 60; ++I) Driver.AdvanceFromMagnitudes(Spectrum, 1.f/60.f);
+  return Driver.Current();
+ };
+ const auto Open = Pose(AA), Sibilant = Pose(S), Round = Pose(UW), Wide = Pose(IY), Closed = Pose(M);
+ TestTrue(TEXT("A sibilant must not open the jaw like an open vowel"), Open.FindRef(TEXT("jawOpen")) > Sibilant.FindRef(TEXT("jawOpen")) + .08f);
+ TestTrue(TEXT("Rounded and wide vowels with similar low peaks need different lips"), Round.FindRef(TEXT("mouthPucker")) > Wide.FindRef(TEXT("mouthPucker")) + .04f);
+ TestTrue(TEXT("Low nasal energy can bring lips together during speech"), Closed.FindRef(TEXT("mouthClose")) > Open.FindRef(TEXT("mouthClose")) + .02f);
+ const auto Silence = Pose(TArray<float>({0.f,0.f,0.f,0.f}));
+ for (const auto& Value : Silence) TestEqual(TEXT("Silence releases lips instead of clenching"), Value.Value, 0.f);
+ FStoryFlowLipsyncDriver Legacy(Table), Blended(Table);
+ Legacy.FullScale = Blended.FullScale = 32.f;
+ Blended.bSpectralArticulation = true;
+ Blended.ArticulationBlend = 0.f;
+ for (int32 I = 0; I < 60; ++I) { Legacy.AdvanceFromMagnitudes(AA, 1.f/60.f); Blended.AdvanceFromMagnitudes(AA, 1.f/60.f); }
+ TestEqual(TEXT("Zero articulation blend preserves the original speaking pose"), Blended.Current().FindRef(TEXT("jawOpen")), Legacy.Current().FindRef(TEXT("jawOpen")), .0001f);
+ return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

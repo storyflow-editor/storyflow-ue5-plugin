@@ -13,9 +13,6 @@ class UStoryFlowProjectAsset;
 // Forward declaration
 struct FStoryFlowEvaluator;
 
-/** Maximum depth for script nesting */
-constexpr int32 STORYFLOW_MAX_SCRIPT_DEPTH = 20;
-
 /** Maximum depth for flow nesting */
 constexpr int32 STORYFLOW_MAX_FLOW_DEPTH = 50;
 
@@ -103,6 +100,13 @@ struct FNodeRuntimeState
 	/** Detached map mutation output, retained until this execution context is reset. */
 	FStoryFlowVariable MapExecutionOutput;
 	bool bHasMapExecutionOutput = false;
+};
+
+/** Runtime state parked with each script activation, including recursive calls. */
+struct FStoryFlowActivationState
+{
+	TArray<FStoryFlowLoopContext> Loops;
+	TMap<FString, FNodeRuntimeState> Nodes;
 };
 
 /**
@@ -306,6 +310,12 @@ public:
 
 	/** Runtime state for each node, keyed by node ID. NOT stored on the shared asset. */
 	TMap<FString, FNodeRuntimeState> NodeRuntimeStates;
+	TArray<FStoryFlowActivationState> CallerActivations;
+	TOptional<uint32> RollbackRandomState;
+	uint32 NextRollbackRandom();
+	int32 RandomInt(int32 Min, int32 Max);
+	float RandomFloat(float Min, float Max);
+	FString ResolveCharacterName(const FStoryFlowCharacterDef& Character) const;
 
 	/**
 	 * Tracks node ids for which an "Unknown node type" warning has already been
@@ -551,8 +561,11 @@ public:
 
 	// === Validation ===
 
+	/** Configured script nesting limit, or the legacy default for an invalid/missing project. */
+	int32 GetMaxScriptDepth() const;
+
 	/** Check if we're at max script depth */
-	bool IsAtMaxScriptDepth() const { return CallStack.Num() >= STORYFLOW_MAX_SCRIPT_DEPTH; }
+	bool IsAtMaxScriptDepth() const { return CallStack.Num() >= GetMaxScriptDepth(); }
 
 	/** Check if we're at max flow depth */
 	bool IsAtMaxFlowDepth() const { return FlowCallStack.Num() >= STORYFLOW_MAX_FLOW_DEPTH; }

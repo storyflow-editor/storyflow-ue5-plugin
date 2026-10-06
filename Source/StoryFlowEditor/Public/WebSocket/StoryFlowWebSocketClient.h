@@ -4,6 +4,7 @@
 
 #include "CoreMinimal.h"
 #include "IWebSocket.h"
+class FJsonObject;
 
 DECLARE_MULTICAST_DELEGATE_TwoParams(FOnStoryFlowMessageReceived, const FString& /* Type */, TSharedPtr<FJsonObject> /* Payload */);
 DECLARE_MULTICAST_DELEGATE_OneParam(FOnStoryFlowConnectionStateChanged, bool /* bConnected */);

@@ -1,6 +1,7 @@
 // Copyright 2026 StoryFlow. All Rights Reserved.
 
 #include "Import/StoryFlowImporter.h"
+#include "Evaluation/StoryFlowRollbackController.h"
 #include "StoryFlowRuntime.h"
 #include "Data/StoryFlowProjectAsset.h"
 #include "Data/StoryFlowScriptAsset.h"
@@ -8,6 +9,7 @@
 #include "Data/StoryFlowDataAssetAsset.h"
 #include "Data/StoryFlowDataAssetStore.h"
 #include "Misc/FileHelper.h"
+#include "Misc/FeedbackContext.h"
 #include "Misc/PackageName.h"
 #include "Misc/Crc.h"
 #include "Misc/SecureHash.h"
@@ -17,6 +19,7 @@
 #include "Serialization/JsonWriter.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "UObject/SavePackage.h"
+#include "UObject/UObjectIterator.h"
 #include "AssetToolsModule.h"
 #include "IAssetTools.h"
 #include "Factories/TextureFactory.h"
@@ -118,8 +121,11 @@ namespace
 	    8: ParseNodeType learns getDataAssetVariableNames (contract §11.1), so a
 	    script imported under 7 that carries one — parsed then as Unknown, and
 	    Node.Type persists in the .uasset — must re-parse or the node answers
-	    empty arrays forever. */
-	constexpr const TCHAR* ImportHashSchemaVersion = TEXT("9");
+	    empty arrays forever.
+	    10: persist the Data Asset localization version and declaration opt-out flags, including
+	    assets whose identical source was previously imported without this metadata.
+	    11: persist the project's Maximum Script Nesting setting. */
+	constexpr const TCHAR* ImportHashSchemaVersion = TEXT("12");
 
 	FString SerializeJsonCondensed(const TSharedRef<FJsonObject>& JsonObject)
 	{
@@ -210,6 +216,12 @@ void UStoryFlowImporter::ImportDataAssets(const FString& BuildDirectory, const F
 		if (DataAssetsJson.IsValid())
 		{
 			InOutProjectHashParts.Add(SerializeJsonCondensed(DataAssetsJson.ToSharedRef()));
+			double LocalizationVersion = 1;
+			if (DataAssetsJson->HasTypedField<EJson::Number>(TEXT("localizationVersion"))
+				&& DataAssetsJson->TryGetNumberField(TEXT("localizationVersion"), LocalizationVersion) && LocalizationVersion == 2)
+			{
+				ProjectAsset->DataAssetLocalizationVersion = 2;
+			}
 
 			// data-assets.json's OWN strings table, merged into the project's global table
 			// exactly as characters.json's is — same call, same collision warning, same
@@ -320,6 +332,7 @@ void UStoryFlowImporter::ImportDataAssets(const FString& BuildDirectory, const F
 								continue;
 							}
 							FStoryFlowVariable Declaration = ParseVariable(VariableId, VariableObject);
+							VariableObject->TryGetBoolField(TEXT("localizable"), Declaration.bLocalizable);
 							// STATE the element type on an array declaration instead of letting
 							// SetArray infer it from element [0]. An EMPTY array has no element
 							// to infer from and would land typed None, while the save path always
@@ -693,11 +706,13 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 	TArray<FString> ProjectHashParts;
 	ProjectHashParts.Add(SerializeJsonCondensed(JsonObject.ToSharedRef()));
 
+	FStoryFlowContentUpdateScope ContentUpdate(ProjectAsset);
 	// Clear all containers for in-place update (keeps the same UObject pointer)
 	ProjectAsset->Scripts.Empty();
 	ProjectAsset->Characters.Empty();
 	ProjectAsset->CharacterIdToPath.Empty();
 	ProjectAsset->DataAssets.Empty();
+	ProjectAsset->DataAssetLocalizationVersion = 1;
 	ProjectAsset->GlobalVariables.Empty();
 	ProjectAsset->GlobalStrings.Empty();
 	ProjectAsset->ResolvedAssets.Empty();
@@ -722,10 +737,12 @@ UStoryFlowProjectAsset* UStoryFlowImporter::ImportProjectFromJson(const TSharedP
 		ProjectAsset->StartupScript = NormalizeScriptPath(JsonObject->GetStringField(TEXT("startupScript")));
 	}
 
-	// Parse metadata
-	if (JsonObject->HasField(TEXT("metadata")))
+	// Reset on every import so an older export cannot retain a previous project's settings.
+	ProjectAsset->Metadata = FStoryFlowProjectMetadata();
+	const TSharedPtr<FJsonObject>* MetadataObject = nullptr;
+	if (JsonObject->TryGetObjectField(TEXT("metadata"), MetadataObject) && MetadataObject->IsValid())
 	{
-		ProjectAsset->Metadata = ParseMetadata(JsonObject->GetObjectField(TEXT("metadata")));
+		ProjectAsset->Metadata = ParseMetadata(*MetadataObject);
 	}
 
 	// Load global variables
@@ -1058,6 +1075,21 @@ UStoryFlowScriptAsset* UStoryFlowImporter::ImportScriptFromJson(const TSharedPtr
 			*bOutSkippedUnchanged = true;
 		}
 		return ScriptAsset;
+	}
+
+	// Individual imports reuse the same script asset held by live runtime contexts.
+	// Keep project guards alive through mutation and callback-started registrations.
+	TArray<TUniquePtr<FStoryFlowContentUpdateScope>> ContentUpdates;
+	for (TObjectIterator<UStoryFlowProjectAsset> It; It; ++It)
+	{
+		for (const auto& Pair : It->Scripts)
+		{
+			if (Pair.Value == ScriptAsset)
+			{
+				ContentUpdates.Add(MakeUnique<FStoryFlowContentUpdateScope>(*It));
+				break;
+			}
+		}
 	}
 
 	// Clear all containers for in-place update
@@ -1891,6 +1923,30 @@ FStoryFlowVariant UStoryFlowImporter::ParseVariant(const TSharedPtr<FJsonValue>&
 FStoryFlowProjectMetadata UStoryFlowImporter::ParseMetadata(const TSharedPtr<FJsonObject>& MetadataObject)
 {
 	FStoryFlowProjectMetadata Metadata;
+	const auto Block = MetadataObject->TryGetField(TEXT("dialogueRollback"));
+	if (Block.IsValid() && Block->Type == EJson::Object)
+	{
+		auto R = Block->AsObject(); const auto Version = R->TryGetField(TEXT("version"));
+		if (Version.IsValid() && Version->Type == EJson::Number && Version->AsNumber() == 1)
+		{
+			const auto Enabled = R->TryGetField(TEXT("enabled"));
+			Metadata.DialogueRollback.bEnabled = Enabled.IsValid() && Enabled->Type == EJson::Boolean && Enabled->AsBool();
+			const auto Limit = R->TryGetField(TEXT("historyLimit"));
+			if (Limit.IsValid() && Limit->Type == EJson::Number && FMath::IsFinite(Limit->AsNumber()) &&
+				Limit->AsNumber() >= 1 && Limit->AsNumber() <= 1000 && FMath::TruncToDouble(Limit->AsNumber()) == Limit->AsNumber())
+				Metadata.DialogueRollback.HistoryLimit = int32(Limit->AsNumber());
+		}
+	}
+	// JSON number only: strings and booleans must not be coerced, fractions must not truncate.
+	const TSharedPtr<FJsonValue> Nesting = MetadataObject->TryGetField(TEXT("maxScriptNesting"));
+	if (Nesting.IsValid() && Nesting->Type == EJson::Number)
+	{
+		const double Limit = Nesting->AsNumber();
+		if (FMath::IsFinite(Limit) && Limit >= 1 && Limit <= 100 && FMath::TruncToDouble(Limit) == Limit)
+		{
+			Metadata.MaxScriptNesting = static_cast<int32>(Limit);
+		}
+	}
 
 	if (MetadataObject->HasField(TEXT("title")))
 	{

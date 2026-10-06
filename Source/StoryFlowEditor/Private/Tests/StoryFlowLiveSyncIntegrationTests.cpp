@@ -20,6 +20,7 @@
 #include "Engine/Engine.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/TextureRenderTarget2D.h"
+#include "TextureResource.h"
 #include "Engine/Texture2D.h"
 #include "GameFramework/PlayerController.h"
 #include "Kismet/GameplayStatics.h"

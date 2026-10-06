@@ -8,12 +8,14 @@
 #include "Components/AudioComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StoryFlowComponent.h"
+#include "Evaluation/StoryFlowRestoredListener.h"
 #include "Data/StoryFlowTypes.h"
 #include "Engine/SkeletalMesh.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
 #include "GameFramework/Actor.h"
 #include "Lipsync/StoryFlowVisemeMap.h"
+#include "Lipsync/StoryFlowVoiceSpectrum.h"
 #include "StoryFlowRuntime.h"
 #include "UObject/ObjectKey.h"
 
@@ -93,7 +95,7 @@ void UStoryFlowLipsyncComponent::BeginPlay()
 		return;
 	}
 
-	ResolvedTable = VisemeMap != nullptr ? VisemeMap->ToTable() : StoryFlowVisemeTable::Default();
+	ResolvedTable = VisemeMap != nullptr && !VisemeMap->Poses.IsEmpty() ? VisemeMap->ToTable() : GetDefaultVisemeTable();
 	Driver = MakeUnique<FStoryFlowLipsyncDriver>(ResolvedTable);
 	ResolveFace(ResolvedTable);
 
@@ -124,11 +126,7 @@ void UStoryFlowLipsyncComponent::BeginPlay()
 
 void UStoryFlowLipsyncComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	if (Source != nullptr)
-	{
-		Source->OnDialogueUpdated.RemoveDynamic(this, &UStoryFlowLipsyncComponent::HandleDialogueUpdated);
-		Source->OnDialogueEnded.RemoveDynamic(this, &UStoryFlowLipsyncComponent::HandleDialogueEnded);
-	}
+	UnbindSource();
 	StopLipsync();
 	StopAnalysis();
 	ZeroOwnedMorphs();
@@ -192,18 +190,23 @@ void UStoryFlowLipsyncComponent::TickComponent(float DeltaTime, ELevelTick TickT
 	Driver->Sensitivity = Sensitivity;
 	Driver->JawBias = JawBias;
 	Driver->Smooth = Smoothing;
+	Driver->bContinuousMotion = bAnalyzeVoiceBeforeVolume;
+	Driver->VowelScale = FMath::Clamp(FMath::IsFinite(VowelScale) ? VowelScale : 2.6f, .1f, 10.f);
+	Driver->VowelOffset = FMath::Clamp(FMath::IsFinite(VowelOffset) ? VowelOffset : 0.f, -5.f, 5.f);
+	Driver->SpectralContrast = FMath::Clamp(FMath::IsFinite(SpectralContrast) ? SpectralContrast : 1.f, 1.f, 4.f);
+	Driver->bSpectralArticulation = bSpectralArticulation;
+	Driver->ArticulationBlend = ArticulationBlend;
+	// The source-audio path stabilizes acoustic shape cues separately
+	// from loudness and silence, so brief spectral spikes do not snap the jaw.
+	Driver->ArticulationTransitionSeconds = bAnalyzeVoiceBeforeVolume ? .045f : 0.f;
+	Driver->bJawRelativeClosure = bJawRelativeClosure;
 	// The details panel clamps this; a Blueprint write does not, and 0 would put every bin at full scale
 	// and hold the mouth wide open.
 	Driver->FullScale = FMath::Max(AnalysisFullScale, 0.001f);
 
-	RefreshFaceIfStale(RealDelta);
-
 	// The dialogue actor can go away and come back (streaming, a respawn). Its delegates died with it, so
 	// discovery has to be re-armed, or this face is deaf for the rest of the session with nothing said.
-	if (bSubscribed && Source == nullptr)
-	{
-		bSubscribed = false;
-	}
+	if (bSubscribed && (!BoundSource.IsValid() || BoundSource.Get() != Source)) ResolveSource();
 
 	if (!bSubscribed)
 	{
@@ -214,8 +217,13 @@ void UStoryFlowLipsyncComponent::TickComponent(float DeltaTime, ELevelTick TickT
 			ResolveSource();
 		}
 	}
+	// A restored line has surrendered its face. Do not overwrite another animation's later pose.
+	if (bReleasedByRestore && !bManualLipsync) return;
+	RefreshFaceIfStale(RealDelta);
 
 	const EMouthDrive Drive = DecideDrive();
+	const bool bUseVoiceSpectrum = bAnalyzeVoiceBeforeVolume && LineAudio.IsValid() && Drive == EMouthDrive::Analyse;
+	if (!bUseVoiceSpectrum) VoiceSpectrum.Reset();
 
 	// READING the submix follows the mouth: the drive above stops asking for magnitudes the frame the line's
 	// sound ends, which is what used to leave a face mouthing the music for the ten seconds after a two
@@ -223,14 +231,14 @@ void UStoryFlowLipsyncComponent::TickComponent(float DeltaTime, ELevelTick TickT
 	// it is an audio-thread round trip, and every read that lands before it completes logs the engine's
 	// "call StartSpectrumAnalysis first" warning, so tearing it down and rebuilding it around every line
 	// would repeat that warning per line instead of once per conversation.
-	if (Drive == EMouthDrive::Analyse)
+	if (Drive == EMouthDrive::Analyse && !bUseVoiceSpectrum)
 	{
 		if (!bAnalysing)
 		{
 			StartAnalysis();
 		}
 	}
-	else if (bAnalysing && !(Source != nullptr && Source->IsDialogueActive()))
+	else if (bAnalysing && (bUseVoiceSpectrum || !(Source != nullptr && Source->IsDialogueActive())))
 	{
 		StopAnalysis();
 	}
@@ -239,7 +247,15 @@ void UStoryFlowLipsyncComponent::TickComponent(float DeltaTime, ELevelTick TickT
 	{
 	case EMouthDrive::Analyse:
 		Magnitudes.Reset();
-		UAudioMixerBlueprintLibrary::GetMagnitudeForFrequencies(this, AnalysisFrequencies, Magnitudes, AnalysisSubmix);
+		if (bUseVoiceSpectrum)
+		{
+			// Play() can reuse the component while replacing its ActiveSound and bus sends.
+			if (!VoiceSpectrum || VoiceSpectrum->Source != LineAudio || VoiceSpectrum->PlayOrder != LineAudio->GetLastPlayOrder())
+				VoiceSpectrum = MakeShared<FStoryFlowVoiceSpectrum>(this, LineAudio.Get());
+			VoiceSpectrum->Read(AnalysisFrequencies, Magnitudes);
+		}
+		else
+			UAudioMixerBlueprintLibrary::GetMagnitudeForFrequencies(this, AnalysisFrequencies, Magnitudes, GetAnalysisSubmix());
 		Driver->AdvanceFromMagnitudes(Magnitudes, RealDelta);
 		break;
 	case EMouthDrive::Idle:
@@ -313,6 +329,7 @@ bool UStoryFlowLipsyncComponent::SourceAudioIsPlaying() const
 
 void UStoryFlowLipsyncComponent::StartLipsync()
 {
+	bReleasedByRestore = false;
 	bManualLipsync = true;
 	bLineIsMine = false;
 	bHadTrackedAudio = false;
@@ -328,6 +345,7 @@ void UStoryFlowLipsyncComponent::StartLipsync()
 
 void UStoryFlowLipsyncComponent::StopLipsync()
 {
+	VoiceSpectrum.Reset();
 	bManualLipsync = false;
 	bLineIsMine = false;
 	bHadTrackedAudio = false;
@@ -362,6 +380,8 @@ float UStoryFlowLipsyncComponent::GetCentroid() const
  */
 void UStoryFlowLipsyncComponent::HandleDialogueUpdated(const FStoryFlowDialogueState& DialogueState)
 {
+	if (Source && Source->IsCurrentDialogueRestored()) { HandleDialogueRestored(DialogueState, Source); return; }
+	if (bSubscribed && BoundSource.Get() != Source) return;
 	if (!SpeakerIsMine())
 	{
 		// Someone else's line. Game-code lipsync (StartLipsync) promised to run until StopLipsync, and
@@ -380,6 +400,7 @@ void UStoryFlowLipsyncComponent::HandleDialogueUpdated(const FStoryFlowDialogueS
 	}
 
 	LineNodeId = DialogueState.NodeId;
+	bReleasedByRestore = false;
 	LineEntrySerial = EntrySerial;
 	++LineStarts;
 	bManualLipsync = false;
@@ -413,6 +434,7 @@ void UStoryFlowLipsyncComponent::HandleDialogueUpdated(const FStoryFlowDialogueS
 
 void UStoryFlowLipsyncComponent::HandleDialogueEnded()
 {
+	if (bSubscribed && Source && Source->IsDialogueActive()) return;
 	if (bManualLipsync)
 	{
 		return;
@@ -431,6 +453,26 @@ void UStoryFlowLipsyncComponent::HandleDialogueEnded()
 		return;
 	}
 	StopLipsync();
+}
+
+void UStoryFlowLipsyncComponent::HandleDialogueRestored(const FStoryFlowDialogueState& State, UStoryFlowComponent* From)
+{
+	if (bManualLipsync || !bSubscribed || !From || From != Source || From != BoundSource.Get() ||
+		!From->IsCurrentDialogueRestored() || From->GetCurrentDialogue().NodeId != State.NodeId) return;
+	StopLipsync(); StopAnalysis();
+	if (Driver.IsValid()) Driver->ResetPose();
+	ZeroOwnedMorphs(); bReleasedByRestore = true;
+}
+
+void UStoryFlowLipsyncComponent::UnbindSource()
+{
+	if (auto* Old = BoundSource.Get())
+	{
+		Old->OnDialogueUpdated.RemoveDynamic(this, &UStoryFlowLipsyncComponent::HandleDialogueUpdated);
+		Old->OnDialogueEnded.RemoveDynamic(this, &UStoryFlowLipsyncComponent::HandleDialogueEnded);
+		if (RestoredListener) Old->OnDialogueRestored.RemoveDynamic(RestoredListener, &UStoryFlowRestoredListener::Restore);
+	}
+	RestoredListener = nullptr; BoundSource.Reset(); bSubscribed = false;
 }
 
 /**
@@ -489,11 +531,14 @@ bool UStoryFlowLipsyncComponent::SpeakerPathsMatch(const FString& APath, const F
  */
 void UStoryFlowLipsyncComponent::ResolveSource()
 {
-	if (bSubscribed)
+	if (bSubscribed && BoundSource.IsValid() && BoundSource.Get() == Source)
 	{
 		return;
 	}
+	UnbindSource();
+	if (!bManualLipsync) { StopLipsync(); StopAnalysis(); if (Driver.IsValid()) Driver->ResetPose(); ZeroOwnedMorphs(); }
 
+	if (!IsValid(Source)) Source = nullptr;
 	if (Source == nullptr && SourceActor != nullptr)
 	{
 		Source = SourceActor->FindComponentByClass<UStoryFlowComponent>();
@@ -529,6 +574,15 @@ void UStoryFlowLipsyncComponent::ResolveSource()
 
 	Source->OnDialogueUpdated.AddDynamic(this, &UStoryFlowLipsyncComponent::HandleDialogueUpdated);
 	Source->OnDialogueEnded.AddDynamic(this, &UStoryFlowLipsyncComponent::HandleDialogueEnded);
+	BoundSource = Source;
+	RestoredListener = NewObject<UStoryFlowRestoredListener>(this);
+	RestoredListener->Source = Source;
+	const TWeakObjectPtr<UStoryFlowLipsyncComponent> Self(this);
+	UStoryFlowRestoredListener* Binding = RestoredListener;
+	RestoredListener->Callback = [Self, Binding](const FStoryFlowDialogueState& State, UStoryFlowComponent* From) {
+		if (Self.IsValid() && Self->RestoredListener == Binding) Self->HandleDialogueRestored(State, From);
+	};
+	Source->OnDialogueRestored.AddDynamic(RestoredListener, &UStoryFlowRestoredListener::Restore);
 	bSubscribed = true;
 
 	// A late subscribe misses the update for the line already on screen, and the next one may be a while
@@ -725,7 +779,7 @@ void UStoryFlowLipsyncComponent::StartAnalysis()
 		return;
 	}
 
-	if (AnalysisSubmix == nullptr && !bWarnedMasterSubmix)
+	if (GetAnalysisSubmix() == nullptr && !bWarnedMasterSubmix)
 	{
 		// Once per component: analysis now starts with every conversation, not once per session.
 		bWarnedMasterSubmix = true;
@@ -738,19 +792,20 @@ void UStoryFlowLipsyncComponent::StartAnalysis()
 	// Remembered for StopAnalysis: the reference must be released on the key it was taken on, whatever
 	// AnalysisSubmix says by then.
 	AnalysingDeviceId = AudioDeviceIdOf(GetWorld());
-	AnalysingSubmix = FObjectKey(AnalysisSubmix);
+	AnalysingSubmix = FObjectKey(GetAnalysisSubmix());
 
 	const FAnalysisKey Key{ AnalysingDeviceId, AnalysingSubmix };
 	int32& Count = AnalysisRefCounts().FindOrAdd(Key);
 	if (Count++ == 0)
 	{
-		UAudioMixerBlueprintLibrary::StartAnalyzingOutput(this, AnalysisSubmix);
+		UAudioMixerBlueprintLibrary::StartAnalyzingOutput(this, GetAnalysisSubmix());
 	}
 	bAnalysing = true;
 }
 
 void UStoryFlowLipsyncComponent::StopAnalysis()
 {
+	VoiceSpectrum.Reset();
 	if (!bAnalysing)
 	{
 		return;
@@ -766,4 +821,20 @@ void UStoryFlowLipsyncComponent::StopAnalysis()
 			UAudioMixerBlueprintLibrary::StopAnalyzingOutput(this, Cast<USoundSubmix>(AnalysingSubmix.ResolveObjectPtr()));
 		}
 	}
+}
+
+float UStoryFlowLipsyncComponent::GetSourceAnalysisRMS() const
+{
+	return VoiceSpectrum ? VoiceSpectrum->RMS : 0.f;
+}
+
+const TMap<FName, float>& UStoryFlowLipsyncComponent::GetOutputWeights() const
+{
+	static const TMap<FName, float> Empty;
+	return Driver.IsValid() ? Driver->Current() : Empty;
+}
+
+UAudioComponent* UStoryFlowLipsyncComponent::GetTrackedDialogueAudio() const
+{
+	return LineAudio.Get();
 }

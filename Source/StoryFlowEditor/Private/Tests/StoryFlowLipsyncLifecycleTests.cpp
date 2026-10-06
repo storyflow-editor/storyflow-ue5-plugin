@@ -10,6 +10,8 @@
 #include "Animation/MorphTarget.h"
 #include "Sound/SoundWave.h"
 #include "Engine/GameInstance.h"
+#include "Engine/Engine.h"
+#include "UObject/GarbageCollection.h"
 #include "GameFramework/Actor.h"
 #include "Lipsync/StoryFlowLipsyncDriver.h"
 #include "UObject/ObjectKey.h"
@@ -268,6 +270,38 @@ bool FStoryFlowLipsyncLifecycleScriptCollision::RunTest(const FString& Parameter
 	W.Component->AdvanceDialogue();
 	TestEqual(TEXT("executing the same node again starts a new line"), Lipsync->GetLineStarts(), 3);
 	return true;
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowLipsyncRediscoveryAfterGC, "StoryFlow.Lipsync.Lifecycle.RediscoveryAfterGC", EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+bool FStoryFlowLipsyncRediscoveryAfterGC::RunTest(const FString&)
+{
+    auto* GI = NewObject<UGameInstance>(GEngine); GI->AddToRoot(); GI->InitializeStandalone();
+    auto* W = GI->GetWorld();
+    if (!TestNotNull(TEXT("world"), W)) { GI->RemoveFromRoot(); return false; }
+    auto* FirstActor = W->SpawnActor<AActor>();
+    auto* First = NewObject<UStoryFlowComponent>(FirstActor); FirstActor->AddInstanceComponent(First); First->RegisterComponent();
+    auto* FaceActor = W->SpawnActor<AActor>();
+    auto* Face = NewObject<UStoryFlowLipsyncComponent>(FaceActor); FaceActor->AddInstanceComponent(Face); Face->RegisterComponent();
+    static_cast<UActorComponent*>(Face)->BeginPlay();
+    AddInfo(FString::Printf(TEXT("probe initially active=%d"), Face->IsActive()));
+    Face->SetActive(true);
+    TestTrue(TEXT("surviving face is active for discovery ticks"), Face->IsActive());
+    TestTrue(TEXT("initial discovery subscribed first component"), Face->Source.Get() == First);
+    FStoryFlowDialogueState Line; Line.NodeId = TEXT("first"); Line.bIsValid = true;
+    First->OnDialogueUpdated.Broadcast(Line);
+    TestEqual(TEXT("initial event received"), Face->GetLineStarts(), 1);
+    FirstActor->Destroy(); FirstActor = nullptr; First = nullptr;
+    CollectGarbage(RF_NoFlags);
+    TestNull(TEXT("GC nulls reflected source"), Face->Source.Get());
+    auto* SecondActor = W->SpawnActor<AActor>();
+    auto* Second = NewObject<UStoryFlowComponent>(SecondActor); SecondActor->AddInstanceComponent(Second); Second->RegisterComponent();
+    W->DeltaRealTimeSeconds = 1.1f;
+    for (int32 I=0; I<3; ++I) static_cast<UActorComponent*>(Face)->TickComponent(1.1f, LEVELTICK_All, nullptr);
+    TestTrue(TEXT("rediscovery subscribes replacement after three retry intervals"), Face->Source.Get() == Second);
+    Line.NodeId = TEXT("replacement"); Second->OnDialogueUpdated.Broadcast(Line);
+    TestEqual(TEXT("replacement event received"), Face->GetLineStarts(), 2);
+    static_cast<UActorComponent*>(Face)->EndPlay(EEndPlayReason::Destroyed);
+    W->DestroyWorld(false); GI->RemoveFromRoot(); return true;
 }
 
 #endif // WITH_DEV_AUTOMATION_TESTS

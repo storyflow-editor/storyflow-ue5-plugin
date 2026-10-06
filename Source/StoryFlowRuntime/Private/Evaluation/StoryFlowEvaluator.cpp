@@ -418,7 +418,7 @@ bool FStoryFlowEvaluator::EvaluateBooleanFromNode(FStoryFlowNode* Node, const FS
 		TArray<FStoryFlowVariant> Array = EvaluateBoolArrayInput(Node, StoryFlowHandles::In_BoolArray);
 		if (Array.Num() > 0)
 		{
-			Result = Array[FMath::RandRange(0, Array.Num() - 1)].GetBool();
+			Result = Array[Context->RandomInt(0, Array.Num() - 1)].GetBool();
 		}
 		break;
 	}
@@ -731,7 +731,7 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 		{
 			Swap(Min, Max);
 		}
-		Result = FMath::RandRange(Min, Max);
+		Result = Context->RandomInt(Min, Max);
 		break;
 	}
 
@@ -877,7 +877,7 @@ int32 FStoryFlowEvaluator::EvaluateIntegerFromNode(FStoryFlowNode* Node, const F
 		TArray<FStoryFlowVariant> Array = EvaluateIntArrayInput(Node, StoryFlowHandles::In_IntArray);
 		if (Array.Num() > 0)
 		{
-			Result = Array[FMath::RandRange(0, Array.Num() - 1)].GetInt();
+			Result = Array[Context->RandomInt(0, Array.Num() - 1)].GetInt();
 		}
 		break;
 	}
@@ -1150,7 +1150,7 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 		{
 			Swap(Min, Max);
 		}
-		Result = FMath::FRandRange(Min, Max);
+		Result = Context->RandomFloat(Min, Max);
 		break;
 	}
 
@@ -1191,7 +1191,7 @@ float FStoryFlowEvaluator::EvaluateFloatFromNode(FStoryFlowNode* Node, const FSt
 		TArray<FStoryFlowVariant> Array = EvaluateFloatArrayInput(Node, StoryFlowHandles::In_FloatArray);
 		if (Array.Num() > 0)
 		{
-			Result = Array[FMath::RandRange(0, Array.Num() - 1)].GetFloat();
+			Result = Array[Context->RandomInt(0, Array.Num() - 1)].GetFloat();
 		}
 		break;
 	}
@@ -1335,7 +1335,7 @@ FString FStoryFlowEvaluator::EvaluateDataAssetFromNode(FStoryFlowNode* Node, con
 	}
 	case EStoryFlowNodeType::GetDataAssetArrayElement: case EStoryFlowNodeType::GetRandomDataAssetArrayElement: {
 		const auto Array = EvaluateDataAssetArrayInput(Node, StoryFlowHandles::In_DataAssetArray);
-		const int32 Index = Node->Type == EStoryFlowNodeType::GetDataAssetArrayElement ? EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer, Node->Data.Value.GetInt(0)) : (Array.IsEmpty() ? -1 : FMath::RandRange(0, Array.Num() - 1));
+		const int32 Index = Node->Type == EStoryFlowNodeType::GetDataAssetArrayElement ? EvaluateIntegerInput(Node, StoryFlowHandles::In_Integer, Node->Data.Value.GetInt(0)) : (Array.IsEmpty() ? -1 : Context->RandomInt(0, Array.Num() - 1));
 		return Array.IsValidIndex(Index) ? Array[Index].GetString() : FString();
 	}
 	case EStoryFlowNodeType::GetMapValue: {
@@ -1564,7 +1564,7 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 		TArray<FStoryFlowVariant> Array = EvaluateStringArrayInput(Node, StoryFlowHandles::In_StringArray);
 		if (Array.Num() > 0)
 		{
-			Result = Array[FMath::RandRange(0, Array.Num() - 1)].GetString();
+			Result = Array[Context->RandomInt(0, Array.Num() - 1)].GetString();
 		}
 		break;
 	}
@@ -1604,7 +1604,7 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 		TArray<FStoryFlowVariant> Array = EvaluateImageArrayInput(Node, StoryFlowHandles::In_ImageArray);
 		if (Array.Num() > 0)
 		{
-			Result = Array[FMath::RandRange(0, Array.Num() - 1)].GetString();
+			Result = Array[Context->RandomInt(0, Array.Num() - 1)].GetString();
 		}
 		break;
 	}
@@ -1625,7 +1625,7 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 		TArray<FStoryFlowVariant> Array = EvaluateCharacterArrayInput(Node, StoryFlowHandles::In_CharacterArray);
 		if (Array.Num() > 0)
 		{
-			Result = Array[FMath::RandRange(0, Array.Num() - 1)].GetString();
+			Result = Array[Context->RandomInt(0, Array.Num() - 1)].GetString();
 		}
 		break;
 	}
@@ -1646,7 +1646,7 @@ FString FStoryFlowEvaluator::EvaluateStringFromNode(FStoryFlowNode* Node, const 
 		TArray<FStoryFlowVariant> Array = EvaluateAudioArrayInput(Node, StoryFlowHandles::In_AudioArray);
 		if (Array.Num() > 0)
 		{
-			Result = Array[FMath::RandRange(0, Array.Num() - 1)].GetString();
+			Result = Array[Context->RandomInt(0, Array.Num() - 1)].GetString();
 		}
 		break;
 	}

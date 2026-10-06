@@ -14,8 +14,10 @@ class USkeletalMesh;
 class USkeletalMeshComponent;
 class USoundSubmix;
 class UStoryFlowComponent;
+class UStoryFlowRestoredListener;
 class UStoryFlowVisemeMap;
 struct FStoryFlowDialogueState;
+struct FStoryFlowVoiceSpectrum;
 
 /**
  * Audio-driven mouth movement for one character's face. Put it on the actor, point it at the face, tell it
@@ -83,35 +85,28 @@ public:
 	TObjectPtr<UStoryFlowVisemeMap> VisemeMap;
 
 	/**
-	 * The submix to analyse. STRONGLY RECOMMENDED: route dialogue to its own submix and name it here.
-	 *
-	 * Empty analyses the master output, which works out of the box but hears the whole mix — music included,
-	 * so a loud score would move the mouth. Unreal has no per-AudioComponent live spectrum: UAudioComponent's
-	 * FFT and envelope readers are COOKED, needing per-asset analysis ticked on every dialogue wave, which is
-	 * exactly the per-asset chore Tier 2's editor-side baking exists to avoid.
-	 *
-	 * A submix the mixer has not registered analyses the MASTER instead, silently — the engine falls back
-	 * rather than failing — so a mouth that hears the music when this is set is a submix routing problem,
-	 * not a lipsync one.
+	 * Submix used for manual StartLipsync or when source analysis is disabled.
+	 * Dialogue normally analyses its own voice before output volume, isolating it from music.
+	 * For the submix fallback, route dialogue to this bus; an empty or unregistered bus reads the master mix.
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Lipsync")
 	TObjectPtr<USoundSubmix> AnalysisSubmix;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Lipsync|Feel", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	float Strength = 0.50f;
+	float Strength = 0.46f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Lipsync|Feel", meta = (ClampMin = "0.1", ClampMax = "3.0"))
-	float Sensitivity = 1.0f;
+	float Sensitivity = 1.05f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Lipsync|Feel", meta = (ClampMin = "0.0", ClampMax = "2.0"))
-	float JawBias = 1.12f;
+	float JawBias = 0.62f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Lipsync|Feel", meta = (ClampMin = "1.0", ClampMax = "40.0"))
-	float Smoothing = 40.0f;
+	float Smoothing = 20.0f;
 
 	/** Move the mouth on lines whose audio cannot be analysed, instead of leaving a dead face. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "StoryFlow|Lipsync|Feel")
-	bool bIdleMouthWithoutAudio = true;
+	bool bIdleMouthWithoutAudio = false;
 
 	/**
 	 * The raw magnitude a full-scale sine produces at its own bin, which is what the driver divides by to
@@ -123,6 +118,32 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, AdvancedDisplay, Category = "StoryFlow|Lipsync", meta = (ClampMin = "0.001"))
 	float AnalysisFullScale = 32.0f;
 
+	/** Calibration of the audio vowel axis. Defaults are tuned for Sidekick speech. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, AdvancedDisplay, Category="StoryFlow|Lipsync|Feel", meta=(ClampMin="0.1", ClampMax="10"))
+	float VowelScale = 9.44f;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, AdvancedDisplay, Category="StoryFlow|Lipsync|Feel", meta=(ClampMin="-5", ClampMax="5"))
+	float VowelOffset = -3.89f;
+	/** Emphasize strong spectral bands instead of treating weak high frequencies as equally voiced. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, AdvancedDisplay, Category="StoryFlow|Lipsync|Feel", meta=(ClampMin="1", ClampMax="4"))
+	float SpectralContrast = 1.31f;
+	/** Additional live spectrum cues. Uses OO/OH/AA/EE plus optional MM and SS poses.
+	 * Sound-derived articulation only; it does not recognize words or replace an Epic bake. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, AdvancedDisplay, Category="StoryFlow|Lipsync|Feel")
+	bool bSpectralArticulation = false;
+	/** Mix the additional acoustic cues with the established vowel response. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, AdvancedDisplay, Category="StoryFlow|Lipsync|Feel", meta=(ClampMin="0", ClampMax="1", EditCondition="bSpectralArticulation"))
+	float ArticulationBlend = 1.f;
+
+	/** Analyse the dialogue source before output/focus volume, with no baked analysis. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="StoryFlow|Lipsync|Feel")
+	bool bAnalyzeVoiceBeforeVolume = true;
+	/** For rigs where mouthClose corrects an open jaw: silence relaxes lips instead of over-closing a resting jaw. */
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="StoryFlow|Lipsync|Feel")
+	bool bJawRelativeClosure = true;
+	UFUNCTION(BlueprintPure, Category="StoryFlow|Lipsync")
+	float GetSourceAnalysisRMS() const;
+
+
 	/**
 	 * Drive the mouth from any playing audio: a cutscene line, a bark, a radio. Nothing to bake and nothing
 	 * to author. The analysis is submix-wide, so this only says "start moving"; what it hears is whatever
@@ -133,6 +154,10 @@ public:
 	 */
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Lipsync")
 	void StartLipsync();
+
+	/** Effective analysis submix; face adapters may supply their own transient bus. */
+	UFUNCTION(BlueprintPure, Category = "StoryFlow|Lipsync")
+	virtual USoundSubmix* GetAnalysisSubmix() const { return AnalysisSubmix; }
 
 	/** Let the mouth close. Safe to call when nothing is playing. */
 	UFUNCTION(BlueprintCallable, Category = "StoryFlow|Lipsync")
@@ -179,12 +204,23 @@ protected:
 	virtual void Activate(bool bReset = false) override;
 	virtual void Deactivate() override;
 
+	/** Face adapters reuse dialogue ownership and analysis, with their own output and default rig map. */
+	virtual StoryFlowVisemeTable::FTable GetDefaultVisemeTable() const { return StoryFlowVisemeTable::Default(); }
+	virtual void ResolveFace(const StoryFlowVisemeTable::FTable& Table);
+	virtual void ApplyWeights();
+	virtual void ZeroOwnedMorphs();
+	const TMap<FName, float>& GetOutputWeights() const;
+	UAudioComponent* GetTrackedDialogueAudio() const;
+
 private:
+	friend struct FStoryFlowRollbackTestAccess;
 	UFUNCTION()
 	void HandleDialogueUpdated(const FStoryFlowDialogueState& DialogueState);
 
 	UFUNCTION()
 	void HandleDialogueEnded();
+	void HandleDialogueRestored(const FStoryFlowDialogueState& State, UStoryFlowComponent* From);
+	void UnbindSource();
 
 	/** What the mouth is following this frame. */
 	enum class EMouthDrive : uint8
@@ -206,7 +242,6 @@ private:
 
 	bool SpeakerIsMine() const;
 	void ResolveSource();
-	void ResolveFace(const StoryFlowVisemeTable::FTable& Table);
 
 	/**
 	 * Re-resolve the face when the meshes we cached are gone OR have been replaced.
@@ -217,8 +252,6 @@ private:
 	 * leaves live components whose morphs are new and undriven, which is a mouth that quietly stops moving.
 	 */
 	bool RefreshFaceIfStale(float DeltaSeconds);
-	void ApplyWeights();
-	void ZeroOwnedMorphs();
 	void StartAnalysis();
 	void StopAnalysis();
 
@@ -252,12 +285,17 @@ private:
 
 	/** Bound to the source's delegates. Separate from Source being set: a designer-set Source needs binding too. */
 	bool bSubscribed = false;
+	TWeakObjectPtr<UStoryFlowComponent> BoundSource;
+	UPROPERTY(Transient)
+	TObjectPtr<UStoryFlowRestoredListener> RestoredListener;
+	bool bReleasedByRestore = false;
 
 	/** Latched inside SpeakerIsMine, which is const because asking who is speaking changes nothing. */
 	mutable bool bWarnedUnknownCharacter = false;
 	TArray<float> AnalysisFrequencies;
 	TArray<float> Magnitudes;
 	TUniquePtr<FStoryFlowLipsyncDriver> Driver;
+	TSharedPtr<FStoryFlowVoiceSpectrum> VoiceSpectrum;
 
 	/** Both the node and its execution identity, so repeated nodes can start new audio. */
 	FString LineNodeId;

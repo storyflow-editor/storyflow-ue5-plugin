@@ -7,6 +7,7 @@
 #include "CoreMinimal.h"
 #include "Components/StoryFlowComponent.h"
 #include "Engine/GameInstance.h"
+#include "Engine/Engine.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
 #include "Subsystems/StoryFlowSubsystem.h"

@@ -4,9 +4,6 @@
 
 namespace
 {
-	/** Speech never reaches the top of the band, so an unscaled centroid never leaves the OO end. */
-	constexpr float CentroidScale = 2.6f;
-
 	/**
 	 * Decay of the loudness peak PER SECOND-AT-60 — `pow(Decay, dt * 60)`, not once per frame.
 	 *
@@ -37,6 +34,7 @@ FStoryFlowLipsyncDriver::FStoryFlowLipsyncDriver(const StoryFlowVisemeTable::FTa
 	for (const FName& Morph : StoryFlowVisemeTable::OwnedMorphs(Table))
 	{
 		CurrentWeights.Add(Morph, 0.0f);
+		MotionWeights.Add(Morph, 0.0f);
 	}
 	bOwnsMouthClose = CurrentWeights.Contains(TEXT("mouthClose"));
 
@@ -99,8 +97,9 @@ void FStoryFlowLipsyncDriver::AdvanceFromMagnitudes(const TArray<float>& Magnitu
 		float& Bin = Smoothed[Index];
 		Bin = Keep * Bin + (1.0f - Keep) * Referenced;
 
-		Sum += Bin;
-		Weighted += Bin * Index;
+		const float Weight = FMath::Pow(Bin, FMath::Clamp(SpectralContrast, 1.f, 4.f));
+		Sum += Weight;
+		Weighted += Weight * Index;
 	}
 
 	// 3. energy and centroid, over the SMOOTHED spectrum.
@@ -108,7 +107,20 @@ void FStoryFlowLipsyncDriver::AdvanceFromMagnitudes(const TArray<float>& Magnitu
 	float Centroid = 0.0f;
 	if (Sum > 0.0f)
 	{
-		Centroid = FMath::Clamp((Weighted / Sum) / (Magnitudes.Num() - 1) * CentroidScale, 0.0f, 1.0f);
+		Centroid = FMath::Clamp((Weighted / Sum) / (Magnitudes.Num() - 1) * VowelScale + VowelOffset, 0.0f, 1.0f);
+	}
+	if (ArticulationTransitionSeconds > 0.f)
+	{
+		// Stabilize the selector BEFORE the OO/OH/AA/EE axis folds it into jaw
+		// opening. Easing the resulting morphs cannot undo false open/close cycles.
+		const float Follow = DeltaSeconds > 0.f ? 1.f - FMath::Exp(-DeltaSeconds / ArticulationTransitionSeconds) : 0.f;
+		if (!bHasStableCentroid && DeltaSeconds > 0.f)
+		{
+			StableCentroid = Centroid;
+			bHasStableCentroid = true;
+		}
+		StableCentroid += (Centroid - StableCentroid) * Follow;
+		Centroid = StableCentroid;
 	}
 	CentroidValue = Centroid;
 
@@ -122,12 +134,26 @@ void FStoryFlowLipsyncDriver::AdvanceFromMagnitudes(const TArray<float>& Magnitu
 	const float Amp = FMath::Min(1.0f, Norm * 1.15f * Sensitivity) * Gate;
 
 	// 7, 8, 9.
-	BuildAxisPose(Centroid, Amp, Gate);
+	if (bSpectralArticulation)
+	{
+		BuildArticulatedPose(Magnitudes, DeltaSeconds, Amp);
+		const float Blend = FMath::Clamp(FMath::IsFinite(ArticulationBlend) ? ArticulationBlend : 0.f, 0.f, 1.f);
+		if (Blend < 1.f)
+		{
+			const TMap<FName, float> Articulated = TargetWeights;
+			BuildAxisPose(Centroid, Amp, Gate);
+			for (auto& Pair : TargetWeights)
+				Pair.Value = FMath::Lerp(Pair.Value, Articulated.FindRef(Pair.Key), Blend);
+		}
+	}
+	else
+		BuildAxisPose(Centroid, Amp, Gate);
 	Ease(DeltaSeconds);
 }
 
 void FStoryFlowLipsyncDriver::AdvanceIdle(float DeltaSeconds)
 {
+	bHasStableCentroid = false;
 	// The meters report ANALYSED audio and nothing else. An idle mouth is moving on a coin flip, not on
 	// anything it heard, and a level that stayed stale while it did would be a lying instrument.
 	LevelValue = 0.0f;
@@ -167,10 +193,19 @@ void FStoryFlowLipsyncDriver::AdvanceIdle(float DeltaSeconds)
 
 void FStoryFlowLipsyncDriver::AdvanceSilent(float DeltaSeconds)
 {
+	bHasStableCentroid = false;
 	LevelValue = 0.0f;
 	CentroidValue = 0.0f;
 	ClearTarget();
 	Ease(DeltaSeconds);
+}
+
+void FStoryFlowLipsyncDriver::ResetPose()
+{
+	ClearTarget();
+	for (auto& Weight : CurrentWeights) Weight.Value = 0.f;
+	for (auto& Weight : MotionWeights) Weight.Value = 0.f;
+	ResetLevel(); IdlePose = TEXT("rest"); IdleHold = 0.f;
 }
 
 void FStoryFlowLipsyncDriver::ResetLevel()
@@ -178,6 +213,9 @@ void FStoryFlowLipsyncDriver::ResetLevel()
 	Peak = PeakInitial;
 	LevelValue = 0.0f;
 	RawPeakValue = 0.0f;
+	ArticulationOpen = ArticulationWide = ArticulationSibilant = ArticulationClosed = 0.f;
+	StableCentroid = 0.f;
+	bHasStableCentroid = false;
 
 	// The smoothing state is loudness history too: a new line that inherited the last one's spectrum would
 	// start its first frames shaped by whoever spoke before.
@@ -185,6 +223,59 @@ void FStoryFlowLipsyncDriver::ResetLevel()
 	{
 		Bin = 0.0f;
 	}
+}
+
+void FStoryFlowLipsyncDriver::BuildArticulatedPose(const TArray<float>& Magnitudes, float DeltaSeconds, float Amp)
+{
+	ClearTarget();
+	// Use relative LINEAR peaks for shape. The reference dB window above is useful
+	// for loudness, but clips loud harmonics and cannot preserve their relationships.
+	float Maximum = 0.f;
+	for (float Value : Magnitudes)
+		if (FMath::IsFinite(Value)) Maximum = FMath::Max(Maximum, Value);
+	float Total = 0.f, Low = 0.f, High = 0.f;
+	float FirstSum = 0.f, FirstWeighted = 0.f, SecondSum = 0.f, SecondWeighted = 0.f;
+	for (int32 I = 0; I < Magnitudes.Num(); ++I)
+	{
+		const float Raw = FMath::IsFinite(Magnitudes[I]) ? FMath::Max(0.f, Magnitudes[I]) : 0.f;
+		const float Weight = FMath::Pow(Raw / FMath::Max(Maximum, 1.e-9f), 1.5f);
+		const float Hz = FMath::Lerp(MinHz, MaxHz, float(I) / (Magnitudes.Num() - 1));
+		Total += Weight;
+		if (Hz < 360.f) Low += Weight;
+		if (Hz > 2500.f) High += Weight;
+		if (Hz >= 200.f && Hz <= 1100.f) { FirstSum += Weight; FirstWeighted += Weight * Hz; }
+		if (Hz >= 1100.f && Hz <= 3200.f) { SecondSum += Weight; SecondWeighted += Weight * Hz; }
+	}
+	// Broad resonance estimates, not a phoneme recognizer. Openness and lip width
+	// are independent; a bright fricative must not turn into a wide-open vowel.
+	const float First = FirstWeighted / FMath::Max(FirstSum, 1.e-9f);
+	const float Second = SecondWeighted / FMath::Max(SecondSum, 1.e-9f);
+	const float LowShare = Low / FMath::Max(Total, 1.e-9f);
+	const float HighShare = High / FMath::Max(Total, 1.e-9f);
+	const float FirstRaw = FMath::IsFinite(Magnitudes[0]) ? FMath::Max(0.f, Magnitudes[0]) : 0.f;
+	const float SecondRaw = FMath::IsFinite(Magnitudes[1]) ? FMath::Max(0.f, Magnitudes[1]) : 0.f;
+	const float Nasal = FMath::Clamp((LowShare - .6f) / .25f, 0.f, 1.f)
+		* FMath::Clamp((.018f - HighShare) / .018f, 0.f, 1.f)
+		* FMath::Clamp((FirstRaw / FMath::Max(SecondRaw, 1.e-9f) - .4f) / .35f, 0.f, 1.f);
+	const float Transition = ArticulationTransitionSeconds > 0.f ? ArticulationTransitionSeconds : 1.f / 60.f;
+	const float Follow = DeltaSeconds > 0.f ? 1.f - FMath::Exp(-DeltaSeconds / Transition) : 0.f;
+	auto FollowFeature = [&](float& Value, float Target) { Value += (Target - Value) * Follow; };
+	FollowFeature(ArticulationOpen, FMath::Clamp((First - 330.f) / 320.f, 0.f, 1.f));
+	FollowFeature(ArticulationWide, FMath::Clamp((Second - 1700.f) / 650.f, 0.f, 1.f));
+	FollowFeature(ArticulationSibilant, FMath::Clamp((HighShare - .15f) / .5f, 0.f, 1.f));
+	FollowFeature(ArticulationClosed, Nasal);
+	const float Sibilant = Table.Contains(TEXT("SS")) ? ArticulationSibilant : 0.f;
+	const float Closed = Table.Contains(TEXT("MM")) ? ArticulationClosed * (1.f - Sibilant) : 0.f;
+	const float Vowel = 1.f - Sibilant - Closed;
+	const float Oh = 2.f * ArticulationOpen * (1.f - ArticulationOpen) * (1.f - ArticulationWide);
+	AccumulateBlend(Table.Find(TEXT("AA")), Vowel * (1.f - Oh) * ArticulationOpen, Amp);
+	AccumulateBlend(Table.Find(TEXT("EE")), Vowel * (1.f - Oh) * (1.f - ArticulationOpen) * ArticulationWide, Amp);
+	AccumulateBlend(Table.Find(TEXT("OO")), Vowel * (1.f - Oh) * (1.f - ArticulationOpen) * (1.f - ArticulationWide), Amp);
+	AccumulateBlend(Table.Find(TEXT("OH")), Vowel * Oh, Amp);
+	AccumulateBlend(Table.Find(TEXT("SS")), Sibilant, Amp);
+	AccumulateBlend(Table.Find(TEXT("MM")), Closed, Amp);
+	// Unlike the legacy closing breath, silence has no forced clench. All poses
+	// share the amplitude gate, including the lip-closure pose.
 }
 
 void FStoryFlowLipsyncDriver::BuildAxisPose(float Centroid, float Amp, float Gate)
@@ -203,10 +294,11 @@ void FStoryFlowLipsyncDriver::BuildAxisPose(float Centroid, float Amp, float Gat
 	// The closing breath: as the gate shuts the lips come together, instead of hanging half-open. Only when
 	// some pose in this table owns mouthClose — writing a key nothing consumes leaves a float climbing
 	// forever behind a step that silently does nothing.
-	if (Gate < 1.0f && bOwnsMouthClose)
+	if (Gate < 1.0f && bOwnsMouthClose && !bSpectralArticulation)
 	{
 		float& Closed = TargetWeights.FindOrAdd(TEXT("mouthClose"));
-		Closed += (1.0f - Gate) * ClosingBreath * Strength;
+		Closed += (1.0f - Gate) * ClosingBreath * Strength
+			* (bJawRelativeClosure && CurrentWeights.Contains(TEXT("jawOpen")) ? TargetWeights.FindRef(TEXT("jawOpen")) : 1.f);
 	}
 }
 
@@ -241,13 +333,34 @@ void FStoryFlowLipsyncDriver::Ease(float DeltaSeconds)
 	// A zero or negative delta HOLDS. Snapping to target there is the worst possible reading of a paused
 	// game: the audio clock is not paused, so the mouth would jitter at full amplitude on a still frame.
 	const float K = DeltaSeconds <= 0.0f ? 0.0f : 1.0f - FMath::Exp(-Smooth * DeltaSeconds);
+	// Two coupled first-order stages have continuous output velocity. At twice
+	// the old rate their combined low-frequency delay remains 1 / Smooth.
+	// Integrate both exactly for a held target so a 30 fps frame has the same
+	// response as its 60/120 fps subdivisions; sequential lerps do not.
+	const float MotionStep = DeltaSeconds > 0.f ? 2.f * Smooth * DeltaSeconds : 0.f;
+	const float MotionDecay = FMath::Exp(-MotionStep);
 	for (TPair<FName, float>& Morph : CurrentWeights)
 	{
 		const float* Want = TargetWeights.Find(Morph.Key);
-		Morph.Value += ((Want != nullptr ? *Want : 0.0f) - Morph.Value) * K;
+		const float Target = Want != nullptr ? *Want : 0.f;
+		float& Motion = MotionWeights.FindChecked(Morph.Key);
+		if (bContinuousMotion)
+		{
+			const float BoundedTarget = FMath::Clamp(Target, 0.f, 1.f);
+			Morph.Value = BoundedTarget + (Morph.Value - BoundedTarget + (Motion - BoundedTarget) * MotionStep) * MotionDecay;
+			Motion = BoundedTarget + (Motion - BoundedTarget) * MotionDecay;
+		}
+		else
+		{
+			Morph.Value += (Target - Morph.Value) * K;
+			Motion = FMath::Clamp(Morph.Value, 0.f, 1.f);
+		}
 
 		// JawBias 2 on a 0.85 pose asks for 1.7. A morph target is 0..1 and everything past it extrapolates
 		// the shape into a face nobody sculpted.
 		Morph.Value = FMath::Clamp(Morph.Value, 0.0f, 1.0f);
 	}
+	if (bJawRelativeClosure && CurrentWeights.Contains(TEXT("jawOpen")))
+		if (float* Close = CurrentWeights.Find(TEXT("mouthClose")))
+			*Close = FMath::Min(*Close, CurrentWeights.FindRef(TEXT("jawOpen")));
 }

@@ -2242,4 +2242,102 @@ bool FStoryFlowDataAssetOverrideNeverLocalizesTest::RunTest(const FString& Param
 	return true;
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FStoryFlowDataAssetV2GoldenTest,
+	"StoryFlow.CharacterContractV2.DataAssetLocalization",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+/** Current editor exports, separate from the frozen legacy package above. Consume the 17
+ * Data Asset accessor cases through both game-facing doors, retaining one store across fr/es/fr.
+ * Other localization kinds in this file belong to the full legacy package reader above. */
+bool FStoryFlowDataAssetV2GoldenTest::RunTest(const FString& Parameters)
+{
+	using namespace StoryFlowCharacterContractTestHelpers;
+	const TSharedPtr<IPlugin> Plugin = IPluginManager::Get().FindPlugin(TEXT("StoryFlowPlugin"));
+	if (!TestTrue(TEXT("StoryFlow plugin is available"), Plugin.IsValid())) return false;
+	const FString FixtureDir = FPaths::Combine(Plugin->GetBaseDir(), TEXT("TestContent/character-contract-v2"));
+	const FString BuildDir = FPaths::Combine(FPaths::ProjectSavedDir(), TEXT("Temp/StoryFlowCharacterContractV2"));
+	const TCHAR* AssetRoot = TEXT("/Game/StoryFlowCharacterContractV2Tests");
+	auto CleanUp = [&]()
+	{
+		UEditorAssetLibrary::DeleteDirectory(AssetRoot);
+		IFileManager::Get().DeleteDirectory(*BuildDir, false, true);
+	};
+	CleanUp();
+	IFileManager::Get().MakeDirectory(*BuildDir, true);
+	bool bWritten = FFileHelper::SaveStringToFile(TEXT(R"JSON({"version":"1.0.0","apiVersion":"1","startupScript":"main"})JSON"),
+		*FPaths::Combine(BuildDir, TEXT("project.json")));
+	TMap<FString, TSharedPtr<FJsonObject>> Inputs;
+	for (const FString FileName : {FString(TEXT("data-assets.json")), FString(TEXT("localization.json")), FString(TEXT("localization-resolution.json"))})
+	{
+		FString Body;
+		TSharedPtr<FJsonObject> Json;
+		const bool bLoaded = FFileHelper::LoadFileToString(Body, *FPaths::Combine(FixtureDir, FileName))
+			&& FJsonSerializer::Deserialize(TJsonReaderFactory<>::Create(Body), Json);
+		bWritten &= bLoaded;
+		if (FileName != TEXT("localization-resolution.json"))
+			bWritten &= FFileHelper::SaveStringToFile(Body, *FPaths::Combine(BuildDir, FileName));
+		Inputs.Add(FileName, Json);
+	}
+	if (!TestTrue(TEXT("v2 exported fixtures load and copy verbatim"), bWritten)) { CleanUp(); return false; }
+	const TArray<TSharedPtr<FJsonValue>>* Cases = nullptr;
+	if (!TestTrue(TEXT("v2 cases are present"), Inputs[TEXT("localization-resolution.json")]->TryGetArrayField(TEXT("cases"), Cases)))
+	{
+		CleanUp(); return false;
+	}
+	FScopedWorld W;
+	if (!TestTrue(TEXT("world initializes"), W.Init())) { CleanUp(); return false; }
+	UStoryFlowProjectAsset* Project = UStoryFlowImporter::ImportProject(BuildDir, AssetRoot);
+	if (!TestNotNull(TEXT("v2 exported build imports"), Project)) { CleanUp(); return false; }
+	FGCObjectScopeGuard ProjectGuard(Project);
+	W.Subsystem->SetProject(Project);
+	FContractHarness Harness(*this, W);
+	Harness.Project = Project;
+	Harness.DataAssetsFile = Inputs[TEXT("data-assets.json")];
+	TSet<FString> LocalizedCases;
+	TSet<FString> LiteralCases;
+	int32 Reads = 0;
+	for (const FString Language : {FString(TEXT("fr")), FString(TEXT("es")), FString(TEXT("fr"))})
+	{
+		TestTrue(TEXT("language change is accepted"), W.Subsystem->SetLanguage(Language));
+		for (const TSharedPtr<FJsonValue>& CaseValue : *Cases)
+		{
+			const TSharedPtr<FJsonObject> Case = CaseValue->AsObject();
+			const FString Kind = JsonStr(Case, TEXT("kind"));
+			if (Kind != TEXT("data-asset-localized") && Kind != TEXT("unkeyed")) continue;
+			if (Kind == TEXT("data-asset-localized") && JsonStr(Case, TEXT("language")) != Language) continue;
+			const FString Name = JsonStr(Case, TEXT("case"));
+			const FString Label = Language + TEXT(" ") + Name;
+			const FString AssetId = JsonStr(Case, TEXT("dataAssetId"));
+			const FString VariableId = JsonStr(Case, TEXT("variableId"));
+			TSharedPtr<FJsonValue> Expected;
+			if (Kind == TEXT("data-asset-localized"))
+			{
+				LocalizedCases.Add(Name);
+				Expected = Case->TryGetField(TEXT("expected"));
+				VariantMatchesJson(*this, Label + TEXT(" stored owner key"),
+					StoryFlowDataAssets::Resolve(W.Subsystem->GetDataAssetSeed(), {}, AssetId, VariableId), Case->TryGetField(TEXT("storedValue")));
+			}
+			else
+			{
+				LiteralCases.Add(Name);
+				Expected = Case->GetObjectField(TEXT("expected"))->TryGetField(Language);
+				const TSharedPtr<FJsonObject>* Collision = nullptr;
+				if (Case->TryGetObjectField(TEXT("collidesWith"), Collision))
+				{
+					TestEqual(Label + TEXT(" literal really collides with a translated key"),
+						Project->GetGlobalString(JsonStr(*Collision, TEXT("stringId")), Language),
+						(*Collision)->GetObjectField(TEXT("resolved"))->GetStringField(Language));
+				}
+			}
+			VariantMatchesJson(*this, Label, Harness.ReadDataAsset(Label, AssetId, VariableId), Expected);
+			++Reads;
+		}
+	}
+	TestEqual(TEXT("all 14 v2 authored cases are consumed"), LocalizedCases.Num(), 14);
+	TestEqual(TEXT("all 3 v2 literal cases are consumed"), LiteralCases.Num(), 3);
+	TestEqual(TEXT("fr/es/fr reads exercise language changes on the same store"), Reads, 30);
+	CleanUp();
+	return true;
+}
+
 #endif // WITH_DEV_AUTOMATION_TESTS

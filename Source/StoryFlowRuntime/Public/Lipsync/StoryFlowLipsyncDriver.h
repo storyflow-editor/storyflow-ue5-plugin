@@ -22,8 +22,8 @@
  * the same constants sit twenty times above where speech lives and the mouth never opens. So the driver
  * reproduces that domain itself, per bin, before it measures anything: see AdvanceFromMagnitudes.
  *
- * Every constant here is pinned by the normative v2 spec in LIPSYNC_DESIGN.md, and the Unity arm implements
- * the same numbers on the same rule. Read that before changing one.
+ * The legacy defaults follow the normative v2 spec in LIPSYNC_DESIGN.md, shared with the Unity arm.
+ * Spectral articulation is an optional rig calibration and does not change that default response.
  */
 class STORYFLOWRUNTIME_API FStoryFlowLipsyncDriver
 {
@@ -75,12 +75,16 @@ public:
 
 	/** Forget the loudness history. Call at the START of a line so takes do not scale each other. */
 	void ResetLevel();
+	/** Close immediately, including a zero-time restore frame. */
+	void ResetPose();
 
 	// Tunables. Defaults are the three.js build's, which is the point of them.
 	float Strength = 0.55f;
 	float Sensitivity = 1.0f;
 	float JawBias = 1.0f;
 	float Smooth = 16.0f;
+	/** Source-audio opt-in: continuous velocity with the same low-frequency response delay. */
+	bool bContinuousMotion = false;
 
 	/**
 	 * The raw magnitude a full-scale sine produces at its own bin in whatever is feeding this driver — the
@@ -91,15 +95,29 @@ public:
 	 * normalised at all.
 	 */
 	float FullScale = 1.0f;
+	/** Optional rig calibration; defaults retain the original vowel axis. */
+	float VowelScale = 2.6f;
+	float VowelOffset = 0.f;
+	float SpectralContrast = 1.f;
+	/** Optional spectral response: retain spectral peaks and separate articulation from loudness.
+	 * Broad acoustic cues only. Does not consume a transcript, reference animation or future audio. */
+	bool bSpectralArticulation = false;
+	float ArticulationBlend = 1.f;
+	/** Stabilize acoustic shape selection before the nonlinear pose blend; zero retains legacy behavior. */
+	float ArticulationTransitionSeconds = 0.f;
+	/** AR20 mouthClose corrects an open jaw; it must not push a resting lip upward. */
+	bool bJawRelativeClosure = false;
 
 private:
 	void BuildAxisPose(float Centroid, float Amp, float Gate);
+	void BuildArticulatedPose(const TArray<float>& Magnitudes, float DeltaSeconds, float Amp);
 	void AccumulateBlend(const StoryFlowVisemeTable::FPose* Pose, float Share, float Amp);
 	void ClearTarget();
 	void Ease(float DeltaSeconds);
 
 	StoryFlowVisemeTable::FTable Table;
 	TMap<FName, float> CurrentWeights;
+	TMap<FName, float> MotionWeights;
 	TMap<FName, float> TargetWeights;
 
 	/** True when some pose in the ACTIVE table drives mouthClose — the closing breath's licence to write it. */
@@ -114,6 +132,12 @@ private:
 
 	/** Per-bin temporal smoothing state, the analyser's `smoothingTimeConstant` the reference relied on. */
 	TArray<float> Smoothed;
+	float ArticulationOpen = 0.f;
+	float ArticulationWide = 0.f;
+	float ArticulationSibilant = 0.f;
+	float ArticulationClosed = 0.f;
+	float StableCentroid = 0.f;
+	bool bHasStableCentroid = false;
 
 	float Peak = 0.12f;
 	float LevelValue = 0.0f;
