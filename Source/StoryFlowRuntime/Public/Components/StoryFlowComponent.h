@@ -1128,6 +1128,16 @@ private:
 	void BindAudioFinished();
 	void HandleBlockRollback(FStoryFlowNode* Node);
 
+	/** A For Each iterating on the native stack right now, found by ContinueForEachLoop. */
+	struct FLoopDriver
+	{
+		uint64 Session;
+		int32 CallDepth;
+		FString NodeId;
+		bool bContinue;
+	};
+	TArray<FLoopDriver> LoopDrivers;
+
 	/**
 	 * The character path the CURRENT line's speaker resolved to — see GetCurrentSpeakerPath. Set wherever
 	 * the state is built, from the same resolution the character data itself came from, so the two can never

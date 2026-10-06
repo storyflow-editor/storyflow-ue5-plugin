@@ -115,21 +115,23 @@ FStoryFlowNode* FStoryFlowExecutionContext::GetNode(const FString& NodeId)
 
 FStoryFlowVariable* FStoryFlowExecutionContext::FindVariable(const FString& VariableId, bool bIsGlobal)
 {
-	if (bIsGlobal)
+	// A variable id is derived from the name alone, so a local and a global with one name share it.
+	// The caller's flag alone picks between them, as it does in the editor: there is no fallback.
+	if (!bIsGlobal)
 	{
-		// Use external global variables if available (shared across all components via subsystem)
-		if (ExternalGlobalVariables)
-		{
-			return ExternalGlobalVariables->Find(VariableId);
-		}
-		// Fall back to project's global variables
-		if (UStoryFlowProjectAsset* Proj = Project.Get())
-		{
-			return Proj->GlobalVariables.Find(VariableId);
-		}
-		return nullptr;
+		return LocalVariables.Find(VariableId);
 	}
-	return LocalVariables.Find(VariableId);
+	// Use external global variables if available (shared across all components via subsystem)
+	if (ExternalGlobalVariables)
+	{
+		return ExternalGlobalVariables->Find(VariableId);
+	}
+	// Fall back to project's global variables
+	if (UStoryFlowProjectAsset* Proj = Project.Get())
+	{
+		return Proj->GlobalVariables.Find(VariableId);
+	}
+	return nullptr;
 }
 
 void FStoryFlowExecutionContext::SetVariable(const FString& VariableId, const FStoryFlowVariant& Value, bool bIsGlobal)

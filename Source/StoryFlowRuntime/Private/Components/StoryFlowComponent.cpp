@@ -285,8 +285,14 @@ void UStoryFlowComponent::SelectOption(const FString& OptionId)
 		Evaluator->ClearCache();
 	}
 
-	// Continue from the selected option
-	ProcessNextNode(StoryFlowHandles::Source(ExecutionContext.CurrentDialogueState.NodeId, OptionId));
+	// Continue from the selected option. With nothing connected it is a dead end on its own line and
+	// never the end of a ForEach body, so with a loop open it must not reach ProcessNextNode, which
+	// would move that loop on.
+	const FString OptionHandle = StoryFlowHandles::Source(ExecutionContext.CurrentDialogueState.NodeId, OptionId);
+	if (ExecutionContext.LoopStack.Num() == 0 || ExecutionContext.FindEdgeBySourceHandle(OptionHandle))
+	{
+		ProcessNextNode(OptionHandle);
+	}
 
 	// If no edge was found (dead end) and we're still executing but not waiting for input,
 	// return to the current dialogue to re-render (hides once-only options, updates text, etc.)
@@ -361,7 +367,21 @@ void UStoryFlowComponent::AdvanceDialogue()
 		Evaluator->ClearCache();
 	}
 
+	const FString DialogueNodeId = CurrentNode->Id;
 	ProcessNextNode(HeaderHandle);
+
+	// A walk that runs out of edges without reaching a line leaves this one on screen, and it has to
+	// keep taking input the way it does after SelectOption
+	if (!ExecutionContext.bIsWaitingForInput && ExecutionContext.bIsExecuting)
+	{
+		FStoryFlowNode* DialogueNode = ExecutionContext.GetNode(DialogueNodeId);
+		if (DialogueNode && DialogueNode->Type == EStoryFlowNodeType::Dialogue)
+		{
+			ExecutionContext.CurrentDialogueState = BuildDialogueState(DialogueNode);
+			ExecutionContext.bIsWaitingForInput = true;
+			OnDialogueUpdated.Broadcast(ExecutionContext.CurrentDialogueState);
+		}
+	}
 }
 
 void UStoryFlowComponent::StopDialogue()
@@ -2183,7 +2203,32 @@ void UStoryFlowComponent::ProcessNode(FStoryFlowNode* Node)
 	const auto& Table = GetDispatchTable();
 	if (const FNodeHandler* Handler = Table.Find(Node->Type))
 	{
-		(this->**Handler)(Node);
+		if (*Handler == &UStoryFlowComponent::HandleForEachLoop || *Handler == &UStoryFlowComponent::HandleForEachMap)
+		{
+			// Each iteration returns here before the next one starts (see ContinueForEachLoop), so a
+			// long loop costs no more native stack or processing depth than a short one
+			const FString LoopNodeId = Node->Id;
+			const int32 Driver = LoopDrivers.Num();
+			LoopDrivers.Add({ SessionGeneration, ExecutionContext.CallStack.Num(), LoopNodeId, false });
+			(this->**Handler)(Node);
+			while (LoopDrivers[Driver].bContinue && ExecutionContext.bIsExecuting && !ExecutionContext.bIsPaused)
+			{
+				LoopDrivers[Driver].bContinue = false;
+				Node = ExecutionContext.GetNode(LoopNodeId);
+				if (!Node)
+				{
+					break;
+				}
+				SF_TRACE(ExecutionContext, "NODE %s %s", *Node->Id, *Node->TypeString);
+				ExecutionContext.CurrentNodeId = Node->Id;
+				(this->**Handler)(Node);
+			}
+			LoopDrivers.SetNum(Driver);
+		}
+		else
+		{
+			(this->**Handler)(Node);
+		}
 	}
 	else
 	{
@@ -2402,6 +2447,14 @@ void UStoryFlowComponent::ProcessNextNode(const FString& SourceHandle)
 	const FStoryFlowConnection* Edge = ExecutionContext.FindEdgeBySourceHandle(SourceHandle);
 	if (!Edge)
 	{
+		// Nothing connected. Inside a ForEach body that is a finished iteration, whichever node the
+		// body ends on, and the loop moves on to its next element (the editor runtime's processNextNode).
+		if (ExecutionContext.LoopStack.Num() > 0 && ExecutionContext.LoopStack.Last().Type == EStoryFlowLoopType::ForEach)
+		{
+			ContinueForEachLoop(ExecutionContext.LoopStack.Last().NodeId);
+			return;
+		}
+
 		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: No edge found for sourceHandle='%s' - execution stopping"), *SourceHandle);
 
 		// Debug: List all available connections
@@ -2462,6 +2515,17 @@ void UStoryFlowComponent::HandleStart(FStoryFlowNode* Node)
 {
 	// Start node just continues to next
 	FString Handle = StoryFlowHandles::Source(Node->Id);
+	const FStoryFlowConnection* StartEdge = ExecutionContext.FindEdgeBySourceHandle(Handle);
+	if (!StartEdge)
+	{
+		ReportError(TEXT("Start node is not connected"));
+		return;
+	}
+	if (!ExecutionContext.GetNode(StartEdge->Target))
+	{
+		ReportError(TEXT("Start node connects to missing node"));
+		return;
+	}
 	UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: HandleStart - Continuing to next via handle '%s'"), *Handle);
 	ProcessNextNode(Handle);
 }
@@ -2493,9 +2557,6 @@ void UStoryFlowComponent::HandleEnd(FStoryFlowNode* Node)
 		}
 	}
 
-	// Clean up any active loop state for the ending script
-	ExecutionContext.LoopStack.Empty();
-
 	// Check if we're in a nested script (runScript call)
 	if (ExecutionContext.CallStack.Num() > 0)
 	{
@@ -2508,11 +2569,15 @@ void UStoryFlowComponent::HandleEnd(FStoryFlowNode* Node)
 				FString ExitHandle = FString::Printf(TEXT("source-%s-exit-%s"), *TopFrame.ReturnNodeId, *ExitFlowId);
 				if (!TopFrame.ScriptAsset->FindEdgeBySourceHandle(ExitHandle))
 				{
-					// Exit handle not connected — don't exit, stay in called script
+					// Exit handle not connected — don't exit, stay in called script. Its loops
+					// stay open with it, as they do in the editor
 					return;
 				}
 			}
 		}
+
+		// Clean up any active loop state for the ending script
+		ExecutionContext.LoopStack.Empty();
 
 		// Gather output variable values BEFORE popping (still in called script)
 		// Key by variable Name so evaluators can match via ScriptOutputs name lookup
@@ -2592,8 +2657,10 @@ void UStoryFlowComponent::HandleEnd(FStoryFlowNode* Node)
 				Handle = StoryFlowHandles::Source(Frame.ReturnNodeId, StoryFlowHandles::Out_Output);
 			}
 
+			// With nothing connected to the Run Script, ProcessNextNode continues the ForEach loop
+			// whose body ends on it
 			const FStoryFlowConnection* Edge = ExecutionContext.FindEdgeBySourceHandle(Handle);
-			if (Edge)
+			if (Edge || ExecutionContext.LoopStack.Num() > 0)
 			{
 				ProcessNextNode(Handle);
 			}
@@ -2778,7 +2845,8 @@ void UStoryFlowComponent::HandleRunScript(FStoryFlowNode* Node)
 	FString ScriptPath = Node->Data.Script;
 	if (ScriptPath.IsEmpty())
 	{
-		ReportError(TEXT("RunScript node has no script path"));
+		// The editor only warns here: the walk stops and no error is raised
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: RunScript node has no script selected"));
 		return;
 	}
 
@@ -2794,8 +2862,9 @@ void UStoryFlowComponent::HandleRunScript(FStoryFlowNode* Node)
 			if (Param.bIsArray)
 			{
 				// Array parameters use "{type}-array-param-{id}" handle suffix
+				// With nothing wired the called script gets an empty array, as it does in the editor:
+				// the evaluators below hand one back for an input with no edge
 				FString HandleSuffix = Param.Type + TEXT("-array-param-") + Param.Id;
-				if (ExecutionContext.FindInputEdge(Node->Id, HandleSuffix))
 				{
 					TArray<FStoryFlowVariant> Arr;
 					if (Param.Type == TEXT("boolean"))
@@ -2823,31 +2892,24 @@ void UStoryFlowComponent::HandleRunScript(FStoryFlowNode* Node)
 			}
 			else
 			{
-				// Scalar parameters use "{type}-param-{id}" handle suffix
+				// Scalar parameters use "{type}-param-{id}" handle suffix. With nothing wired the called
+				// script gets the type's zero (false, 0, 0.0 or an empty string), as it does in the
+				// editor, and not the value its own variable declares. A map is the one exception below.
 				FString HandleSuffix = Param.Type + TEXT("-param-") + Param.Id;
 				if (Param.Type == TEXT("boolean"))
 				{
-					if (ExecutionContext.FindInputEdge(Node->Id, HandleSuffix))
-					{
-						bool Val = Evaluator->EvaluateBooleanInput(Node, HandleSuffix, false);
-						ParamValues.Add(Param.Name, FStoryFlowVariant::FromBool(Val));
-					}
+					bool Val = Evaluator->EvaluateBooleanInput(Node, HandleSuffix, false);
+					ParamValues.Add(Param.Name, FStoryFlowVariant::FromBool(Val));
 				}
 				else if (Param.Type == TEXT("integer"))
 				{
-					if (ExecutionContext.FindInputEdge(Node->Id, HandleSuffix))
-					{
-						int32 Val = Evaluator->EvaluateIntegerInput(Node, HandleSuffix, 0);
-						ParamValues.Add(Param.Name, FStoryFlowVariant::FromInt(Val));
-					}
+					int32 Val = Evaluator->EvaluateIntegerInput(Node, HandleSuffix, 0);
+					ParamValues.Add(Param.Name, FStoryFlowVariant::FromInt(Val));
 				}
 				else if (Param.Type == TEXT("float"))
 				{
-					if (ExecutionContext.FindInputEdge(Node->Id, HandleSuffix))
-					{
-						float Val = Evaluator->EvaluateFloatInput(Node, HandleSuffix, 0.0f);
-						ParamValues.Add(Param.Name, FStoryFlowVariant::FromFloat(Val));
-					}
+					float Val = Evaluator->EvaluateFloatInput(Node, HandleSuffix, 0.0f);
+					ParamValues.Add(Param.Name, FStoryFlowVariant::FromFloat(Val));
 				}
 				else if (Param.Type == TEXT("map"))
 				{
@@ -2861,7 +2923,8 @@ void UStoryFlowComponent::HandleRunScript(FStoryFlowNode* Node)
 					// storage for the entries, so the callee's variable never aliases the
 					// caller's (and entry values are scalar, so the copy is a full
 					// snapshot). Wired-but-unresolved passes an empty map (the eventual
-					// HTML getMapInput empty-Map fallback).
+					// HTML getMapInput empty-Map fallback). An unwired map parameter passes
+					// nothing: the called script keeps the map its variable declares.
 					const FString MapKeyType = Param.KeyType.IsEmpty() ? TEXT("string") : Param.KeyType;
 					const FString MapValueType = Param.ValueType.IsEmpty() ? TEXT("string") : Param.ValueType;
 					const FString MapHandleSuffix = StoryFlowHandles::In_Map(MapKeyType, MapValueType, FString(TEXT("param-")) + Param.Id);
@@ -2879,7 +2942,8 @@ void UStoryFlowComponent::HandleRunScript(FStoryFlowNode* Node)
 				}
 				else // string, enum, image, character, audio - all string-valued
 				{
-					if (ExecutionContext.FindInputEdge(Node->Id, HandleSuffix))
+					static const TSet<FString> StringValued = { TEXT("string"), TEXT("enum"), TEXT("image"), TEXT("dataAsset"), TEXT("character"), TEXT("audio") };
+					if (StringValued.Contains(Param.Type) || ExecutionContext.FindInputEdge(Node->Id, HandleSuffix))
 					{
 						FString Val = Evaluator->EvaluateStringInput(Node, HandleSuffix, TEXT(""));
 						FStoryFlowVariant Value;
@@ -2913,7 +2977,17 @@ void UStoryFlowComponent::HandleRunScript(FStoryFlowNode* Node)
 
 		// Start from node 0 in new script
 		FStoryFlowNode* StartNode = ExecutionContext.GetNode(TEXT("0"));
-		if (StartNode)
+		const FStoryFlowConnection* StartEdge = StartNode ? ExecutionContext.FindEdgeBySourceHandle(StoryFlowHandles::Source(StartNode->Id)) : nullptr;
+		if (StartNode && StartNode->Type == EStoryFlowNodeType::Start && !StartEdge)
+		{
+			ReportError(TEXT("Script's Start node is not connected"));
+		}
+		else if (StartNode && StartNode->Type == EStoryFlowNodeType::Start && !ExecutionContext.GetNode(StartEdge->Target))
+		{
+			// The editor's wording for a called script whose Start edge leads to a node it does not have
+			ReportError(TEXT("Script is missing a Start node"));
+		}
+		else if (StartNode)
 		{
 			ProcessNode(StartNode);
 		}
@@ -2921,6 +2995,10 @@ void UStoryFlowComponent::HandleRunScript(FStoryFlowNode* Node)
 		{
 			ReportError(FString::Printf(TEXT("Start node not found in script: %s"), *ScriptPath));
 		}
+	}
+	else if (!ExecutionContext.IsAtMaxScriptDepth())
+	{
+		ReportError(FString::Printf(TEXT("Script not found: %s"), *ScriptPath));
 	}
 }
 
@@ -2933,7 +3011,8 @@ void UStoryFlowComponent::HandleRunFlow(FStoryFlowNode* Node)
 	FString FlowId = Node->Data.FlowId;
 	if (FlowId.IsEmpty())
 	{
-		ReportError(TEXT("RunFlow node has no flow ID"));
+		// The editor only warns here: the walk stops and no error is raised
+		UE_LOG(LogStoryFlow, Warning, TEXT("StoryFlow: RunFlow node has no flow selected"));
 		return;
 	}
 
@@ -3005,7 +3084,17 @@ void UStoryFlowComponent::HandleRunFlow(FStoryFlowNode* Node)
 		}
 	}
 
-	ReportError(FString::Printf(TEXT("EntryFlow not found for flowId: %s"), *FlowId));
+	// Named as the editor names it: by the flow's name, or by its id when the script does not declare it
+	FString FlowName = FlowId;
+	for (const FStoryFlowFlowDef& FlowDef : CurrentScriptAsset->Flows)
+	{
+		if (FlowDef.Id == FlowId && !FlowDef.Name.IsEmpty())
+		{
+			FlowName = FlowDef.Name;
+			break;
+		}
+	}
+	ReportError(FString::Printf(TEXT("Flow \"%s\" not found"), *FlowName));
 }
 
 void UStoryFlowComponent::HandleEntryFlow(FStoryFlowNode* Node)
@@ -3362,38 +3451,26 @@ void UStoryFlowComponent::HandleArraySet(FStoryFlowNode* Node)
 
 	if (Evaluator)
 	{
-		// Set the whole array variable from connected array input
-		TArray<FStoryFlowVariant> NewArray;
+		const TCHAR* ElementType = nullptr;
 		switch (Node->Type)
 		{
-		case EStoryFlowNodeType::SetBoolArray:
-			NewArray = Evaluator->EvaluateBoolArrayInput(Node, TEXT("boolean-array"));
-			break;
-		case EStoryFlowNodeType::SetIntArray:
-			NewArray = Evaluator->EvaluateIntArrayInput(Node, TEXT("integer-array"));
-			break;
-		case EStoryFlowNodeType::SetFloatArray:
-			NewArray = Evaluator->EvaluateFloatArrayInput(Node, TEXT("float-array"));
-			break;
-		case EStoryFlowNodeType::SetStringArray:
-			NewArray = Evaluator->EvaluateStringArrayInput(Node, TEXT("string-array"));
-			break;
-		case EStoryFlowNodeType::SetImageArray:
-			NewArray = Evaluator->EvaluateImageArrayInput(Node, TEXT("image-array"));
-			break;
-		case EStoryFlowNodeType::SetDataAssetRefArray:
-			NewArray = Evaluator->EvaluateDataAssetArrayInput(Node, TEXT("dataAsset-array"));
-			break;
-		case EStoryFlowNodeType::SetCharacterArray:
-			NewArray = Evaluator->EvaluateCharacterArrayInput(Node, TEXT("character-array"));
-			break;
-		case EStoryFlowNodeType::SetAudioArray:
-			NewArray = Evaluator->EvaluateAudioArrayInput(Node, TEXT("audio-array"));
-			break;
-		default:
-			break;
+		case EStoryFlowNodeType::SetBoolArray:         ElementType = TEXT("boolean"); break;
+		case EStoryFlowNodeType::SetIntArray:          ElementType = TEXT("integer"); break;
+		case EStoryFlowNodeType::SetFloatArray:        ElementType = TEXT("float"); break;
+		case EStoryFlowNodeType::SetStringArray:       ElementType = TEXT("string"); break;
+		case EStoryFlowNodeType::SetImageArray:        ElementType = TEXT("image"); break;
+		case EStoryFlowNodeType::SetDataAssetRefArray: ElementType = TEXT("dataAsset"); break;
+		case EStoryFlowNodeType::SetCharacterArray:    ElementType = TEXT("character"); break;
+		case EStoryFlowNodeType::SetAudioArray:        ElementType = TEXT("audio"); break;
+		default: break;
 		}
-		Var->Value.SetArray(NewArray);
+		// Set the whole array variable from the connected array input. With nothing connected the
+		// variable keeps its value, as it does in the editor.
+		const FString InputSuffix = FString(ElementType) + TEXT("-array");
+		if (ElementType && ExecutionContext.FindInputEdge(Node->Id, InputSuffix))
+		{
+			Var->Value.SetArray(EvaluateTypedArrayInput(Node, ElementType, InputSuffix));
+		}
 	}
 
 	SF_TRACE(ExecutionContext, "VAR SET \"%s\" global=%s value=[array]", *Var->Name, Node->Data.bIsGlobal ? TEXT("true") : TEXT("false"));
@@ -3513,13 +3590,16 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 		{
 			Var = ExecutionContext.FindVariable(ArrayInputSource->Data.Variable, ArrayInputSource->Data.bIsGlobal);
 		}
-		if (!Var && ArrayInputSource && (Node->Type == EStoryFlowNodeType::AddToDataAssetArray || Node->Type == EStoryFlowNodeType::RemoveFromDataAssetArray || Node->Type == EStoryFlowNodeType::ClearDataAssetArray))
+		if (!Var && Evaluator && !ArrayHandleSuffix.IsEmpty())
 		{
 			// Derived outputs are copied and changed locally. Only an immediate variable
 			// or field source receives a write; never walk through earlier modifiers.
-			DataAssetScratch.Type = EStoryFlowVariableType::DataAsset;
+			// Every element type works this way, as in the editor: an op fed by another op's
+			// output (or by nothing) still produces its own output.
+			const FString ElementType = ArrayHandleSuffix.LeftChop(6);
+			DataAssetScratch.Type = ParseVariableType(ElementType);
 			DataAssetScratch.bIsArray = true;
-			DataAssetScratch.Value.SetArray(Evaluator->EvaluateDataAssetArrayInput(Node, ArrayHandleSuffix), DataAssetScratch.Type);
+			DataAssetScratch.Value.SetArray(EvaluateTypedArrayInput(Node, ElementType, ArrayHandleSuffix), DataAssetScratch.Type);
 			Var = &DataAssetScratch;
 			bSnapshotOnly = true;
 		}
@@ -3673,7 +3753,8 @@ void UStoryFlowComponent::HandleArrayModify(FStoryFlowNode* Node)
 		return;
 	}
 
-	bool bVarIsGlobal = !ExecutionContext.LocalVariables.Contains(Var->Id);
+	// A local and a global can share an id, so the id cannot say which of the two Var is
+	const bool bVarIsGlobal = ExecutionContext.LocalVariables.Find(Var->Id) != Var;
 	SF_TRACE(ExecutionContext, "VAR SET \"%s\" global=%s value=[array]", *Var->Name, bVarIsGlobal ? TEXT("true") : TEXT("false"));
 	NotifyVariableChanged(*Var, bVarIsGlobal);
 	HandleSetNodeEnd(Node, StoryFlowHandles::Source(Node->Id, StoryFlowHandles::Out_Flow));
@@ -4211,7 +4292,9 @@ void UStoryFlowComponent::HandleSwitchOnEnum(FStoryFlowNode* Node)
 	FString SourceHandle = StoryFlowHandles::Source(Node->Id, EnumValue);
 	const FStoryFlowConnection* Edge = ExecutionContext.FindEdgeBySourceHandle(SourceHandle);
 
-	if (Edge)
+	// An unconnected output at the end of a ForEach body is a finished iteration:
+	// ProcessNextNode continues the loop
+	if (Edge || ExecutionContext.LoopStack.Num() > 0)
 	{
 		ProcessNextNode(SourceHandle);
 	}
@@ -4248,7 +4331,8 @@ void UStoryFlowComponent::HandleRandomBranch(FStoryFlowNode* Node)
 		const FStoryFlowWeightedOption& FirstOption = Options[0];
 		FString SourceHandle = StoryFlowHandles::Source(Node->Id, FirstOption.Id);
 		const FStoryFlowConnection* Edge = ExecutionContext.FindEdgeBySourceHandle(SourceHandle);
-		if (Edge)
+		// Unconnected at the end of a ForEach body: see the selected output below
+		if (Edge || ExecutionContext.LoopStack.Num() > 0)
 		{
 			UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: randomBranch '%s' all weights zero, falling back to first option '%s'"),
 				*Node->Id, *FirstOption.Id);
@@ -4283,7 +4367,9 @@ void UStoryFlowComponent::HandleRandomBranch(FStoryFlowNode* Node)
 	FString SourceHandle = StoryFlowHandles::Source(Node->Id, SelectedOption.Id);
 	const FStoryFlowConnection* Edge = ExecutionContext.FindEdgeBySourceHandle(SourceHandle);
 
-	if (Edge)
+	// An unconnected output at the end of a ForEach body is a finished iteration:
+	// ProcessNextNode continues the loop
+	if (Edge || ExecutionContext.LoopStack.Num() > 0)
 	{
 		UE_LOG(LogStoryFlow, Verbose, TEXT("StoryFlow: randomBranch '%s' selected option '%s' (weight %d/%d)"),
 			*Node->Id, *SelectedOption.Id, ResolvedWeights[SelectedIndex], TotalWeight);
@@ -5097,7 +5183,18 @@ void UStoryFlowComponent::ContinueForEachLoop(const FString& NodeId)
 		ExecutionContext.LoopStack.Pop();
 	}
 
-	// Re-process the loop node to continue
+	// Re-process the loop node to continue. When that node is already iterating further up the native
+	// stack, the next iteration is its to run once this walk has unwound: nesting it here instead
+	// would exhaust the processing depth on a long loop.
+	for (int32 Index = LoopDrivers.Num() - 1; Index >= 0; --Index)
+	{
+		FLoopDriver& Driver = LoopDrivers[Index];
+		if (Driver.Session == SessionGeneration && Driver.CallDepth == ExecutionContext.CallStack.Num() && Driver.NodeId == LoopNode->Id)
+		{
+			Driver.bContinue = true;
+			return;
+		}
+	}
 	ProcessNode(LoopNode);
 }
 
